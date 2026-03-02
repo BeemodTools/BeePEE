@@ -3934,6 +3934,13 @@ function Conditions({
     // BEE2 system variables - these are built-in and always available
     const bee2SystemVariables = [
         {
+            displayName: "Connection Count",
+            fixupName: "$connectioncount",
+            type: "number",
+            description: "Number of items connected to this item's input. Use to detect if item has connections (0 = no connections).",
+            isSystemVariable: true,
+        },
+        {
             displayName: "Rotation",
             fixupName: "$rotation",
             type: "number",
@@ -4410,6 +4417,11 @@ function Conditions({
         const findVariableByName = (varName) => {
             // First check BEE2 system variables
             const bee2SystemVariables = [
+                {
+                    displayName: "Connection Count",
+                    fixupName: "$connectioncount",
+                    type: "number",
+                },
                 {
                     displayName: "Rotation",
                     fixupName: "$rotation",

@@ -1,6 +1,104 @@
 {
     "categories": [
         {
+            "name": "Connection State",
+            "description": "Conditions based on input connections (like stairs/panels)",
+            "prefabs": [
+                {
+                    "id": "if_no_input_change_instance",
+                    "name": "Static When Unconnected",
+                    "description": "Change to a static instance when item has no input connections (like stairs become solid tiles)",
+                    "blocks": [
+                        {
+                            "type": "if",
+                            "displayName": "If No Connections",
+                            "variable": "$connectioncount",
+                            "operator": "==",
+                            "value": "0",
+                            "thenBlocks": [
+                                {
+                                    "type": "changeInstance",
+                                    "displayName": "Static Instance",
+                                    "instanceName": ""
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "id": "if_has_input_change_instance",
+                    "name": "Active When Connected",
+                    "description": "Change to an active instance when item has input connections",
+                    "blocks": [
+                        {
+                            "type": "if",
+                            "displayName": "If Has Connections",
+                            "variable": "$connectioncount",
+                            "operator": ">",
+                            "value": "0",
+                            "thenBlocks": [
+                                {
+                                    "type": "changeInstance",
+                                    "displayName": "Active Instance",
+                                    "instanceName": ""
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "id": "if_else_connection_state",
+                    "name": "Connected vs Unconnected",
+                    "description": "Use different instances based on connection state (if connected / else unconnected)",
+                    "blocks": [
+                        {
+                            "type": "ifElse",
+                            "displayName": "Connection Check",
+                            "variable": "$connectioncount",
+                            "operator": "==",
+                            "value": "0",
+                            "thenBlocks": [
+                                {
+                                    "type": "changeInstance",
+                                    "displayName": "Unconnected Instance",
+                                    "instanceName": ""
+                                }
+                            ],
+                            "elseBlocks": [
+                                {
+                                    "type": "changeInstance",
+                                    "displayName": "Connected Instance",
+                                    "instanceName": ""
+                                }
+                            ]
+                        }
+                    ]
+                },
+                {
+                    "id": "if_has_input_set_var",
+                    "name": "Set Variable When Connected",
+                    "description": "Set a fixup variable when item has input connections",
+                    "blocks": [
+                        {
+                            "type": "if",
+                            "displayName": "If Has Connections",
+                            "variable": "$connectioncount",
+                            "operator": ">",
+                            "value": "0",
+                            "thenBlocks": [
+                                {
+                                    "type": "setInstVar",
+                                    "displayName": "Set Variable",
+                                    "variable": "$enabled",
+                                    "value": "1"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        {
             "name": "Switches",
             "description": "Switch statements for multi-value variables",
             "prefabs": [

@@ -291,6 +291,13 @@ const CUBE_TYPES = {
 
 // Preset variable definitions
 const VARIABLE_PRESETS = {
+    ConnectionCount: {
+        displayName: "Connection Count",
+        fixupName: "$connectioncount",
+        description: "Number of items connected to this item's input. Use in Conditions to detect if item has connections (like stairs/panels).",
+        defaultValue: "0",
+        type: "number",
+    },
     StartEnabled: {
         displayName: "Start Enabled",
         fixupName: "$start_enabled",
