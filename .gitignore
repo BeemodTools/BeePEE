@@ -35,3 +35,5 @@ backend/libs/areng_mdlDepend/_internal
 
 # Other
 .env
+docs_backup
+.claude

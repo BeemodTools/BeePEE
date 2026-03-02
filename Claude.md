@@ -4,6 +4,8 @@
 
 BeePEE is an Electron-based application for creating and editing Portal 2 Puzzle Editor items. It manages item packages, instances, conditions, and various item properties.
 
+## BEEmod doccumentation for beemod itself and package things can be found in /docs_backup
+
 ## Recent Development Work
 
 ### Welcome Screen & Package Creation

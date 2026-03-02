@@ -25,7 +25,7 @@ const CRASH_REPORT_ENDPOINT = "__CRASH_REPORT_ENDPOINT__"
  */
 function getCrashReportEndpoint() {
     // If still placeholder or empty, return null
-    if (!CRASH_REPORT_ENDPOINT || CRASH_REPORT_ENDPOINT === "__CRASH_REPORT_ENDPOINT__") {
+    if (!CRASH_REPORT_ENDPOINT || CRASH_REPORT_ENDPOINT.startsWith("__")) {
         return null
     }
     return CRASH_REPORT_ENDPOINT
