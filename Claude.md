@@ -788,9 +788,9 @@ Graceful degradation:
 
 ### Overview
 
-`backend/utils/vmfConverter/` converts VMF instances into OBJ + MTL files with PNG textures, in-process (no Java). It is a JavaScript port of [VMF2OBJ](https://github.com/Dylancyclone/VMF2OBJ) by Dylancyclone (MIT, see `LICENSE-VMF2OBJ.txt` in that folder) and handles brushes, brush entities, displacements and model entities (props, NPCs, ...).
+`backend/utils/vmfConverter/` converts VMF instances into OBJ + MTL files with PNG textures, in-process (no Java). It is a JavaScript port of [VMF2OBJ](https://github.com/Dylancyclone/VMF2OBJ) by Dylancyclone (MIT, see `LICENSE-VMF2OBJ.txt` in that folder) and handles brushes, brush entities, displacements, model entities (props, NPCs, ...) and overlays.
 
-`backend/utils/vmf2obj.js` wraps it for BeePEE: it builds the resource path list, rotates the OBJ into Three.js space and applies the cartoon texture style.
+`backend/utils/vmf2obj.js` wraps it for BeePEE: it builds the resource path list, rotates the OBJ into Three.js space and applies the cartoon texture style. `cartoon.exe` writes RGB-only PNGs, so `withAlphaPreserved` puts the original alpha back on textures that had one.
 
 | Module | Purpose |
 | --- | --- |
@@ -840,10 +840,17 @@ custom-content/        <-- SELECT THIS
 - Placement: Crowbar's SMDs are rotated 90° about Z from model space, then Source's entity angles are applied (roll, then pitch, then yaw), then `uniformscale`/`modelscale` and `origin`.
 - The first option of each body group is used; `skin` selects a `$texturegroup` row.
 
+### Overlays
+
+- Each `info_overlay` becomes one quad: corners `uv0`–`uv3` in the `BasisU`/`BasisV` plane around `BasisOrigin`, texture coordinates from `StartU`/`EndU`/`StartV`/`EndV`, wound to face `BasisNormal`.
+- The quad is lifted `0.25 × (1 + RenderOrder)` units along the normal, so it doesn't z-fight with its surface and higher render orders stay on top.
+- Unlike in Source, overlays aren't clipped to the faces they're on or wrapped around edges.
+
 ### Materials
 
 - VMTs are parsed as KeyValues: shader fallback blocks are ignored, `patch` materials follow their `include`, and GPU/srgb key conditions are evaluated.
 - Base textures are decoded from VTF (DXT1/3/5 and the uncompressed formats) and written as PNG; the PNG keeps alpha only for `$translucent`/`$alphatest` materials.
+- Those materials get `illum 4` and a `# beepee:translucent` / `# beepee:alphatest` line in the MTL. `convertMaterialsToPackage` (`mdlConverter.js`) reads the marker and `editorVmt` writes `$translucent 1` or `$alphatest 1` without `$selfillum`: with `$selfillum` on, Source's shaders use the base alpha as the self-illumination mask and ignore it for opacity.
 - BeePEE skips `$bumpmap` textures (`includeBumpMaps: false`) since editor models only use the base texture.
 - Tints are baked into texture copies (`<texture>_tint_<rgb>.png`): the entity's `rendercolor` (props, NPCs, brush entities) times the material's `$color`/`$color2`, masked by alpha with `$blendtintbybasealpha`.
 - Materials or textures that can't be found or read get a purple/black checkerboard (`bpee_missing_texture.png`) instead of being dropped. With `skipTools`, faces using `tools/` materials are skipped.
@@ -853,10 +860,10 @@ custom-content/        <-- SELECT THIS
 
 - ❌ Displacement blend materials (would require texture generation or per-vertex materials)
 - ❌ infodecal (projection logic unknown)
-- ❌ info_overlay (complex multi-face projection)
+- ❌ Clipping overlays to their faces / wrapping them around edges (overlays are flat quads)
 - ❌ Body group selection via the `body` keyvalue
 - ❌ Compressed (Strata) VTFs
 
 ### Tests
 
-`backend/__tests__/vmfConverter.test.js` covers parsing, brush geometry, entity angles, QC/SMD handling and posing, the VTF/PNG/VPK codecs and an end-to-end conversion.
+`backend/__tests__/vmfConverter.test.js` covers parsing, brush geometry, entity angles, QC/SMD handling and posing, the VTF/PNG/VPK codecs, overlays, editor VMTs and an end-to-end conversion.

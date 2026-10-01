@@ -86,6 +86,67 @@ function findPngFilesRecursively(dirPath) {
     return result
 }
 
+/**
+ * cartoon.exe writes RGB-only PNGs. Run `step` and then give PNGs that had an
+ * alpha channel (translucent textures like overlays and glass) their original
+ * alpha back.
+ */
+async function withAlphaPreserved(pngFiles, step) {
+    const sharp = require("sharp")
+    const alphas = new Map()
+    for (const file of pngFiles) {
+        try {
+            // Buffers, not paths: sharp caches decoded files by path
+            const image = sharp(fs.readFileSync(file))
+            if (!(await image.metadata()).hasAlpha) continue
+            alphas.set(
+                file,
+                await image
+                    .extractChannel("alpha")
+                    .raw()
+                    .toBuffer({ resolveWithObject: true }),
+            )
+        } catch (error) {
+            console.warn(
+                `Could not read alpha of ${path.basename(file)}:`,
+                error.message,
+            )
+        }
+    }
+
+    try {
+        return await step()
+    } finally {
+        for (const [file, alpha] of alphas) {
+            try {
+                // Two passes: sharp runs removeAlpha after joinChannel within
+                // one pipeline, which would drop the channel being restored
+                const { data, info } = await sharp(fs.readFileSync(file))
+                    .removeAlpha()
+                    .raw()
+                    .toBuffer({ resolveWithObject: true })
+                const { width, height, channels } = info
+                if (width !== alpha.info.width || height !== alpha.info.height)
+                    continue
+                const output = await sharp(data, {
+                    raw: { width, height, channels },
+                })
+                    .joinChannel(alpha.data, {
+                        raw: { width, height, channels: 1 },
+                    })
+                    .png()
+                    .toBuffer()
+                fs.writeFileSync(file, output)
+            } catch (error) {
+                console.warn(
+                    `Could not restore alpha of ${path.basename(file)}:`,
+                    error.message,
+                )
+            }
+        }
+    }
+}
+
 async function applyCartoonishToTextures(outputDir, { debug } = {}) {
     const materialsDir = path.join(outputDir, "materials")
     if (!fs.existsSync(materialsDir)) {
@@ -114,47 +175,55 @@ async function applyCartoonishToTextures(outputDir, { debug } = {}) {
     const chunkSize = 50
     let processed = 0
 
-    for (let i = 0; i < pngFiles.length; i += chunkSize) {
-        const chunk = pngFiles.slice(i, i + chunkSize)
-        const cmd = [
-            // cartoon.exe expects image paths as arguments
-            ...chunk,
-        ]
+    await withAlphaPreserved(pngFiles, async () => {
+        for (let i = 0; i < pngFiles.length; i += chunkSize) {
+            const chunk = pngFiles.slice(i, i + chunkSize)
+            const cmd = [
+                // cartoon.exe expects image paths as arguments
+                ...chunk,
+            ]
 
-        if (debug) {
-            console.log("Running cartoon.exe on", chunk.length, "textures")
-        }
-
-        await new Promise((resolve, reject) => {
-            const child = spawn(exePath, cmd, {
-                cwd: path.dirname(exePath),
-                stdio: debug ? "inherit" : "pipe",
-                windowsHide: !debug,
-            })
-
-            let stdout = ""
-            let stderr = ""
-
-            if (!debug) {
-                child.stdout?.on("data", (d) => (stdout += d.toString()))
-                child.stderr?.on("data", (d) => (stderr += d.toString()))
+            if (debug) {
+                console.log("Running cartoon.exe on", chunk.length, "textures")
             }
 
-            child.on("close", (code) => {
-                if (code === 0) {
-                    processed += chunk.length
-                    resolve()
-                } else {
-                    console.warn("cartoon.exe failed with code", code, stderr)
-                    reject(new Error(`cartoon.exe exited with code ${code}`))
-                }
-            })
+            await new Promise((resolve, reject) => {
+                const child = spawn(exePath, cmd, {
+                    cwd: path.dirname(exePath),
+                    stdio: debug ? "inherit" : "pipe",
+                    windowsHide: !debug,
+                })
 
-            child.on("error", (err) => {
-                reject(err)
+                let stdout = ""
+                let stderr = ""
+
+                if (!debug) {
+                    child.stdout?.on("data", (d) => (stdout += d.toString()))
+                    child.stderr?.on("data", (d) => (stderr += d.toString()))
+                }
+
+                child.on("close", (code) => {
+                    if (code === 0) {
+                        processed += chunk.length
+                        resolve()
+                    } else {
+                        console.warn(
+                            "cartoon.exe failed with code",
+                            code,
+                            stderr,
+                        )
+                        reject(
+                            new Error(`cartoon.exe exited with code ${code}`),
+                        )
+                    }
+                })
+
+                child.on("error", (err) => {
+                    reject(err)
+                })
             })
-        })
-    }
+        }
+    })
 
     return { success: true, processed }
 }
@@ -272,7 +341,11 @@ async function resolveResourcePaths(vmfPaths, explicitPaths) {
         try {
             const resources = await findPortal2Resources(console)
             if (resources?.root) {
-                const pak01Path = path.join(resources.root, "portal2", "pak01_dir.vpk")
+                const pak01Path = path.join(
+                    resources.root,
+                    "portal2",
+                    "pak01_dir.vpk",
+                )
                 if (fs.existsSync(pak01Path)) resourcePaths.push(pak01Path)
             }
         } catch {}
@@ -349,7 +422,9 @@ async function postProcessOutputs(objPaths, outputDir, options) {
 
 function logWarnings(name, warnings) {
     if (warnings.length > 0) {
-        console.warn(`⚠️ VMF2OBJ warnings for ${name}:\n  ${warnings.join("\n  ")}`)
+        console.warn(
+            `⚠️ VMF2OBJ warnings for ${name}:\n  ${warnings.join("\n  ")}`,
+        )
     }
 }
 
@@ -375,7 +450,10 @@ async function convertVmfToObj(vmfPath, options = {}) {
         } catch {}
     }
 
-    const resourcePaths = await resolveResourcePaths([vmfPath], options.resourcePaths)
+    const resourcePaths = await resolveResourcePaths(
+        [vmfPath],
+        options.resourcePaths,
+    )
     const converter = await createConverter(resourcePaths, {
         ...options,
         timeoutMs: options.timeoutMs ?? 120000, // 2 minutes
@@ -384,7 +462,10 @@ async function convertVmfToObj(vmfPath, options = {}) {
     let result
     try {
         console.log(`Converting VMF to OBJ: ${vmfPath}`)
-        result = await converter.convert(vmfPath, path.join(outputDir, baseName))
+        result = await converter.convert(
+            vmfPath,
+            path.join(outputDir, baseName),
+        )
     } finally {
         await converter.dispose()
     }
@@ -434,7 +515,10 @@ async function convertVmfsToObj(jobs, options) {
                 assertHasGeometry(result, job.vmfPath)
                 results.push({ ...job, ...result })
             } catch (error) {
-                console.error(`❌ VMF2OBJ failed for ${job.vmfPath}:`, error.message)
+                console.error(
+                    `❌ VMF2OBJ failed for ${job.vmfPath}:`,
+                    error.message,
+                )
                 results.push({ ...job, error: error.message })
             }
         }
@@ -455,7 +539,8 @@ async function convertVmfsToObj(jobs, options) {
     }
     if (converted.length > 1) {
         const header = "# Materials shared by all variants\n"
-        const shared = header + [...blocks.values()].map((b) => `\n${b}\n`).join("")
+        const shared =
+            header + [...blocks.values()].map((b) => `\n${b}\n`).join("")
         for (const { mtlPath } of converted) fs.writeFileSync(mtlPath, shared)
     }
 

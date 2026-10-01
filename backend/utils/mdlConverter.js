@@ -400,6 +400,35 @@ async function convertObjToMDL(objPath, outputDir, options = {}) {
 }
 
 /**
+ * VMT for an editor model texture (a patch of item_lighting_common.vmt)
+ * @param {string} folderName - Folder under materials/models/props_map_editor/bpee
+ * @param {string} textureName - Texture file name without extension
+ * @param {"translucent"|"alphatest"|null} [alphaMode] - How the texture's alpha
+ *   is used; the VMF2OBJ converter marks this in the MTL ("# beepee:<mode>")
+ * @returns {string}
+ */
+function editorVmt(folderName, textureName, alphaMode = null) {
+    // $selfillum makes the shader read the base alpha as a self-illumination
+    // mask instead of opacity, so transparent textures go without it (like
+    // Valve's own translucent editor materials)
+    const materialLines =
+        alphaMode === "translucent"
+            ? "$model 1\n$translucent 1\n"
+            : alphaMode === "alphatest"
+              ? "$model 1\n$alphatest 1\n$alphatestreference .5\n"
+              : "$selfillum 1\n$model 1\n"
+    return `patch
+{
+include "materials/models/props_map_editor/item_lighting_common.vmt"
+insert
+{
+$basetexture "models/props_map_editor/bpee/${folderName}/${textureName}"
+${materialLines}}
+}
+`
+}
+
+/**
  * Convert materials from PNG to VTF/VMT format and copy to package resources
  * @param {string} materialsSourceDir - Directory containing PNG materials from VMF2OBJ
  * @param {string} materialTargetDir - Target directory in package resources
@@ -456,18 +485,11 @@ async function convertMaterialsToPackage(
                     })
 
                     // Create VMT file immediately after VTF
-                    const vmtContent = `patch
-{
-include "materials/models/props_map_editor/item_lighting_common.vmt"
-insert
-{
-$basetexture "models/props_map_editor/bpee/${itemName}/${baseFileName}"
-$selfillum 1
-$model 1
-}
-}
-`
-                    fs.writeFileSync(vmtPath, vmtContent, "utf-8")
+                    fs.writeFileSync(
+                        vmtPath,
+                        editorVmt(itemName, baseFileName),
+                        "utf-8",
+                    )
                 } catch (error) {
                     console.error(`  Failed to convert ${entry.name}: ${error.message}`)
                 }
@@ -494,6 +516,7 @@ $model 1
     }
 
     const materialMap = {}
+    const alphaModes = {}
     if (fs.existsSync(mtlFilePath)) {
         const mtlContent = fs.readFileSync(mtlFilePath, "utf-8")
         const lines = mtlContent.split("\n")
@@ -508,6 +531,9 @@ $model 1
                     .trim()
                     .replace("materials/", "")
                 materialMap[currentMaterial] = texturePath
+            } else if (currentMaterial && line.startsWith("# beepee:")) {
+                // Translucent/alphatest marker written by the VMF2OBJ converter
+                alphaModes[currentMaterial] = line.substring(9).trim()
             }
         }
         console.log(`Found ${Object.keys(materialMap).length} materials in MTL file`)
@@ -539,18 +565,15 @@ $model 1
                     textureFileName + ".vmt",
                 )
 
-                const vmtContent = `patch
-{
-include "materials/models/props_map_editor/item_lighting_common.vmt"
-insert
-{
-$basetexture "models/props_map_editor/bpee/${itemName}/${textureFileName}"
-$selfillum 1
-$model 1
-}
-}
-`
-                fs.writeFileSync(vmtPath, vmtContent, "utf-8")
+                fs.writeFileSync(
+                    vmtPath,
+                    editorVmt(
+                        itemName,
+                        textureFileName,
+                        alphaModes[materialName],
+                    ),
+                    "utf-8",
+                )
                 createdVmts.add(textureFileName)
             } catch (error) {
                 console.error(`  Failed to create VMT for ${materialName}: ${error.message}`)
@@ -566,18 +589,11 @@ $model 1
                 if (!createdVmts.has(baseName)) {
                     const vmtPath = path.join(materialTargetDir, baseName + ".vmt")
                     if (!fs.existsSync(vmtPath)) {
-                        const vmtContent = `patch
-{
-include "materials/models/props_map_editor/item_lighting_common.vmt"
-insert
-{
-$basetexture "models/props_map_editor/bpee/${itemName}/${baseName}"
-$selfillum 1
-$model 1
-}
-}
-`
-                        fs.writeFileSync(vmtPath, vmtContent, "utf-8")
+                        fs.writeFileSync(
+                            vmtPath,
+                            editorVmt(itemName, baseName),
+                            "utf-8",
+                        )
                     }
                 }
             }
@@ -1196,6 +1212,7 @@ module.exports = {
     generateQCFile,
     convertObjToMDL,
     convertMaterialsToPackage,
+    editorVmt,
     copyMDLToPackage,
     convertAndInstallMDL,
     mapVariableValuesToInstances,

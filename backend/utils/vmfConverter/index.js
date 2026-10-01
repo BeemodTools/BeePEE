@@ -42,7 +42,12 @@ const {
     skinMapper,
 } = require("./models")
 const {
+    add,
+    sub,
+    scale,
     dot,
+    cross,
+    length,
     vectorKey,
     entityMatrix,
     transformPoint,
@@ -89,6 +94,9 @@ const CUBE_TYPES = [
 /** Stand-in for missing textures: Source's purple/black checkerboard */
 const PLACEHOLDER_TEXTURE = "bpee_missing_texture"
 const PLACEHOLDER_SIZE = 128
+
+/** How far overlay quads sit above their surface (per render order step) */
+const OVERLAY_LIFT = 0.25
 
 function placeholderPixels() {
     const pixels = Buffer.alloc(PLACEHOLDER_SIZE * PLACEHOLDER_SIZE * 4)
@@ -306,6 +314,7 @@ class VmfConverter {
                 toolFaces: 0,
                 skippedModels: 0,
                 placeholderMaterials: 0,
+                overlays: 0,
             },
         }
 
@@ -322,6 +331,12 @@ class VmfConverter {
         for (const entity of props) {
             await this.writeProp(state, entity)
             await this.yieldIfBusy()
+        }
+
+        for (const entity of vmf.entities) {
+            if (entity.classname.toLowerCase() === "info_overlay") {
+                await this.writeOverlay(state, entity)
+            }
         }
 
         await fs.promises.mkdir(state.outDir, { recursive: true })
@@ -566,7 +581,13 @@ class VmfConverter {
             `map_Kd materials/${textureName}.png`,
         )
         if (bumpmap) state.mtl.push(`map_bump materials/${bumpmap}.png`)
-        if (info.translucent || info.alphatest) state.mtl.push("illum 4")
+        if (info.translucent || info.alphatest) {
+            // The marker tells BeePEE's VMT generation how to use the alpha
+            state.mtl.push(
+                "illum 4",
+                `# beepee:${info.translucent ? "translucent" : "alphatest"}`,
+            )
+        }
         state.mtl.push("")
         state.stats.materials++
         return materialName
@@ -926,6 +947,105 @@ class VmfConverter {
         state.v += vertices.list.length
         this.writeFaces(state, faces)
         state.stats.props++
+    }
+
+    // -----------------------------------------------------------------------
+    // Overlays
+    // -----------------------------------------------------------------------
+
+    /**
+     * An info_overlay as a textured quad: its corners (uv0-uv3) are in the
+     * BasisU/BasisV plane around BasisOrigin, with texture coordinates
+     * (StartU, StartV), (StartU, EndV), (EndU, EndV), (EndU, StartV) as in
+     * Source. The quad is lifted slightly along BasisNormal, a step further
+     * per RenderOrder, so it doesn't z-fight with the surface or overlays
+     * below it. (Source also clips overlays to the faces they're on and wraps
+     * them around edges; this doesn't.)
+     */
+    async writeOverlay(state, entity) {
+        const vector = (key) => {
+            const n = parseNumbers(entity.get(key))
+            return n.length >= 3 ? n.slice(0, 3) : null
+        }
+        const number = (key, fallback) => {
+            const n = Number.parseFloat(entity.get(key))
+            return Number.isFinite(n) ? n : fallback
+        }
+
+        const material = (entity.get("material") ?? "")
+            .replace(/\\/g, "/")
+            .trim()
+            .toLowerCase()
+        const origin = vector("basisorigin") ?? vector("origin")
+        const basisU = vector("basisu")
+        const basisV = vector("basisv")
+        const normal = vector("basisnormal")
+        const points = [0, 1, 2, 3].map((i) =>
+            parseNumbers(entity.get(`uv${i}`)),
+        )
+        if (
+            !material ||
+            !origin ||
+            !basisU ||
+            !basisV ||
+            !normal ||
+            length(normal) === 0 ||
+            points.some((p) => p.length < 2)
+        ) {
+            this.warn(
+                `Skipping overlay ${entity.get("id") ?? "?"}: incomplete keyvalues`,
+            )
+            return
+        }
+
+        // Source draws higher render orders (0-3) on top of lower ones
+        const renderOrder = Math.min(
+            Math.max(Math.trunc(number("renderorder", 0)), 0),
+            3,
+        )
+        const lift = scale(normalize(normal), OVERLAY_LIFT * (1 + renderOrder))
+        const corners = points.map(([x, y]) =>
+            add(add(add(origin, scale(basisU, x)), scale(basisV, y)), lift),
+        )
+        const startU = number("startu", 0)
+        const endU = number("endu", 1)
+        const startV = number("startv", 0)
+        const endV = number("endv", 1)
+        const texCoords = [
+            [startU, startV],
+            [startU, endV],
+            [endU, endV],
+            [endU, startV],
+        ]
+
+        // OBJ faces are counter-clockwise from the front, which faces the normal
+        const facing = dot(
+            cross(sub(corners[1], corners[0]), sub(corners[2], corners[0])),
+            normal,
+        )
+        const order = facing < 0 ? [3, 2, 1, 0] : [0, 1, 2, 3]
+
+        const name = await this.registerMaterial(state, material, [
+            `materials/${material}.vmt`,
+        ])
+
+        state.obj.push(
+            "",
+            "",
+            `o overlay_${entity.get("id") ?? state.stats.overlays}`,
+            "",
+        )
+        for (const p of corners) state.obj.push(`v ${p[0]} ${p[1]} ${p[2]}`)
+        // Source's t runs down the texture while OBJ's v runs up
+        for (const [u, t] of texCoords) state.obj.push(`vt ${u} ${1 - t}`)
+        state.obj.push("")
+        const text = order
+            .map((i) => `${state.v + i}/${state.vt + i}`)
+            .join(" ")
+        state.v += 4
+        state.vt += 4
+        this.writeFaces(state, [{ text: `${text} `, material: name }])
+        state.stats.overlays++
     }
 }
 

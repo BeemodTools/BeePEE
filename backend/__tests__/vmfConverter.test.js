@@ -675,3 +675,162 @@ describe("convertVmf: placeholders and built-in models", () => {
         expect(result.warnings.join("\n")).not.toContain("prop_portal")
     })
 })
+
+describe("convertVmf: overlays", () => {
+    let root
+
+    beforeAll(() => {
+        root = fs.mkdtempSync(path.join(os.tmpdir(), "beepee-vmf2obj-overlay-"))
+        const materials = path.join(root, "content", "materials", "test")
+        fs.mkdirSync(materials, { recursive: true })
+        fs.writeFileSync(
+            path.join(materials, "decal.vtf"),
+            buildVtf(4, 4, FORMAT.RGBA8888, Buffer.alloc(4 * 4 * 4, 128)),
+        )
+        fs.writeFileSync(
+            path.join(materials, "decal.vmt"),
+            `"LightmappedGeneric" { "$basetexture" "test/decal" "$translucent" "1" "$decal" "1" }`,
+        )
+    })
+
+    afterAll(() => {
+        fs.rmSync(root, { recursive: true, force: true })
+    })
+
+    test("writes an info_overlay as a lifted, front-facing textured quad", async () => {
+        const vmfPath = path.join(root, "overlay.vmf")
+        fs.writeFileSync(
+            vmfPath,
+            `entity
+            {
+                "id" "7"
+                "classname" "info_overlay"
+                "material" "TEST/DECAL"
+                "BasisOrigin" "0 0 16"
+                "BasisU" "1 0 0"
+                "BasisV" "0 1 0"
+                "BasisNormal" "0 0 1"
+                "uv0" "-8 -8 0"
+                "uv1" "-8 8 0"
+                "uv2" "8 8 0"
+                "uv3" "8 -8 0"
+                "StartU" "0"
+                "EndU" "1"
+                "StartV" "1"
+                "EndV" "0"
+                "origin" "0 0 16"
+            }`,
+        )
+        const result = await convertVmf(
+            vmfPath,
+            path.join(root, "out", "overlay"),
+            {
+                resourcePaths: [path.join(root, "content")],
+                quiet: true,
+            },
+        )
+        expect(result.stats.overlays).toBe(1)
+        expect(result.stats.faces).toBe(1)
+
+        const v = [null]
+        const vt = [null]
+        let face = null
+        for (const line of fs
+            .readFileSync(result.objPath, "utf8")
+            .split("\n")) {
+            const p = line.trim().split(/\s+/)
+            if (p[0] === "v") v.push(p.slice(1, 4).map(Number))
+            if (p[0] === "vt") vt.push(p.slice(1, 3).map(Number))
+            if (p[0] === "f")
+                face = p.slice(1).map((c) => c.split("/").map(Number))
+        }
+        expect(fs.readFileSync(result.objPath, "utf8")).toContain("o overlay_7")
+        const corners = face.map(([vi, ti]) => ({ pos: v[vi], uv: vt[ti] }))
+
+        // Lifted off the surface along the normal
+        corners.forEach((c) => expect(c.pos[2]).toBeCloseTo(16.25, 6))
+
+        // Counter-clockwise when seen from the normal side
+        const [a, b, c] = corners.map((k) => k.pos)
+        const nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+        expect(nz).toBeGreaterThan(0)
+
+        // u grows along BasisU; OBJ v is flipped from Source's t
+        const at = (x, y) =>
+            corners.find((k) => k.pos[0] === x && k.pos[1] === y).uv
+        expect(at(-8, -8)).toEqual([0, 0])
+        expect(at(8, -8)).toEqual([1, 0])
+        expect(at(8, 8)).toEqual([1, 1])
+
+        const mtl = fs.readFileSync(result.mtlPath, "utf8")
+        expect(mtl).toContain("map_Kd materials/test/decal.png")
+        expect(mtl).toContain("# beepee:translucent")
+    })
+
+    test("lifts higher render orders further so they stay on top", async () => {
+        const vmfPath = path.join(root, "overlay_order.vmf")
+        fs.writeFileSync(
+            vmfPath,
+            `entity
+            {
+                "id" "8"
+                "classname" "info_overlay"
+                "material" "test/decal"
+                "BasisOrigin" "0 0 16"
+                "BasisU" "1 0 0"
+                "BasisV" "0 1 0"
+                "BasisNormal" "0 0 1"
+                "uv0" "-8 -8 0"
+                "uv1" "-8 8 0"
+                "uv2" "8 8 0"
+                "uv3" "8 -8 0"
+                "RenderOrder" "2"
+            }`,
+        )
+        const result = await convertVmf(
+            vmfPath,
+            path.join(root, "out", "overlay_order"),
+            {
+                resourcePaths: [path.join(root, "content")],
+                quiet: true,
+            },
+        )
+        const heights = fs
+            .readFileSync(result.objPath, "utf8")
+            .split("\n")
+            .filter((line) => line.startsWith("v "))
+            .map((line) => Number(line.split(/\s+/)[3]))
+        expect(heights).toHaveLength(4)
+        heights.forEach((z) => expect(z).toBeCloseTo(16.75, 6))
+    })
+})
+
+describe("editor model VMTs", () => {
+    const { editorVmt } = require("../utils/mdlConverter")
+
+    test("opaque textures keep the original VMT", () => {
+        expect(editorVmt("item", "tex")).toBe(`patch
+{
+include "materials/models/props_map_editor/item_lighting_common.vmt"
+insert
+{
+$basetexture "models/props_map_editor/bpee/item/tex"
+$selfillum 1
+$model 1
+}
+}
+`)
+    })
+
+    test("translucent and alphatest textures keep their transparency", () => {
+        const translucent = editorVmt("item", "tex", "translucent")
+        expect(translucent).toContain("$model 1\n$translucent 1\n}")
+        const alphatest = editorVmt("item", "tex", "alphatest")
+        expect(alphatest).toContain(
+            "$model 1\n$alphatest 1\n$alphatestreference .5\n}",
+        )
+        // With $selfillum the shaders ignore the base alpha for opacity
+        expect(translucent).not.toContain("$selfillum")
+        expect(alphatest).not.toContain("$selfillum")
+    })
+})
