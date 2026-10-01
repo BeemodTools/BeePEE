@@ -1,6 +1,31 @@
 {
     "versions": [
         {
+            "version": "1.2.0-beta.1",
+            "date": "2026-10-2",
+            "notes": [
+                "This is a BETA build - it is bug prone. If you encounter any bugs go to Help > Report Bug. Please stress test as much as you can!",
+                "Model generation was rewritten for this beta. Please try Make Model on as many items as you can, especially items with props and items with multiple models (timers, cube types, etc.)"
+            ],
+            "changes": {
+                "added": [
+                    "Model generation no longer needs Java - VMF to OBJ conversion now runs inside BeePEE, so it's much faster and there's no Java download",
+                    "Props in generated models now use their skin"
+                ],
+                "fixed": [
+                    "Props (prop_static, prop_dynamic, ...) facing the wrong way in generated models",
+                    "Animated props like item droppers showing in their raw pose instead of their default animation",
+                    "Brush entities (func_detail etc.) ending up in the wrong place in items with multiple models",
+                    "Brush textures being mirrored in generated models",
+                    "Some brush faces missing from generated models"
+                ],
+                "changed": [
+                    "Items with multiple models convert each instance on its own instead of merging them into one map",
+                    "Normal maps are no longer copied into item materials (editor models don't use them)"
+                ]
+            }
+        },
+        {
             "version": "1.1.1-beta.1",
             "date": "2026-7-10",
             "notes": [
