@@ -308,6 +308,10 @@ $basetexture "concrete/dx8"
             alphatest: false,
             tint: null,
             tintMask: false,
+            additive: false,
+            alpha: 1,
+            alphaTestReference: 0.5,
+            modulate: false,
         })
     })
 
@@ -678,130 +682,186 @@ describe("convertVmf: placeholders and built-in models", () => {
 
 describe("convertVmf: overlays", () => {
     let root
+    const solidVtf = (size, rgba) =>
+        buildVtf(
+            size,
+            size,
+            FORMAT.RGBA8888,
+            Buffer.concat(Array(size * size).fill(Buffer.from(rgba))),
+        )
+    const material = (name, rgba, vmt) => {
+        const folder = path.join(root, "content", "materials", "test")
+        fs.writeFileSync(path.join(folder, `${name}.vtf`), solidVtf(4, rgba))
+        fs.writeFileSync(path.join(folder, `${name}.vmt`), vmt(`test/${name}`))
+    }
+    const overlay = (id, mat, [x, y], size, extra = "") => `
+        entity
+        {
+            "id" "${id}"
+            "classname" "info_overlay"
+            "material" "${mat}"
+            "BasisOrigin" "${x} ${y} 8"
+            "BasisU" "1 0 0"
+            "BasisV" "0 1 0"
+            "BasisNormal" "0 0 1"
+            "uv0" "${-size / 2} ${-size / 2} 0"
+            "uv1" "${-size / 2} ${size / 2} 0"
+            "uv2" "${size / 2} ${size / 2} 0"
+            "uv3" "${size / 2} ${-size / 2} 0"
+            "StartU" "0"
+            "EndU" "1"
+            "StartV" "0"
+            "EndV" "1"
+            ${extra}
+        }`
+    const convert = (name, faceSize, overlays) => {
+        const vmfPath = path.join(root, `${name}.vmf`)
+        fs.writeFileSync(
+            vmfPath,
+            `world { ${boxSolid(2, [0, 0, 0], [faceSize, faceSize, 8], "test/base")} }
+            ${overlays.join("\n")}`,
+        )
+        return convertVmf(vmfPath, path.join(root, "out", name), {
+            resourcePaths: [path.join(root, "content")],
+            quiet: true,
+        })
+    }
+    // The top face's texture is 4 texels per unit: u along x, v along -y
+    const baked = (name, faceSize) => {
+        const file = path.join(
+            root,
+            "out",
+            "materials",
+            "bpee_overlays",
+            `bpee_overlay_${name}_1.png`,
+        )
+        return {
+            file,
+            width: fs.readFileSync(file).readUInt32BE(16),
+            at: (x, y) =>
+                readPngPixel(
+                    file,
+                    Math.floor(x * 4),
+                    Math.floor((faceSize - y) * 4),
+                ),
+        }
+    }
 
     beforeAll(() => {
         root = fs.mkdtempSync(path.join(os.tmpdir(), "beepee-vmf2obj-overlay-"))
-        const materials = path.join(root, "content", "materials", "test")
-        fs.mkdirSync(materials, { recursive: true })
-        fs.writeFileSync(
-            path.join(materials, "decal.vtf"),
-            buildVtf(4, 4, FORMAT.RGBA8888, Buffer.alloc(4 * 4 * 4, 128)),
+        fs.mkdirSync(path.join(root, "content", "materials", "test"), {
+            recursive: true,
+        })
+        const lit = (extra) => (texture) =>
+            `"LightmappedGeneric" { "$basetexture" "${texture}" ${extra} }`
+        material("base", [100, 100, 100, 255], lit(""))
+        material("red", [255, 0, 0, 255], lit(`"$translucent" "1"`))
+        material("blue", [0, 0, 255, 255], lit(""))
+        material("half", [255, 255, 255, 128], lit(`"$translucent" "1"`))
+        material("glow", [50, 0, 0, 255], lit(`"$additive" "1"`))
+        material(
+            "modulate",
+            [64, 128, 255, 255],
+            (texture) => `"DecalModulate" { "$basetexture" "${texture}" }`,
         )
-        fs.writeFileSync(
-            path.join(materials, "decal.vmt"),
-            `"LightmappedGeneric" { "$basetexture" "test/decal" "$translucent" "1" "$decal" "1" }`,
-        )
+        material("faint", [0, 255, 0, 100], lit(`"$alphatest" "1"`))
+        material("solid", [0, 255, 0, 200], lit(`"$alphatest" "1"`))
     })
 
     afterAll(() => {
         fs.rmSync(root, { recursive: true, force: true })
     })
 
-    test("writes an info_overlay as a lifted, front-facing textured quad", async () => {
-        const vmfPath = path.join(root, "overlay.vmf")
-        fs.writeFileSync(
-            vmfPath,
-            `entity
-            {
-                "id" "7"
-                "classname" "info_overlay"
-                "material" "TEST/DECAL"
-                "BasisOrigin" "0 0 16"
-                "BasisU" "1 0 0"
-                "BasisV" "0 1 0"
-                "BasisNormal" "0 0 1"
-                "uv0" "-8 -8 0"
-                "uv1" "-8 8 0"
-                "uv2" "8 8 0"
-                "uv3" "8 -8 0"
-                "StartU" "0"
-                "EndU" "1"
-                "StartV" "1"
-                "EndV" "0"
-                "origin" "0 0 16"
-            }`,
-        )
-        const result = await convertVmf(
-            vmfPath,
-            path.join(root, "out", "overlay"),
-            {
-                resourcePaths: [path.join(root, "content")],
-                quiet: true,
-            },
-        )
+    test("bakes an overlay into the texture of the face it's on", async () => {
+        const result = await convert("single", 16, [
+            overlay(7, "TEST/RED", [8, 8], 8, `"sides" "1"`),
+        ])
         expect(result.stats.overlays).toBe(1)
-        expect(result.stats.faces).toBe(1)
 
-        const v = [null]
+        const obj = fs.readFileSync(result.objPath, "utf8")
+        expect(obj).toContain("usemtl bpee_overlay_single_1")
+        expect(obj).toContain("usemtl test/base")
+        expect(fs.readFileSync(result.mtlPath, "utf8")).toContain(
+            "map_Kd materials/bpee_overlays/bpee_overlay_single_1.png",
+        )
+
+        // A copy of the face's 16 units of texture with the overlay in the middle
+        const png = baked("single", 16)
+        expect(png.width).toBe(64)
+        expect(png.at(8, 8)).toEqual([255, 0, 0])
+        expect(png.at(1, 1)).toEqual([100, 100, 100])
+        expect(png.at(14, 3)).toEqual([100, 100, 100])
+
+        // The face's texture coordinates cover exactly the baked texture
         const vt = [null]
-        let face = null
-        for (const line of fs
-            .readFileSync(result.objPath, "utf8")
-            .split("\n")) {
+        let faceCoords = null
+        let current = null
+        for (const line of obj.split("\n")) {
             const p = line.trim().split(/\s+/)
-            if (p[0] === "v") v.push(p.slice(1, 4).map(Number))
             if (p[0] === "vt") vt.push(p.slice(1, 3).map(Number))
-            if (p[0] === "f")
-                face = p.slice(1).map((c) => c.split("/").map(Number))
+            if (p[0] === "usemtl") current = p[1]
+            if (p[0] === "f" && current === "bpee_overlay_single_1") {
+                faceCoords = p.slice(1).map((c) => vt[Number(c.split("/")[1])])
+            }
         }
-        expect(fs.readFileSync(result.objPath, "utf8")).toContain("o overlay_7")
-        const corners = face.map(([vi, ti]) => ({ pos: v[vi], uv: vt[ti] }))
-
-        // Lifted off the surface along the normal
-        corners.forEach((c) => expect(c.pos[2]).toBeCloseTo(16.25, 6))
-
-        // Counter-clockwise when seen from the normal side
-        const [a, b, c] = corners.map((k) => k.pos)
-        const nz = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-        expect(nz).toBeGreaterThan(0)
-
-        // u grows along BasisU; OBJ v is flipped from Source's t
-        const at = (x, y) =>
-            corners.find((k) => k.pos[0] === x && k.pos[1] === y).uv
-        expect(at(-8, -8)).toEqual([0, 0])
-        expect(at(8, -8)).toEqual([1, 0])
-        expect(at(8, 8)).toEqual([1, 1])
-
-        const mtl = fs.readFileSync(result.mtlPath, "utf8")
-        expect(mtl).toContain("map_Kd materials/test/decal.png")
-        expect(mtl).toContain("# beepee:translucent")
+        const us = faceCoords.map((c) => c[0])
+        const vs = faceCoords.map((c) => c[1])
+        close([Math.min(...us), Math.max(...us)], [0, 1])
+        close([Math.min(...vs), Math.max(...vs)], [0, 1])
     })
 
-    test("lifts higher render orders further so they stay on top", async () => {
-        const vmfPath = path.join(root, "overlay_order.vmf")
-        fs.writeFileSync(
-            vmfPath,
-            `entity
-            {
-                "id" "8"
-                "classname" "info_overlay"
-                "material" "test/decal"
-                "BasisOrigin" "0 0 16"
-                "BasisU" "1 0 0"
-                "BasisV" "0 1 0"
-                "BasisNormal" "0 0 1"
-                "uv0" "-8 -8 0"
-                "uv1" "-8 8 0"
-                "uv2" "8 8 0"
-                "uv3" "8 -8 0"
-                "RenderOrder" "2"
-            }`,
+    test("clips overlays that overhang their face to it", async () => {
+        const result = await convert("overhang", 16, [
+            overlay(7, "test/red", [8, 8], 40, `"sides" "1"`),
+        ])
+        expect(result.stats.overlays).toBe(1)
+        const png = baked("overhang", 16)
+        expect(png.width).toBe(64) // the face, not the overlay
+        expect(png.at(0.1, 0.1)).toEqual([255, 0, 0])
+        expect(png.at(15.9, 15.9)).toEqual([255, 0, 0])
+    })
+
+    test("draws higher render orders on top", async () => {
+        await convert("order", 16, [
+            overlay(7, "test/blue", [8, 8], 8, `"sides" "1" "RenderOrder" "1"`),
+            overlay(8, "test/red", [8, 8], 8, `"sides" "1"`),
+        ])
+        expect(baked("order", 16).at(8, 8)).toEqual([0, 0, 255])
+    })
+
+    test("blends overlays like their shaders", async () => {
+        const result = await convert("blend", 48, [
+            overlay(1, "test/half", [8, 8], 8, `"sides" "1"`),
+            overlay(2, "test/glow", [24, 8], 8, `"sides" "1"`),
+            overlay(3, "test/modulate", [40, 8], 8, `"sides" "1"`),
+            overlay(4, "test/faint", [8, 24], 8, `"sides" "1"`),
+            overlay(5, "test/solid", [24, 24], 8, `"sides" "1"`),
+        ])
+        expect(result.stats.overlays).toBe(5)
+        const png = baked("blend", 48)
+        // $translucent: alpha blend (128/255 of white over grey)
+        expect(png.at(8, 8)).toEqual([178, 178, 178])
+        // $additive: added
+        expect(png.at(24, 8)).toEqual([150, 100, 100])
+        // DecalModulate: 2 * overlay * face
+        expect(png.at(40, 8)).toEqual([50, 100, 200])
+        // $alphatest: drawn only where alpha passes 0.5
+        expect(png.at(8, 24)).toEqual([100, 100, 100])
+        expect(png.at(24, 24)).toEqual([0, 255, 0])
+    })
+
+    test("leaves out overlays that aren't on any face", async () => {
+        const result = await convert("missing", 16, [
+            overlay(7, "test/red", [8, 8], 8, `"sides" "999"`),
+            overlay(8, "test/red", [8, 8], 8),
+        ])
+        expect(result.stats.overlays).toBe(0)
+        expect(result.warnings).toContain(
+            "2 overlays (test/red) are not on any brush face in this instance, so they were left out",
         )
-        const result = await convertVmf(
-            vmfPath,
-            path.join(root, "out", "overlay_order"),
-            {
-                resourcePaths: [path.join(root, "content")],
-                quiet: true,
-            },
+        expect(fs.readFileSync(result.mtlPath, "utf8")).not.toContain(
+            "bpee_overlay",
         )
-        const heights = fs
-            .readFileSync(result.objPath, "utf8")
-            .split("\n")
-            .filter((line) => line.startsWith("v "))
-            .map((line) => Number(line.split(/\s+/)[3]))
-        expect(heights).toHaveLength(4)
-        heights.forEach((z) => expect(z).toBeCloseTo(16.75, 6))
     })
 })
 

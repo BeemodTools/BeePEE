@@ -799,6 +799,7 @@ Graceful degradation:
 | `brushes.js` | Side planes → face polygons, displacement grids |
 | `models.js` | Crowbar decompile, QC/SMD parsing, posing props |
 | `textures.js` | VMT parsing, VTF decoding, PNG encoding |
+| `overlays.js` | Baking `info_overlay`s into the textures of their faces |
 | `vpk.js` / `resources.js` | VPK reading and the content lookup across VPKs/folders |
 
 ### Usage
@@ -842,9 +843,11 @@ custom-content/        <-- SELECT THIS
 
 ### Overlays
 
-- Each `info_overlay` becomes one quad: corners `uv0`–`uv3` in the `BasisU`/`BasisV` plane around `BasisOrigin`, texture coordinates from `StartU`/`EndU`/`StartV`/`EndV`, wound to face `BasisNormal`.
-- The quad is lifted `0.25 × (1 + RenderOrder)` units along the normal, so it doesn't z-fight with its surface and higher render orders stay on top.
-- Unlike in Source, overlays aren't clipped to the faces they're on or wrapped around edges.
+- `info_overlay`s are baked into the textures of the brush faces listed in their `sides` (`overlays.js`). Each such face gets its own texture, `materials/bpee_overlays/bpee_overlay_<output name>_<side id>.png`, covering the face's texture coordinates: the face's (tinted) texture copied texel for texel, with the overlays drawn over it. The face's UVs are remapped onto it.
+- As in Source, an overlay is projected along `BasisNormal` onto each face and clipped to it (corners `uv0`–`uv3` around `BasisOrigin`, texture coordinates from `StartU`/`EndU`/`StartV`/`EndV`). So overlays can't overhang their faces, z-fight or need transparency.
+- Overlays are drawn in `RenderOrder`, then VMF order, and blended like their shader: `$translucent` alpha blending, `$alphatest` cutouts, `$additive`, `DecalModulate` (2 × overlay × face) and `$alpha`. Opaque overlay materials cover the face.
+- A face's baked texture gets up to 8 pixels per face texel when an overlay is sharper than the face's texture, and is at most 2048 px wide/high.
+- Overlays that end up on no face (no `sides`, sides that aren't in the instance, displacements, skipped tool faces) are left out with a warning, as VBSP leaves them out.
 
 ### Materials
 
@@ -860,7 +863,7 @@ custom-content/        <-- SELECT THIS
 
 - ❌ Displacement blend materials (would require texture generation or per-vertex materials)
 - ❌ infodecal (projection logic unknown)
-- ❌ Clipping overlays to their faces / wrapping them around edges (overlays are flat quads)
+- ❌ Overlays on displacements
 - ❌ Body group selection via the `body` keyvalue
 - ❌ Compressed (Strata) VTFs
 

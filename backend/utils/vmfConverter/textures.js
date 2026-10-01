@@ -162,9 +162,17 @@ function applyTint(rgba, tint, maskByAlpha = false) {
     return out
 }
 
+/** A number param clamped to 0-1, or the fallback when unset/invalid */
+function unitParam(value, fallback) {
+    const n = Number.parseFloat(value)
+    return Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : fallback
+}
+
 /**
- * Pull the fields the converter needs out of parsed VMT params
- * @returns {{basetexture: string|null, bumpmap: string|null, translucent: boolean, alphatest: boolean, tint: number[]|null, tintMask: boolean}}
+ * Pull the fields the converter needs out of parsed VMT params. The blend
+ * fields ($additive, $alpha, $alphatestreference, DecalModulate) are used
+ * when overlays are drawn onto faces.
+ * @returns {{basetexture: string|null, bumpmap: string|null, translucent: boolean, alphatest: boolean, tint: number[]|null, tintMask: boolean, additive: boolean, alpha: number, alphaTestReference: number, modulate: boolean}}
  */
 function describeMaterial(shader, params) {
     if (shader === "water") {
@@ -176,6 +184,10 @@ function describeMaterial(shader, params) {
             alphatest: false,
             tint: null,
             tintMask: false,
+            additive: false,
+            alpha: 1,
+            alphaTestReference: 0.5,
+            modulate: false,
         }
     }
     // $color tints every shader; $color2 is the model shaders' tint
@@ -190,6 +202,10 @@ function describeMaterial(shader, params) {
             usesColor2 ? parseMaterialColor(params.get("color2")) : null,
         ),
         tintMask: isTruthyParam(params.get("blendtintbybasealpha")),
+        additive: isTruthyParam(params.get("additive")),
+        alpha: unitParam(params.get("alpha"), 1),
+        alphaTestReference: unitParam(params.get("alphatestreference"), 0.5),
+        modulate: shader === "decalmodulate",
     }
 }
 
