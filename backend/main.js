@@ -159,7 +159,6 @@ function checkArengBinFolders() {
 
     const requiredFolders = [
         path.join(baseDir, "areng_cartoonify", "_internal"),
-        path.join(baseDir, "areng_vmfMerge", "_internal"),
         path.join(baseDir, "areng_obj23ds", "_internal"),
     ]
 
@@ -192,8 +191,7 @@ app.whenReady().then(async () => {
             `Missing folders: ${missingBins.join(", ")}\n\n` +
             `The following features will not work:\n` +
             `• VMF to OBJ conversion (cartoonify)\n` +
-            `• OBJ to 3DS conversion (model generation)\n` +
-            `• VMF merging (multi-instance items)\n\n` +
+            `• OBJ to 3DS conversion (model generation)\n\n` +
             `Please download the full BeePEE release from GitHub or rebuild the Python executables.`
         )
     }

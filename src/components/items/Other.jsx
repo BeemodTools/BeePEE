@@ -127,9 +127,7 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
 
             // Update progress message based on stage
             const stageMessages = {
-                merge: "📐 Merging VMFs into grid...",
                 vmf2obj: "🔄 Converting to OBJ...",
-                split: "✂️ Splitting models...",
                 mdl: "🔨 Converting to MDL...",
             }
 

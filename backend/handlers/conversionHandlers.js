@@ -6,7 +6,7 @@ const { dialog } = require("electron")
 const fs = require("fs")
 const path = require("path")
 const { packages } = require("../packageManager")
-const { convertVmfToObj } = require("../utils/vmf2obj")
+const { convertVmfToObj, convertVmfsToObj } = require("../utils/vmf2obj")
 const { Instance } = require("../items/Instance")
 const { fixInstancePath } = require("./instanceHandlers")
 const { closeAllModelPreviewWindows } = require("../items/itemEditor")
@@ -351,16 +351,11 @@ function handleTimerVariable(sortedValueInstanceMap) {
 }
 
 /**
- * Handle atlas-based conversion (multiple models in grid)
+ * Handle multi-model conversion: one model per unique instance
  */
 async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap, options) {
 
     const uniqueInstances = [...new Set(finalInstanceMap.values())]
-
-    event.sender.send("conversion-progress", {
-        stage: "merge",
-        message: `Preparing to merge ${uniqueInstances.length} instances into grid...`,
-    })
 
     // Create persistent models directory for this item
     const itemName = item.id.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase()
@@ -371,7 +366,6 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
     const vmfFiles = []
     for (const instancePath of uniqueInstances) {
         const vmfPath = Instance.getCleanPath(item.packagePath, instancePath)
-        const fileBase = path.basename(instancePath, path.extname(instancePath))
 
         if (!fs.existsSync(vmfPath)) {
             console.warn(`   ⚠️ VMF file not found: ${vmfPath}`)
@@ -380,7 +374,6 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
 
         vmfFiles.push({
             path: vmfPath,
-            name: fileBase,
             instancePath,
         })
     }
@@ -389,43 +382,35 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
         return { success: false, error: "No valid VMF files found" }
     }
 
-    const { mergeVMFsIntoGrid, splitOBJByGrid } = require("../utils/vmfAtlas")
-    const combinedVmfPath = path.join(tempDir, `${item.id}_combined.vmf`)
-
-    const atlasResult = await mergeVMFsIntoGrid(vmfFiles, combinedVmfPath, {
-        spacing: 256,
-    })
-
     event.sender.send("conversion-progress", {
         stage: "vmf2obj",
-        message: `Converting ${vmfFiles.length} models in grid layout...`,
-        detail: "This may take several minutes",
+        message: `Converting ${vmfFiles.length} models to OBJ...`,
     })
 
-    const combinedResult = await convertVmfToObj(combinedVmfPath, {
-        outputDir: tempDir,
-        textureStyle: options.textureStyle || "cartoon",
-        timeoutMs: 600000,
-    })
-
-    const combinedObjPath = combinedResult.objPath || path.join(tempDir, `${item.id}_combined.obj`)
-
-    if (!fs.existsSync(combinedObjPath)) {
-        throw new Error(`VMF2OBJ did not create expected output: ${combinedObjPath}`)
-    }
-
-    event.sender.send("conversion-progress", {
-        stage: "split",
-        message: "Splitting combined model into individual variants...",
-    })
-
-    const splitResults = await splitOBJByGrid(
-        combinedObjPath,
-        atlasResult.gridLayout,
-        tempDir,
-        atlasResult.bounds.cellSize,
-        { namePrefix: itemName },
+    // Each instance is converted on its own (sharing one converter session),
+    // so brushes, brush entities and props all stay in their own model
+    const objResults = await convertVmfsToObj(
+        vmfFiles.map((file, index) => ({
+            vmfPath: file.path,
+            outputName: `${itemName}_${index}`,
+        })),
+        {
+            outputDir: tempDir,
+            textureStyle: options.textureStyle || "cartoon",
+            timeoutMs: 600000,
+        },
     )
+
+    const variantResults = []
+    const objFailures = []
+    objResults.forEach((result, index) => {
+        const { instancePath } = vmfFiles[index]
+        if (result.error) {
+            objFailures.push({ instancePath, error: result.error })
+        } else {
+            variantResults.push({ name: result.outputName, objPath: result.objPath, instancePath })
+        }
+    })
 
     // Convert materials once (shared)
     const { convertMaterialsToPackage } = require("../utils/mdlConverter")
@@ -449,25 +434,21 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
         sharedFolderName,
     )
 
-    // Convert each split OBJ to MDL
+    // Convert each variant OBJ to MDL
     event.sender.send("conversion-progress", {
         stage: "mdl",
-        message: `Converting ${splitResults.length} models to MDL format...`,
+        message: `Converting ${variantResults.length} models to MDL format...`,
     })
 
-    const conversionPromises = splitResults.map(async (split) => {
-        // Use originalName to match with vmfFiles (before namePrefix was applied)
-        const instancePath = vmfFiles.find((v) => v.name === split.originalName)?.instancePath
-        if (!instancePath) {
-            return { instancePath: split.originalName || split.name, error: "Instance path not found" }
-        }
+    const conversionPromises = variantResults.map(async (variant) => {
+        const { instancePath } = variant
 
         try {
             const { convertAndInstallMDL } = require("../utils/mdlConverter")
             const mdlResult = await convertAndInstallMDL(
-                split.objPath,
+                variant.objPath,
                 item.packagePath,
-                split.name,
+                variant.name,
                 {
                     scale: options.scale || 1.0,
                     skipMaterialConversion: true,
@@ -482,12 +463,12 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
                 value: instancePath,
             }
         } catch (error) {
-            console.error(`   ❌ FAILED to convert ${split.name}:`, error.message)
+            console.error(`   ❌ FAILED to convert ${variant.name}:`, error.message)
             return { instancePath, error: error.message }
         }
     })
 
-    const conversionResults = await Promise.all(conversionPromises)
+    const conversionResults = [...objFailures, ...(await Promise.all(conversionPromises))]
 
     const successfulResults = conversionResults.filter((r) => r.modelPath)
     const failedResults = conversionResults.filter((r) => r.error)
