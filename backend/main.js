@@ -159,7 +159,6 @@ function checkArengBinFolders() {
 
     const requiredFolders = [
         path.join(baseDir, "areng_cartoonify", "_internal"),
-        path.join(baseDir, "areng_vmfMerge", "_internal"),
         path.join(baseDir, "areng_obj23ds", "_internal"),
     ]
 

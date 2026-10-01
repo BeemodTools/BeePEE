@@ -784,34 +784,42 @@ Graceful degradation:
 
 ---
 
-## VMF2OBJ Tool
+## VMF to OBJ Conversion (VMF2OBJ port)
 
 ### Overview
 
-VMF2OBJ converts Source engine VMF files into OBJ files with materials. It handles brushes, displacements, entities, and models.
+`backend/utils/vmfConverter/` converts VMF instances into OBJ + MTL files with PNG textures, in-process (no Java). It is a JavaScript port of [VMF2OBJ](https://github.com/Dylancyclone/VMF2OBJ) by Dylancyclone (MIT, see `LICENSE-VMF2OBJ.txt` in that folder) and handles brushes, brush entities, displacements and `prop_*` entities.
 
-**Location:** `backend/libs/VMF2OBJ/VMF2OBJ.jar`
+`backend/utils/vmf2obj.js` wraps it for BeePEE: it builds the resource path list, rotates the OBJ into Three.js space and applies the cartoon texture style.
 
-**Bundled JRE:** `backend/libs/VMF2OBJ/jre/` (auto-downloaded if missing from Eclipse Adoptium)
+| Module | Purpose |
+| --- | --- |
+| `index.js` | `VmfConverter` session (shared caches) and OBJ/MTL writing |
+| `vmf.js` / `keyvalues.js` | VMF/KeyValues parsing |
+| `brushes.js` | Side planes → face polygons, displacement grids |
+| `models.js` | Crowbar decompile, QC/SMD parsing, posing props |
+| `textures.js` | VMT parsing, VTF decoding, PNG encoding |
+| `vpk.js` / `resources.js` | VPK reading and the content lookup across VPKs/folders |
 
-### Command Line Interface
+### Usage
 
-```bash
-java -jar VMF2OBJ.jar [VMF_FILE] [args...]
+```js
+const { convertVmfToObj, convertVmfsToObj } = require("./backend/utils/vmf2obj")
 
-Options:
-  -h, --help                  Show help message
-  -o, --output <arg>          Output file name (defaults to VMF filename)
-  -q, --quiet                 Suppress warnings
-  -r, --resourcePaths <arg>   Semi-colon separated list of VPK files and folders
-  -t, --tools                 Ignore tool brushes
+// One instance -> outputDir/<vmf name>.obj/.mtl + outputDir/materials/**.png
+await convertVmfToObj(vmfPath, { outputDir, textureStyle: "cartoon" })
+
+// Several instances in one session (multi-model items); outputs are named by outputName
+await convertVmfsToObj([{ vmfPath, outputName: "item_0" }], { outputDir })
 ```
 
-### Resource Paths (-r flag)
+### Resource Paths
 
-The `-r` flag accepts a semi-colon separated list of:
+Resource paths are a list of:
 - **VPK files** (e.g., `pak01_dir.vpk`)
 - **Folders** containing `materials/` and/or `models/` subdirectories
+
+Earlier paths win when several contain the same file. By default: Portal 2's `pak01_dir.vpk`, the VMF's package `resources` folder, then the paths configured at startup (gameinfo search paths and DLC VPKs).
 
 **IMPORTANT:** When using folders, point to the PARENT folder that contains `materials/` or `models/`, NOT to those folders directly:
 
@@ -824,36 +832,28 @@ custom-content/        <-- SELECT THIS
     └── props/
 ```
 
-### Known Bug: Files Without Extensions
+### Props
 
-**Problem:** VMF2OBJ crashes with `StringIndexOutOfBoundsException: Range [0, -1)` when scanning directories that contain files without extensions.
+- Models are decompiled with Crowbar (`backend/libs/crowbar/CrowbarCommandLineDecomp.exe`, previously bundled inside VMF2OBJ.jar), a few at a time.
+- `prop_static` uses the reference pose. Other props are posed with their `DefaultAnim` (sequence name or activity) or the first sequence, like the engine does. This is what makes animated props such as item droppers stand upright.
+- Placement: Crowbar's SMDs are rotated 90° about Z from model space, then Source's entity angles are applied (roll, then pitch, then yaw), then `uniformscale`/`modelscale` and `origin`.
+- The first option of each body group is used; `skin` selects a `$texturegroup` row.
 
-**Cause:** The `addExtraFiles` method at line 308 tries to extract file extensions using `lastIndexOf('.')`. If a file has no extension, this returns -1, causing `substring(0, -1)` to fail.
+### Materials
 
-**Workaround:** Only pass VPK files to the `-r` flag, or ensure resource folders don't contain extension-less files.
-
-### Supported Features
-
-- ✅ Brushes
-- ✅ Displacements
-- ✅ Materials & Textures
-- ✅ Bump Maps
-- ✅ Transparency
-- ✅ Brush Entities
-- ✅ prop_* Entities (geometry, normals, materials)
+- VMTs are parsed as KeyValues: shader fallback blocks are ignored, `patch` materials follow their `include`, and GPU/srgb key conditions are evaluated.
+- Base textures are decoded from VTF (DXT1/3/5 and the uncompressed formats) and written as PNG; the PNG keeps alpha only for `$translucent`/`$alphatest` materials.
+- BeePEE skips `$bumpmap` textures (`includeBumpMaps: false`) since editor models only use the base texture.
+- Brush faces whose material can't be resolved are dropped (as in VMF2OBJ); with `skipTools`, faces using `tools/` materials are skipped.
 
 ### Unsupported Features
 
-- ❌ prop_* skins (texture/QC mismatch issues)
 - ❌ Displacement blend materials (would require texture generation or per-vertex materials)
 - ❌ infodecal (projection logic unknown)
 - ❌ info_overlay (complex multi-face projection)
+- ❌ Body group selection via the `body` keyvalue
+- ❌ Compressed (Strata) VTFs
 
-### JRE Auto-Download
+### Tests
 
-If the bundled JRE is not found, BeePEE automatically downloads Eclipse Temurin JRE 17 (~45MB) from:
-```
-https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jre/hotspot/normal/eclipse
-```
-
-The download includes progress reporting and extracts to the correct location automatically.
+`backend/__tests__/vmfConverter.test.js` covers parsing, brush geometry, entity angles, QC/SMD handling and posing, the VTF/PNG/VPK codecs and an end-to-end conversion.

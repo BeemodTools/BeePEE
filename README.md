@@ -78,7 +78,10 @@ When you are done editing, go to file then export package to export it as a .bee
 For enabling VTF conversion (MIT License - Copyright (c) 2025 Laura Lewis)
 
 ## VMF2OBJ
-For enabling VMF to OBJ conversion (MIT License - Copyright (c) 2020 Dylancyclone)
+BeePEE's VMF to OBJ conversion is a JavaScript port of VMF2OBJ (MIT License - Copyright (c) 2020 Dylancyclone)
+
+## Crowbar
+For decompiling prop models during VMF to OBJ conversion (Crowbar-Command-Line by ZeqMacaw and UltraTechX)
 
 ## STUDIOMDL (Source SDK)
 For enabling OBJ to MDL model compilation (Valve Corporation)

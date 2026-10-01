@@ -121,8 +121,8 @@
                 "to": "extraResources/maretf"
             },
             {
-                "from": "backend/libs/VMF2OBJ",
-                "to": "extraResources/VMF2OBJ",
+                "from": "backend/libs/crowbar",
+                "to": "extraResources/crowbar",
                 "filter": [
                     "**/*"
                 ]
@@ -137,13 +137,6 @@
             {
                 "from": "backend/libs/areng_obj23ds",
                 "to": "extraResources/areng_obj23ds",
-                "filter": [
-                    "**/*"
-                ]
-            },
-            {
-                "from": "backend/libs/areng_vmfMerge",
-                "to": "extraResources/areng_vmfMerge",
                 "filter": [
                     "**/*"
                 ]
