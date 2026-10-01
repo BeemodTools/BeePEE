@@ -81,7 +81,7 @@ For enabling VTF conversion (MIT License - Copyright (c) 2025 Laura Lewis)
 BeePEE's VMF to OBJ conversion is a JavaScript port of VMF2OBJ (MIT License - Copyright (c) 2020 Dylancyclone)
 
 ## Crowbar
-For decompiling prop models during VMF to OBJ conversion (Crowbar-Command-Line by ZeqMacaw and UltraTechX)
+For decompiling prop models during VMF to OBJ conversion. BeePEE bundles the unmodified [Crowbar Command Line](https://github.com/UltraTechX/Crowbar-Command-Line) by ZeqMacaw, modified by Fay (UltraTechX), under the [Creative Commons Attribution-ShareAlike 3.0 Unported License](http://creativecommons.org/licenses/by-sa/3.0/) (see `backend/libs/crowbar/LICENSE.txt`)
 
 ## STUDIOMDL (Source SDK)
 For enabling OBJ to MDL model compilation (Valve Corporation)
