@@ -14,7 +14,7 @@
                     "Color tints now show in generated models (render color on props and brush entities, and material tints)",
                     "Models of other entities like turrets (npc_portal_turret_floor) are now included in generated models",
                     "Entities that get their model from the game (security cameras, buttons, chamber doors, cubes, ...) now show up in generated models",
-                    "Overlays (info_overlay) like signage now show up in generated models"
+                    "Overlays (info_overlay) like signage and indicator lights now show up in generated models, drawn into the textures of the faces they're on"
                 ],
                 "fixed": [
                     "Props (prop_static, prop_dynamic, ...) facing the wrong way in generated models",
@@ -24,7 +24,7 @@
                     "Some brush faces missing from generated models",
                     "Make Model saying it completed when the generated model was empty - it now shows an error explaining why",
                     "Content in Portal 2/bee2 not being found during model generation",
-                    "Transparent textures (glass, grates, overlays) showing up solid in generated models"
+                    "Transparent textures (glass, grates) showing up solid in generated models"
                 ],
                 "changed": [
                     "Items with multiple models convert each instance on its own instead of merging them into one map",
