@@ -12,7 +12,8 @@
                     "Model generation no longer needs Java - VMF to OBJ conversion now runs inside BeePEE, so it's much faster and there's no Java download",
                     "Props in generated models now use their skin",
                     "Color tints now show in generated models (render color on props and brush entities, and material tints)",
-                    "Models of other entities like turrets (npc_portal_turret_floor) are now included in generated models"
+                    "Models of other entities like turrets (npc_portal_turret_floor) are now included in generated models",
+                    "Entities that get their model from the game (security cameras, buttons, chamber doors, cubes, ...) now show up in generated models"
                 ],
                 "fixed": [
                     "Props (prop_static, prop_dynamic, ...) facing the wrong way in generated models",
@@ -20,11 +21,13 @@
                     "Brush entities (func_detail etc.) ending up in the wrong place in items with multiple models",
                     "Brush textures being mirrored in generated models",
                     "Some brush faces missing from generated models",
-                    "Make Model saying it completed when the generated model was empty - it now shows an error explaining why"
+                    "Make Model saying it completed when the generated model was empty - it now shows an error explaining why",
+                    "Content in Portal 2/bee2 not being found during model generation"
                 ],
                 "changed": [
                     "Items with multiple models convert each instance on its own instead of merging them into one map",
-                    "Normal maps are no longer copied into item materials (editor models don't use them)"
+                    "Normal maps are no longer copied into item materials (editor models don't use them)",
+                    "Missing textures show as a purple/black checkerboard instead of the faces being left out"
                 ]
             }
         },
