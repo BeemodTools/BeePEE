@@ -2,7 +2,7 @@ const fs = require("fs")
 const path = require("path")
 const { app } = require("electron")
 const { findPortal2Resources } = require("../data")
-const { VmfConverter } = require("./vmfConverter")
+const { VmfConverter, assertHasGeometry } = require("./vmfConverter")
 
 /**
  * Helper to create directory with retry logic for EPERM errors
@@ -389,6 +389,7 @@ async function convertVmfToObj(vmfPath, options = {}) {
         await converter.dispose()
     }
     logWarnings(baseName, result.warnings)
+    assertHasGeometry(result, vmfPath)
 
     await postProcessOutputs([result.objPath], outputDir, options)
 
@@ -430,6 +431,7 @@ async function convertVmfsToObj(jobs, options) {
                     path.join(outputDir, job.outputName),
                 )
                 logWarnings(job.outputName, result.warnings)
+                assertHasGeometry(result, job.vmfPath)
                 results.push({ ...job, ...result })
             } catch (error) {
                 console.error(`❌ VMF2OBJ failed for ${job.vmfPath}:`, error.message)

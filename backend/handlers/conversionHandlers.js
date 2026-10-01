@@ -47,7 +47,7 @@ function register(ipcMain, mainWindow) {
             } catch (error) {
                 const details = [
                     error.message,
-                    error.stack ? `stack:\n${error.stack}` : null,
+                    error.stack && !error.userFacing ? `stack:\n${error.stack}` : null,
                     error.cmd ? `cmd: ${error.cmd}` : null,
                     error.cwd ? `cwd: ${error.cwd}` : null,
                 ]
@@ -159,7 +159,7 @@ function register(ipcMain, mainWindow) {
             } catch (error) {
                 const details = [
                     error.message,
-                    error.stack ? `stack:\n${error.stack}` : null,
+                    error.stack && !error.userFacing ? `stack:\n${error.stack}` : null,
                     error.cmd ? `cmd: ${error.cmd}` : null,
                     error.cwd ? `cwd: ${error.cwd}` : null,
                 ]
@@ -515,11 +515,16 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
 
     editorItems.Item.Editor.SubType = newSubTypes
 
+    const failureDetail = failedResults.length
+        ? `\n\nNot generated:\n${failedResults
+              .map((r) => `• ${path.basename(r.instancePath)}: ${r.error}`)
+              .join("\n")}`
+        : ""
     dialog.showMessageBox({
         type: successfulResults.length === conversionResults.length ? "info" : "warning",
         title: "Multi-Model Generation Complete",
         message: `Successfully converted ${successfulResults.length} of ${conversionResults.length} models.`,
-        detail: `Click Save in the editor to apply ${newSubTypes.length} SubTypes to editoritems.json.`,
+        detail: `Click Save in the editor to apply ${newSubTypes.length} SubTypes to editoritems.json.${failureDetail}`,
     })
 
     return { success: true, results: conversionResults, stagedEditorItems: editorItems }

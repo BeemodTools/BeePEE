@@ -25,7 +25,7 @@ const {
     FORMAT,
 } = require("../utils/vmfConverter/textures")
 const { loadVpk, readVpkEntry } = require("../utils/vmfConverter/vpk")
-const { convertVmf } = require("../utils/vmfConverter")
+const { convertVmf, assertHasGeometry } = require("../utils/vmfConverter")
 
 const close = (actual, expected) =>
     expected.forEach((value, i) => expect(actual[i]).toBeCloseTo(value, 6))
@@ -306,6 +306,8 @@ $basetexture "concrete/dx8"
             bumpmap: null,
             translucent: true,
             alphatest: false,
+            tint: null,
+            tintMask: false,
         })
     })
 
@@ -471,5 +473,136 @@ describe("convertVmf", () => {
         const [minX, maxX] = [sorted[0], sorted[sorted.length - 1]]
         expect(v[maxX[0]][0]).toBeGreaterThan(v[minX[0]][0])
         expect(vt[maxX[1]][0]).toBeGreaterThan(vt[minX[1]][0])
+    })
+})
+
+/** Pixel [r, g, b] at (x, y) of a PNG written by encodePng (single IDAT, filter 0) */
+function readPngPixel(file, x, y) {
+    const png = fs.readFileSync(file)
+    const width = png.readUInt32BE(16)
+    const channels = png[25] === 6 ? 4 : 3
+    const idatLength = png.readUInt32BE(33)
+    const raw = zlib.inflateSync(png.subarray(41, 41 + idatLength))
+    const offset = y * (width * channels + 1) + 1 + x * channels
+    return [raw[offset], raw[offset + 1], raw[offset + 2]]
+}
+
+describe("convertVmf: empty results, model entities and tints", () => {
+    let root
+    const content = () => path.join(root, "content")
+    const convert = (name, vmfText) => {
+        const vmfPath = path.join(root, `${name}.vmf`)
+        fs.writeFileSync(vmfPath, vmfText)
+        return convertVmf(vmfPath, path.join(root, "out", name), {
+            resourcePaths: [content()],
+            skipTools: true,
+            quiet: true,
+        })
+    }
+
+    beforeAll(() => {
+        root = fs.mkdtempSync(path.join(os.tmpdir(), "beepee-vmf2obj-tint-"))
+        const materials = path.join(root, "content", "materials", "test")
+        fs.mkdirSync(materials, { recursive: true })
+        fs.writeFileSync(
+            path.join(materials, "wall.vtf"),
+            buildVtf(4, 4, FORMAT.RGBA8888, Buffer.alloc(4 * 4 * 4, 200)),
+        )
+        fs.writeFileSync(
+            path.join(materials, "wall.vmt"),
+            `"LightmappedGeneric" { "$basetexture" "test/wall" }`,
+        )
+        fs.writeFileSync(
+            path.join(materials, "model.vmt"),
+            `"VertexLitGeneric" { "$basetexture" "test/wall" "$color2" "[0.5 0.5 0.5]" }`,
+        )
+        fs.writeFileSync(
+            path.join(materials, "world.vmt"),
+            `"LightmappedGeneric" { "$basetexture" "test/wall" "$color2" "[0.5 0.5 0.5]" "$color" "{255 0 0}" }`,
+        )
+    })
+
+    afterAll(() => {
+        fs.rmSync(root, { recursive: true, force: true })
+    })
+
+    test("an empty result is an error, not a finished model", async () => {
+        const result = await convert(
+            "empty",
+            `entity { "id" "1" "classname" "info_target" "origin" "0 0 0" }
+             entity { "id" "2" "classname" "info_coop_spawn" "model" "models/player/ballbot/ballbot.mdl" }
+             entity { "id" "3" "classname" "point_teleport" "model" "models/editor/angle_helper.mdl" }`,
+        )
+        expect(result.stats.faces).toBe(0)
+        expect(result.stats.modelEntities).toBe(0)
+
+        let error
+        try {
+            assertHasGeometry(result, path.join(root, "empty.vmf"))
+        } catch (e) {
+            error = e
+        }
+        expect(error.userFacing).toBe(true)
+        expect(error.message).toContain(
+            "No geometry was generated from empty.vmf",
+        )
+        expect(error.message).toContain("no brushes and no models")
+        expect(fs.existsSync(result.objPath)).toBe(false)
+        expect(fs.existsSync(result.mtlPath)).toBe(false)
+    })
+
+    test("explains tool-only brushes and converts NPCs with models", async () => {
+        const result = await convert(
+            "tools",
+            `world { ${boxSolid(2, [0, 0, 0], [16, 16, 16], "tools/toolsnodraw")} }
+             entity { "id" "4" "classname" "npc_portal_turret_floor" "model" "models/npcs/missing.mdl" }`,
+        )
+        expect(result.stats.modelEntities).toBe(1)
+        expect(
+            result.warnings.some((w) => w.includes("models/npcs/missing.mdl")),
+        ).toBe(true)
+        expect(() => assertHasGeometry(result, "tools.vmf")).toThrow(
+            /6 brush face\(s\) only use tool textures[\s\S]*1 model\(s\) couldn't be loaded/,
+        )
+    })
+
+    test("bakes a brush entity's render color into a tinted texture copy", async () => {
+        const result = await convert(
+            "rendercolor",
+            `world { "id" "1" ${boxSolid(2, [0, 0, 0], [16, 16, 16], "test/wall")} }
+             entity { "id" "3" "classname" "func_brush" "rendercolor" "255 0 0" ${boxSolid(4, [32, 0, 0], [48, 16, 16], "test/wall")} }`,
+        )
+        const obj = fs.readFileSync(result.objPath, "utf8")
+        expect(obj).toContain("usemtl test/wall\n")
+        expect(obj).toContain("usemtl test/wall_tint_ff0000\n")
+        const mtl = fs.readFileSync(result.mtlPath, "utf8")
+        expect(mtl).toContain("newmtl test/wall_tint_ff0000")
+        expect(mtl).toContain("map_Kd materials/test/wall_tint_ff0000.png")
+
+        const textures = path.join(root, "out", "materials", "test")
+        expect(readPngPixel(path.join(textures, "wall.png"), 1, 1)).toEqual([
+            200, 200, 200,
+        ])
+        expect(
+            readPngPixel(path.join(textures, "wall_tint_ff0000.png"), 1, 1),
+        ).toEqual([200, 0, 0])
+    })
+
+    test("applies $color2 on model materials and only $color on world materials", async () => {
+        const result = await convert(
+            "materialtint",
+            `world { "id" "1" ${boxSolid(2, [0, 0, 0], [16, 16, 16], "test/model")}
+                ${boxSolid(3, [32, 0, 0], [48, 16, 16], "test/world")} }`,
+        )
+        const mtl = fs.readFileSync(result.mtlPath, "utf8")
+        expect(mtl).toContain("map_Kd materials/test/wall_tint_808080.png")
+        expect(mtl).toContain("map_Kd materials/test/wall_tint_ff0000.png")
+        const textures = path.join(root, "out", "materials", "test")
+        expect(
+            readPngPixel(path.join(textures, "wall_tint_808080.png"), 0, 0),
+        ).toEqual([100, 100, 100])
+        expect(
+            readPngPixel(path.join(textures, "wall_tint_ff0000.png"), 0, 0),
+        ).toEqual([200, 0, 0])
     })
 })

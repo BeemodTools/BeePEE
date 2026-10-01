@@ -113,8 +113,58 @@ function isTruthyParam(value) {
 }
 
 /**
+ * Parse a material color: "[r g b]" (0-1), "{r g b}" (0-255) or one number
+ * @returns {number[]|null} RGB multipliers (1 = unchanged)
+ */
+function parseMaterialColor(value) {
+    if (value === undefined) return null
+    const text = String(value).trim()
+    const numbers = (
+        text.match(/[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) || []
+    ).map(Number)
+    if (numbers.length === 0) return null
+    const rgb =
+        numbers.length >= 3 ? numbers.slice(0, 3) : Array(3).fill(numbers[0])
+    return text.startsWith("{") ? rgb.map((n) => n / 255) : rgb
+}
+
+/**
+ * Multiply RGB tints together (null entries are skipped)
+ * @returns {number[]|null} null when the result doesn't change colors
+ */
+function combineTints(...tints) {
+    let result = null
+    for (const tint of tints) {
+        if (!tint) continue
+        result = result ? result.map((v, i) => v * tint[i]) : [...tint]
+    }
+    if (result && result.every((v) => Math.abs(v - 1) < 1 / 512)) return null
+    return result
+}
+
+/**
+ * Multiply RGBA pixels by a tint. With maskByAlpha ($blendtintbybasealpha)
+ * the alpha channel decides how much of the tint each pixel gets.
+ * @returns {Buffer} New pixel buffer
+ */
+function applyTint(rgba, tint, maskByAlpha = false) {
+    const out = Buffer.from(rgba)
+    for (let o = 0; o < out.length; o += 4) {
+        const amount = maskByAlpha ? out[o + 3] / 255 : 1
+        for (let c = 0; c < 3; c++) {
+            const factor = 1 + (tint[c] - 1) * amount
+            out[o + c] = Math.max(
+                0,
+                Math.min(255, Math.round(out[o + c] * factor)),
+            )
+        }
+    }
+    return out
+}
+
+/**
  * Pull the fields the converter needs out of parsed VMT params
- * @returns {{basetexture: string|null, bumpmap: string|null, translucent: boolean, alphatest: boolean}}
+ * @returns {{basetexture: string|null, bumpmap: string|null, translucent: boolean, alphatest: boolean, tint: number[]|null, tintMask: boolean}}
  */
 function describeMaterial(shader, params) {
     if (shader === "water") {
@@ -124,13 +174,22 @@ function describeMaterial(shader, params) {
             bumpmap: null,
             translucent: false,
             alphatest: false,
+            tint: null,
+            tintMask: false,
         }
     }
+    // $color tints every shader; $color2 is the model shaders' tint
+    const usesColor2 = !/lightmapped|worldvertextransition/.test(shader)
     return {
         basetexture: normalizeTexturePath(params.get("basetexture")),
         bumpmap: normalizeTexturePath(params.get("bumpmap")),
         translucent: isTruthyParam(params.get("translucent")),
         alphatest: isTruthyParam(params.get("alphatest")),
+        tint: combineTints(
+            parseMaterialColor(params.get("color")),
+            usesColor2 ? parseMaterialColor(params.get("color2")) : null,
+        ),
+        tintMask: isTruthyParam(params.get("blendtintbybasealpha")),
     }
 }
 
@@ -613,6 +672,9 @@ function encodePng(width, height, rgba, withAlpha) {
 module.exports = {
     parseVmt,
     describeMaterial,
+    parseMaterialColor,
+    combineTints,
+    applyTint,
     evaluateMaterialCondition,
     normalizeTexturePath,
     decodeVtf,
