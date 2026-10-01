@@ -484,28 +484,25 @@ app.whenReady().then(async () => {
                 for (const searchPath of p2Resources.searchPaths) {
                     logger.debug(`  📁 Processing search path: "${searchPath}"`)
 
-                    // Handle |gameinfo_path| placeholder
-                    let processedPath = searchPath
-                    if (searchPath.includes("|gameinfo_path|")) {
-                        processedPath = searchPath.replace(
-                            "|gameinfo_path|",
-                            "",
-                        )
-                        logger.debug(
-                            `    🔄 Replaced |gameinfo_path| with: "${processedPath}"`,
-                        )
-                    }
-
-                    // Search paths are relative to Portal 2 root, not portal2 subfolder
-                    let fullPath
-                    if (processedPath.startsWith("..")) {
-                        // Handle relative paths like "../bee2" - go up from portal2/ to Portal 2/
-                        fullPath = path.join(p2Resources.root, processedPath)
-                    } else {
-                        // Handle absolute paths like "Hammer" - they're relative to Portal 2 root
-                        fullPath = path.join(p2Resources.root, processedPath)
-                    }
+                    // |gameinfo_path| is the folder holding gameinfo.txt (portal2/),
+                    // so "|gameinfo_path|../bee2" is "Portal 2/bee2". Other search
+                    // paths (e.g. "Hammer") are relative to the Portal 2 root.
+                    const gameinfoDir = path.join(p2Resources.root, "portal2")
+                    const fullPath = searchPath.includes("|gameinfo_path|")
+                        ? path.join(
+                              gameinfoDir,
+                              searchPath.replace("|gameinfo_path|", ""),
+                          )
+                        : path.join(p2Resources.root, searchPath)
                     logger.debug(`    🎯 Full path: ${fullPath}`)
+
+                    // The gameinfo folder itself is covered by pak01_dir.vpk above
+                    if (path.resolve(fullPath) === path.resolve(gameinfoDir)) {
+                        logger.debug(
+                            `    ⏭️ Skipping the portal2 folder (pak01_dir.vpk is used)`,
+                        )
+                        continue
+                    }
 
                     if (fs.existsSync(fullPath)) {
                         // Check if this path actually contains useful resources for VMF2OBJ

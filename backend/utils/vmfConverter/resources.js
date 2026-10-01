@@ -79,16 +79,32 @@ class ResourceIndex {
     }
 }
 
+// Only these content folders are ever read, so others (sound, maps, ...) are
+// not walked
+const CONTENT_FOLDERS = ["materials", "models"]
+
 async function addFolder(index, root) {
-    const entries = await fs.promises.readdir(root, {
-        recursive: true,
-        withFileTypes: true,
-    })
-    for (const entry of entries) {
-        if (!entry.isFile()) continue
-        const parent = entry.parentPath ?? entry.path
-        const file = path.join(parent, entry.name)
-        index.add(normalizeContentPath(path.relative(root, file)), { file })
+    const rootEntries = await fs.promises.readdir(root, { withFileTypes: true })
+    for (const folder of rootEntries) {
+        if (
+            !folder.isDirectory() ||
+            !CONTENT_FOLDERS.includes(folder.name.toLowerCase())
+        ) {
+            continue
+        }
+        const entries = await fs.promises.readdir(
+            path.join(root, folder.name),
+            {
+                recursive: true,
+                withFileTypes: true,
+            },
+        )
+        for (const entry of entries) {
+            if (!entry.isFile()) continue
+            const parent = entry.parentPath ?? entry.path
+            const file = path.join(parent, entry.name)
+            index.add(normalizeContentPath(path.relative(root, file)), { file })
+        }
     }
 }
 

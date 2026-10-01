@@ -33,7 +33,6 @@ const {
     combineTints,
     applyTint,
     decodeVtf,
-    readVtfSize,
     encodePng,
 } = require("./textures")
 const {
@@ -53,6 +52,59 @@ const {
 
 const HEADER =
     "# Converted by BeePEE (JavaScript port of VMF2OBJ by Dylancyclone)"
+
+/**
+ * Portal 2 entities whose model is set in game code, so the VMF has no
+ * "model" keyvalue (from the FGD studio() helpers and the game's defaults;
+ * all of these are in Portal 2's VPKs). A "model" keyvalue still wins.
+ */
+const BUILT_IN_MODELS = {
+    npc_security_camera: "models/props/security_camera.mdl",
+    npc_portal_turret_floor: "models/npcs/turret/turret.mdl",
+    weapon_portalgun: "models/weapons/w_portalgun.mdl",
+    prop_rocket_tripwire: "models/props/tripwire_turret.mdl",
+    prop_wall_projector: "models/props/wall_emitter.mdl",
+    prop_tractor_beam: "models/props/tractor_beam_emitter.mdl",
+    prop_button: "models/props/switch001.mdl",
+    prop_floor_button: "models/props/portal_button.mdl",
+    prop_floor_cube_button: "models/props/box_socket.mdl",
+    prop_floor_ball_button: "models/props/ball_button.mdl",
+    prop_under_floor_button:
+        "models/props_underground/underground_floor_button.mdl",
+    prop_testchamber_door: "models/props/portal_door_combined.mdl",
+    prop_laser_catcher: "models/props/laser_catcher.mdl",
+    prop_monster_box: "models/npcs/monsters/monster_a_box.mdl",
+    prop_linked_portal_door: "models/props/portal_door.mdl",
+}
+
+/** prop_weighted_cube's model (and skin) by its "CubeType" */
+const CUBE_TYPES = [
+    { path: "models/props/metal_box.mdl", skin: 0 }, // storage cube
+    { path: "models/props/metal_box.mdl", skin: 1 }, // companion cube
+    { path: "models/props/reflection_cube.mdl", skin: 0 },
+    { path: "models/props_gameplay/mp_ball.mdl", skin: 0 }, // edgeless safety cube
+    { path: "models/props_underground/underground_weighted_cube.mdl", skin: 0 },
+]
+
+/** Stand-in for missing textures: Source's purple/black checkerboard */
+const PLACEHOLDER_TEXTURE = "bpee_missing_texture"
+const PLACEHOLDER_SIZE = 128
+
+function placeholderPixels() {
+    const pixels = Buffer.alloc(PLACEHOLDER_SIZE * PLACEHOLDER_SIZE * 4)
+    const half = PLACEHOLDER_SIZE / 2
+    for (let y = 0; y < PLACEHOLDER_SIZE; y++) {
+        for (let x = 0; x < PLACEHOLDER_SIZE; x++) {
+            const o = (y * PLACEHOLDER_SIZE + x) * 4
+            const purple = x < half === y < half
+            pixels[o] = purple ? 255 : 0
+            pixels[o + 1] = 0
+            pixels[o + 2] = purple ? 255 : 0
+            pixels[o + 3] = 255
+        }
+    }
+    return pixels
+}
 
 function parseVector(value) {
     const n = parseNumbers(value)
@@ -100,11 +152,6 @@ function assertHasGeometry(result, vmfPath) {
     if (stats.toolFaces > 0) {
         reasons.push(
             `${stats.toolFaces} brush face(s) only use tool textures, which are skipped.`,
-        )
-    }
-    if (stats.unresolvedFaces > 0) {
-        reasons.push(
-            `${stats.unresolvedFaces} brush face(s) use materials that couldn't be found.`,
         )
     }
     if (stats.skippedModels > 0) {
@@ -155,7 +202,10 @@ class VmfConverter {
      */
     constructor(options = {}) {
         this.resourcePaths = options.resourcePaths || []
-        this.crowbarPath = options.crowbarPath || null
+        // Absolute, since Crowbar runs from the temp folder
+        this.crowbarPath = options.crowbarPath
+            ? path.resolve(options.crowbarPath)
+            : null
         this.skipTools = !!options.skipTools
         this.useLastAnimFrame = !!options.useLastAnimFrame
         this.includeBumpMaps = options.includeBumpMaps !== false
@@ -254,8 +304,8 @@ class VmfConverter {
                 brushes: vmf.solids.length,
                 modelEntities: 0,
                 toolFaces: 0,
-                unresolvedFaces: 0,
                 skippedModels: 0,
+                placeholderMaterials: 0,
             },
         }
 
@@ -294,16 +344,17 @@ class VmfConverter {
     }
 
     /**
-     * Entities whose model is drawn in game: prop_* (as VMF2OBJ, which warns
-     * when the model is missing) plus anything else with a model, except
-     * info_* entities and Hammer-only editor models (spawn points, helpers)
+     * Entities whose model is drawn in game: anything with a model (its
+     * "model" keyvalue or a built-in one), except info_* entities and
+     * Hammer-only editor models (spawn points, helpers). Regular props with
+     * no model are included too, so the conversion warns about them.
      */
     isModelEntity(entity) {
         const classname = entity.classname.toLowerCase()
-        if (classname.includes("prop_")) return true
-        const model = this.modelPathOf(entity)
+        const model = this.modelOf(entity)?.path
+        if (!model)
+            return /^prop_(static|dynamic|physics|detail)/.test(classname)
         return (
-            !!model &&
             model.endsWith(".mdl") &&
             !classname.startsWith("info_") &&
             !model.startsWith("models/editor/")
@@ -369,7 +420,6 @@ class VmfConverter {
             const material = materialNames.get(side.material.toLowerCase())
             const texture = material && state.textures.get(material)
             if (!texture) {
-                state.stats.unresolvedFaces++
                 continue
             }
             if (!side.uAxis || !side.vAxis) {
@@ -452,15 +502,19 @@ class VmfConverter {
      * base texture and add an MTL entry. Tinted uses (material $color/$color2
      * and the entity's render color) get their own "<name>_tint_<rgb>" material
      * and texture copy, since the MDL step only keeps the texture image.
+     * Materials or textures that can't be found or read use the purple/black
+     * placeholder texture instead.
      * @param {number[]|null} entityTint - Render color of the owning entity
-     * @returns {Promise<string|null>} Material name for the faces, or null when
-     *   the material can't be resolved (brush faces using it are dropped, as in VMF2OBJ)
+     * @returns {Promise<string>} Material name for the faces
      */
     async registerMaterial(state, name, candidates, entityTint = null) {
         const info = await this.resolveMaterial(candidates)
         if (info.error) {
-            this.warnOnce(`material:${name}`, `${info.error}: ${name}`)
-            return null
+            this.warnOnce(
+                `material:${name}`,
+                `${info.error}: ${name} (using a placeholder texture)`,
+            )
+            return this.registerPlaceholder(state, name)
         }
 
         const tint = combineTints(info.tint, entityTint)
@@ -479,13 +533,14 @@ class VmfConverter {
                 tintMask: info.tintMask,
             },
         )
-        if (!texture.found) {
-            this.warnOnce(
-                `texture:${info.basetexture}`,
-                `Missing texture: ${info.basetexture}`,
-            )
-            state.textures.set(materialName, { width: 1, height: 1 })
-            return materialName
+        if (!texture.written) {
+            if (!texture.found) {
+                this.warnOnce(
+                    `texture:${info.basetexture}`,
+                    `Missing texture: ${info.basetexture} (using a placeholder texture)`,
+                )
+            }
+            return this.registerPlaceholder(state, materialName)
         }
         state.textures.set(materialName, {
             width: texture.width,
@@ -515,6 +570,58 @@ class VmfConverter {
         state.mtl.push("")
         state.stats.materials++
         return materialName
+    }
+
+    /** Give a material the purple/black placeholder texture */
+    async registerPlaceholder(state, materialName) {
+        if (state.textures.has(materialName)) return materialName
+        await this.exportPlaceholder(state.outDir)
+        state.textures.set(materialName, {
+            width: PLACEHOLDER_SIZE,
+            height: PLACEHOLDER_SIZE,
+        })
+        state.mtl.push(
+            "",
+            `newmtl ${materialName}`,
+            "Ka 1.000 1.000 1.000",
+            "Kd 1.000 1.000 1.000",
+            "Ks 0.000 0.000 0.000",
+            `map_Ka materials/${PLACEHOLDER_TEXTURE}.png`,
+            `map_Kd materials/${PLACEHOLDER_TEXTURE}.png`,
+            "",
+        )
+        state.stats.materials++
+        state.stats.placeholderMaterials++
+        return materialName
+    }
+
+    exportPlaceholder(outDir) {
+        const key = `${outDir}|${PLACEHOLDER_TEXTURE}`
+        if (!this.textures.has(key)) {
+            this.textures.set(
+                key,
+                (async () => {
+                    const target = path.join(
+                        outDir,
+                        "materials",
+                        `${PLACEHOLDER_TEXTURE}.png`,
+                    )
+                    await fs.promises.mkdir(path.dirname(target), {
+                        recursive: true,
+                    })
+                    await fs.promises.writeFile(
+                        target,
+                        encodePng(
+                            PLACEHOLDER_SIZE,
+                            PLACEHOLDER_SIZE,
+                            placeholderPixels(),
+                            false,
+                        ),
+                    )
+                })(),
+            )
+        }
+        return this.textures.get(key)
     }
 
     resolveMaterial(candidates) {
@@ -575,6 +682,7 @@ class VmfConverter {
         return this.textures.get(key)
     }
 
+    /** @returns {Promise<{found: boolean, written?: boolean, width?: number, height?: number}>} */
     async writeTexture(outDir, texture, options) {
         const data = await this.resources.read(`materials/${texture}.vtf`)
         if (!data) return { found: false }
@@ -586,13 +694,9 @@ class VmfConverter {
         } catch (error) {
             this.warnOnce(
                 `decode:${texture}`,
-                `Could not convert texture ${texture}: ${error.message}`,
+                `Could not convert texture ${texture}: ${error.message} (using a placeholder texture)`,
             )
-            try {
-                return { found: true, ...readVtfSize(data) }
-            } catch {
-                return { found: true, width: 1, height: 1 }
-            }
+            return { found: true, written: false }
         }
 
         const { width, height, rgba } = image
@@ -608,17 +712,28 @@ class VmfConverter {
             target,
             encodePng(width, height, pixels, options.withAlpha),
         )
-        return { found: true, width, height }
+        return { found: true, written: true, width, height }
     }
 
     // -----------------------------------------------------------------------
     // Props
     // -----------------------------------------------------------------------
 
-    modelPathOf(entity) {
+    /**
+     * The model an entity draws: its "model" keyvalue, else a built-in one
+     * @returns {{path: string, skin: number|null}|null} skin is the default
+     *   skin for built-in models (the entity's "skin" keyvalue still wins)
+     */
+    modelOf(entity) {
         const model = entity.get("model")
-        if (!model) return null
-        return normalizeContentPath(model)
+        if (model) return { path: normalizeContentPath(model), skin: null }
+        const classname = entity.classname.toLowerCase()
+        if (classname === "prop_weighted_cube") {
+            const type = Number.parseInt(entity.get("cubetype") ?? "0", 10)
+            return CUBE_TYPES[type] ?? CUBE_TYPES[0]
+        }
+        const builtIn = BUILT_IN_MODELS[classname]
+        return builtIn ? { path: builtIn, skin: null } : null
     }
 
     getModel(modelPath) {
@@ -641,7 +756,7 @@ class VmfConverter {
         const paths = [
             ...new Set(
                 props
-                    .map((entity) => this.modelPathOf(entity))
+                    .map((entity) => this.modelOf(entity)?.path)
                     .filter((p) => p && p.endsWith(".mdl")),
             ),
         ]
@@ -686,7 +801,8 @@ class VmfConverter {
     }
 
     async writeProp(state, entity) {
-        const modelPath = this.modelPathOf(entity)
+        const modelInfo = this.modelOf(entity)
+        const modelPath = modelInfo?.path
         if (!modelPath) {
             this.warn(`Prop has no model? ${entity.classname}`)
             state.stats.skippedModels++
@@ -740,9 +856,10 @@ class VmfConverter {
             parseVector(entity.get("angles")),
             parseVector(entity.get("origin")),
         )
+        // Cubes pick their skin from the cube type, like the game does
         const skin = skinMapper(
             model.qc,
-            Number.parseInt(entity.get("skin") ?? "0", 10),
+            modelInfo.skin ?? Number.parseInt(entity.get("skin") ?? "0", 10),
         )
 
         const vertices = new VertexList()

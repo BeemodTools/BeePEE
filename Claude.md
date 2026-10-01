@@ -788,7 +788,7 @@ Graceful degradation:
 
 ### Overview
 
-`backend/utils/vmfConverter/` converts VMF instances into OBJ + MTL files with PNG textures, in-process (no Java). It is a JavaScript port of [VMF2OBJ](https://github.com/Dylancyclone/VMF2OBJ) by Dylancyclone (MIT, see `LICENSE-VMF2OBJ.txt` in that folder) and handles brushes, brush entities, displacements and `prop_*` entities.
+`backend/utils/vmfConverter/` converts VMF instances into OBJ + MTL files with PNG textures, in-process (no Java). It is a JavaScript port of [VMF2OBJ](https://github.com/Dylancyclone/VMF2OBJ) by Dylancyclone (MIT, see `LICENSE-VMF2OBJ.txt` in that folder) and handles brushes, brush entities, displacements and model entities (props, NPCs, ...).
 
 `backend/utils/vmf2obj.js` wraps it for BeePEE: it builds the resource path list, rotates the OBJ into Three.js space and applies the cartoon texture style.
 
@@ -819,7 +819,7 @@ Resource paths are a list of:
 - **VPK files** (e.g., `pak01_dir.vpk`)
 - **Folders** containing `materials/` and/or `models/` subdirectories
 
-Earlier paths win when several contain the same file. By default: Portal 2's `pak01_dir.vpk`, the VMF's package `resources` folder, then the paths configured at startup (gameinfo search paths and DLC VPKs).
+Earlier paths win when several contain the same file. By default: Portal 2's `pak01_dir.vpk`, the VMF's package `resources` folder, then the paths configured at startup (gameinfo search paths such as `Portal 2/bee2`, and DLC VPKs). `|gameinfo_path|` search paths are relative to the `portal2` folder that holds gameinfo.txt. Only the `materials/` and `models/` subfolders of a folder are indexed.
 
 **IMPORTANT:** When using folders, point to the PARENT folder that contains `materials/` or `models/`, NOT to those folders directly:
 
@@ -834,6 +834,7 @@ custom-content/        <-- SELECT THIS
 
 ### Props
 
+- Any entity with a model is converted, not just `prop_*`. Entities whose model is set in game code (e.g. `npc_security_camera`, buttons, chamber doors, `prop_weighted_cube` by `CubeType`) use the built-in table in `index.js`. `info_*` entities and `models/editor/` helper models are skipped.
 - Models are decompiled with Crowbar (`backend/libs/crowbar/CrowbarCommandLineDecomp.exe`, previously bundled inside VMF2OBJ.jar), a few at a time.
 - `prop_static` uses the reference pose. Other props are posed with their `DefaultAnim` (sequence name or activity) or the first sequence, like the engine does. This is what makes animated props such as item droppers stand upright.
 - Placement: Crowbar's SMDs are rotated 90° about Z from model space, then Source's entity angles are applied (roll, then pitch, then yaw), then `uniformscale`/`modelscale` and `origin`.
@@ -844,7 +845,9 @@ custom-content/        <-- SELECT THIS
 - VMTs are parsed as KeyValues: shader fallback blocks are ignored, `patch` materials follow their `include`, and GPU/srgb key conditions are evaluated.
 - Base textures are decoded from VTF (DXT1/3/5 and the uncompressed formats) and written as PNG; the PNG keeps alpha only for `$translucent`/`$alphatest` materials.
 - BeePEE skips `$bumpmap` textures (`includeBumpMaps: false`) since editor models only use the base texture.
-- Brush faces whose material can't be resolved are dropped (as in VMF2OBJ); with `skipTools`, faces using `tools/` materials are skipped.
+- Tints are baked into texture copies (`<texture>_tint_<rgb>.png`): the entity's `rendercolor` (props, NPCs, brush entities) times the material's `$color`/`$color2`, masked by alpha with `$blendtintbybasealpha`.
+- Materials or textures that can't be found or read get a purple/black checkerboard (`bpee_missing_texture.png`) instead of being dropped. With `skipTools`, faces using `tools/` materials are skipped.
+- A conversion that produces no faces throws a user-facing error (`assertHasGeometry`) instead of producing an empty model.
 
 ### Unsupported Features
 

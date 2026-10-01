@@ -606,3 +606,72 @@ describe("convertVmf: empty results, model entities and tints", () => {
         ).toEqual([200, 0, 0])
     })
 })
+
+describe("convertVmf: placeholders and built-in models", () => {
+    let root
+
+    beforeAll(() => {
+        root = fs.mkdtempSync(path.join(os.tmpdir(), "beepee-vmf2obj-builtin-"))
+        fs.mkdirSync(path.join(root, "content", "materials"), {
+            recursive: true,
+        })
+    })
+
+    afterAll(() => {
+        fs.rmSync(root, { recursive: true, force: true })
+    })
+
+    const convert = (name, vmfText) => {
+        const vmfPath = path.join(root, `${name}.vmf`)
+        fs.writeFileSync(vmfPath, vmfText)
+        return convertVmf(vmfPath, path.join(root, "out", name), {
+            resourcePaths: [path.join(root, "content")],
+            skipTools: true,
+            quiet: true,
+        })
+    }
+
+    test("keeps faces with missing materials, using a purple/black placeholder", async () => {
+        const result = await convert(
+            "missing",
+            `world { "id" "1" ${boxSolid(2, [0, 0, 0], [16, 16, 16], "test/doesnotexist")} }`,
+        )
+        expect(result.stats.faces).toBe(6)
+        expect(result.stats.placeholderMaterials).toBe(1)
+        expect(fs.readFileSync(result.objPath, "utf8")).toContain(
+            "usemtl test/doesnotexist",
+        )
+        expect(fs.readFileSync(result.mtlPath, "utf8")).toContain(
+            "map_Kd materials/bpee_missing_texture.png",
+        )
+        const png = path.join(
+            root,
+            "out",
+            "materials",
+            "bpee_missing_texture.png",
+        )
+        expect(readPngPixel(png, 0, 0)).toEqual([255, 0, 255])
+        expect(readPngPixel(png, 100, 0)).toEqual([0, 0, 0])
+        expect(result.warnings.some((w) => w.includes("placeholder"))).toBe(
+            true,
+        )
+    })
+
+    test("uses built-in models for entities without a model keyvalue", async () => {
+        const result = await convert(
+            "builtin",
+            `entity { "id" "1" "classname" "npc_security_camera" "origin" "0 0 0" }
+             entity { "id" "2" "classname" "prop_weighted_cube" "CubeType" "2" "origin" "0 0 0" }
+             entity { "id" "3" "classname" "prop_portal" "origin" "0 0 0" }`,
+        )
+        // Camera and cube are models; the portal isn't
+        expect(result.stats.modelEntities).toBe(2)
+        expect(result.warnings.join("\n")).toContain(
+            "models/props/security_camera.mdl",
+        )
+        expect(result.warnings.join("\n")).toContain(
+            "models/props/reflection_cube.mdl",
+        )
+        expect(result.warnings.join("\n")).not.toContain("prop_portal")
+    })
+})
