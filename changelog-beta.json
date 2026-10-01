@@ -10,14 +10,17 @@
             "changes": {
                 "added": [
                     "Model generation no longer needs Java - VMF to OBJ conversion now runs inside BeePEE, so it's much faster and there's no Java download",
-                    "Props in generated models now use their skin"
+                    "Props in generated models now use their skin",
+                    "Color tints now show in generated models (render color on props and brush entities, and material tints)",
+                    "Models of other entities like turrets (npc_portal_turret_floor) are now included in generated models"
                 ],
                 "fixed": [
                     "Props (prop_static, prop_dynamic, ...) facing the wrong way in generated models",
                     "Animated props like item droppers showing in their raw pose instead of their default animation",
                     "Brush entities (func_detail etc.) ending up in the wrong place in items with multiple models",
                     "Brush textures being mirrored in generated models",
-                    "Some brush faces missing from generated models"
+                    "Some brush faces missing from generated models",
+                    "Make Model saying it completed when the generated model was empty - it now shows an error explaining why"
                 ],
                 "changed": [
                     "Items with multiple models convert each instance on its own instead of merging them into one map",
