@@ -13,6 +13,13 @@ const { logger } = require("./logger")
 /** "1 asset", "3 assets" */
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
+/** The files that show an asset is packed, by its folder */
+const PACKED_EXTENSIONS = {
+    materials: [".vmt", ".vtf"],
+    models: [".mdl"],
+    scripts: [".nut"],
+}
+
 /**
  * Get the materials (and their textures) a model needs (see mdlDependencies.js)
  * @param {string} mdlPath - Model path, like "models/props/cube.mdl"
@@ -162,17 +169,18 @@ async function autopackInstance(instancePath, packageDir, itemName) {
             }
 
             // Verify packing
-            // Files are copied to resources/{asset} directly, not resources/{searchDir}/{asset}
+            // Files are copied to resources/{asset} directly, not resources/{searchDir}/{asset}.
+            // Asset paths have no extension (except some models): a material
+            // is packed when its .vmt or .vtf is there, a model its .mdl, a
+            // script its .nut
             const verificationResults = []
             for (const asset of assetsToPack) {
-                // For models, check for the .mdl file
-                let assetToCheck = asset
-                if (asset.startsWith("models/") && !asset.endsWith(".mdl")) {
-                    assetToCheck = asset + ".mdl"
-                }
-
-                const packagePath = path.join(packageDir, "resources", assetToCheck)
-                const found = fs.existsSync(packagePath)
+                const packagePath = path.join(packageDir, "resources", asset)
+                const base = packagePath.replace(/\.mdl$/, "")
+                const extensions = PACKED_EXTENSIONS[asset.split("/")[0]] ?? []
+                const found =
+                    fs.existsSync(packagePath) ||
+                    extensions.some((ext) => fs.existsSync(base + ext))
                 verificationResults.push({ asset, found })
             }
 
