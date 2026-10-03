@@ -204,19 +204,18 @@ function InputOutputConfigDialog({
         }
     }
 
-    // Parse existing commands only after both entities and FGD data are loaded
+    // Parse existing commands once the entity data is loaded. Also without
+    // FGD data (Portal 2 not found): skipping them then showed every field
+    // empty and the delay as 0, and editing one wiped the saved command
     useEffect(() => {
-        if (
-            open &&
-            Object.keys(entities).length > 0 &&
-            Object.keys(fgdData).length > 0 &&
-            config
-        ) {
+        if (open && Object.keys(entities).length > 0 && config) {
             parseExistingCommands()
         }
     }, [entities, fgdData, open, config])
 
     const parseExistingCommands = () => {
+        // Without FGD data input/output names are typed in, so keep any name
+        const noFgd = Object.keys(fgdData).length === 0
         // Parse existing command strings back into dropdown selections
         if (config.Enable_cmd) {
             const parts = config.Enable_cmd.split(",")
@@ -229,6 +228,7 @@ function InputOutputConfigDialog({
                         parts[0],
                     )
                     if (
+                        noFgd ||
                         availableInputs.some((input) => input.name === parts[1])
                     ) {
                         setEnableInput(parts[1])
@@ -250,6 +250,7 @@ function InputOutputConfigDialog({
                         parts[0],
                     )
                     if (
+                        noFgd ||
                         availableInputs.some((input) => input.name === parts[1])
                     ) {
                         setDisableInput(parts[1])
@@ -271,6 +272,7 @@ function InputOutputConfigDialog({
                         parts[0],
                     )
                     if (
+                        noFgd ||
                         availableInputs.some((input) => input.name === parts[1])
                     ) {
                         setSecEnableInput(parts[1])
@@ -292,6 +294,7 @@ function InputOutputConfigDialog({
                         parts[0],
                     )
                     if (
+                        noFgd ||
                         availableInputs.some((input) => input.name === parts[1])
                     ) {
                         setSecDisableInput(parts[1])
@@ -316,6 +319,7 @@ function InputOutputConfigDialog({
                             parts[0],
                         )
                         if (
+                            noFgd ||
                             availableOutputs.some(
                                 (output) => output.name === parts[1],
                             )
@@ -340,6 +344,7 @@ function InputOutputConfigDialog({
                             parts[0],
                         )
                         if (
+                            noFgd ||
                             availableOutputs.some(
                                 (output) => output.name === parts[1],
                             )
