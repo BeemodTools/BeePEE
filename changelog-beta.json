@@ -13,7 +13,8 @@
                     "Skins, tints, overlays, decals and entities to generated models",
                     "Icon maker (Info tab > Make Icon)",
                     "Icon maker models to the Model Chooser",
-                    "Warning for missing or unmounted files in instances"
+                    "Warning for missing or unmounted files in instances",
+                    "Autopacker can now pack from VPKs"
                 ],
                 "fixed": [
                     "Props and brushes in generated models being rotated, mirrored or missing",
