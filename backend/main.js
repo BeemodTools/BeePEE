@@ -570,6 +570,12 @@ async function handleFileOpen(filePath, isStartup = false) {
         return
     }
 
+    // It replaces the open package: ask about its unsaved changes first
+    const { confirmUnsavedChanges } = require("./menu.js")
+    const discardLabel =
+        ext === ".bee_pack" ? "Import Without Saving" : "Open Without Saving"
+    if (!(await confirmUnsavedChanges(mainWindow, discardLabel))) return
+
     try {
         if (ext === ".bpee") {
             // Load .bpee package

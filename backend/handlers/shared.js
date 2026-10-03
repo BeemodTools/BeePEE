@@ -7,29 +7,16 @@ const fs = require("fs")
 const path = require("path")
 const { saveItem } = require("../saveItem")
 const { Item } = require("../models/items")
-const { packages } = require("../packageManager")
+const {
+    packages,
+    getLastSavedBpeePath,
+    setLastSavedBpeePath,
+} = require("../packageManager")
 const { sendItemUpdateToEditor } = require("../items/itemEditor")
 const { logger } = require("../utils/logger")
 
-// Track last saved .bpee path in memory
-let lastSavedBpeePath = null
-
 // Track open preview windows to prevent duplicates
 const openPreviewWindows = new Map()
-
-/**
- * Get the last saved .bpee path
- */
-function getLastSavedBpeePath() {
-    return lastSavedBpeePath
-}
-
-/**
- * Set the last saved .bpee path
- */
-function setLastSavedBpeePath(bpeePath) {
-    lastSavedBpeePath = bpeePath
-}
 
 /**
  * Helper to load original itemJSON from info.json

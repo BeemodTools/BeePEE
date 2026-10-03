@@ -74,7 +74,7 @@ let mainWindow = null
 
 // Track current package directory and last saved path
 let currentPackageDir = null
-let lastSavedBpeePath = null
+let lastSavedBpeePath = null // .bpee the open package was last saved to
 let currentPackageSourcePath = null // .bpee/.zip the package was opened from
 
 // Helper function to send progress updates
@@ -1556,6 +1556,7 @@ const closePackage = async () => {
     // features (save/export menu items, etc.) know nothing is loaded
     currentPackageDir = null
     currentPackageSourcePath = null
+    lastSavedBpeePath = null
     notifyPackageStateChanged()
 
     // Clear window title
@@ -1590,6 +1591,14 @@ const getCurrentPackageDir = () => currentPackageDir
 // Where the loaded package was opened from (.bpee/.zip), if anywhere
 const getCurrentPackageSourcePath = () => currentPackageSourcePath
 
+// The .bpee the open package was last saved to, where Save writes again.
+// Forgotten when the package is closed or another one is opened, so Save
+// never writes one package into another's file.
+const getLastSavedBpeePath = () => lastSavedBpeePath
+const setLastSavedBpeePath = (bpeePath) => {
+    lastSavedBpeePath = bpeePath
+}
+
 module.exports = {
     reg_loadPackagePopup,
     loadPackage,
@@ -1604,6 +1613,8 @@ module.exports = {
     setMainWindow,
     getCurrentPackageDir,
     getCurrentPackageSourcePath,
+    getLastSavedBpeePath,
+    setLastSavedBpeePath,
     convertJsonToVdf,
     extractPackage,
     processVdfFiles,
