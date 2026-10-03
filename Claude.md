@@ -929,11 +929,14 @@ custom-content/        <-- SELECT THIS
 
 ## Icon Maker
 
-The item editor's Info tab has **Make Icon** (`src/components/items/IconMaker.jsx`). It generates one of the item's instances as a model (`icon-maker-generate-model` in `backend/handlers/iconHandlers.js`: VMF to OBJ with the cartoon style, into `.bpee/<item>/icon/model/`; the OBJ, MTL and textures are sent as text and data URLs, since the editor window can't load local files) and shows it in a square three.js view to line up the shot:
+The item editor's Info tab has **Make Icon**, which opens the icon maker in its own window (`createIconMakerWindow` in `backend/items/itemEditor.js`, route `icon-maker`: `src/pages/IconMakerPage.jsx` with `src/components/items/IconMaker.jsx`). There's one per item; opening it again brings it up, and it closes with the item's editor and when the package closes. It shows one of the item's instances as a model in a square three.js view, to line up the shot:
 
-- **Views**: 3/4 (the editor icons' angle, the default), Front, Side, Top. Each frames the model: its vertices fill 85% of the frame, centered. **Reset Camera** goes back to the 3/4 view and the 30° lens.
-- Left-drag rotates, right-drag moves, the wheel zooms; **Lens** (field of view) keeps the framing
-- **Shadow** (a soft contact shadow), **Background** (the editor icons' grayish white `#E5E8E9` by default, `ICON_BACKGROUND`), **Size** (64/128/256; the canvas renders at 1024 px and is scaled down in halves)
-- The preview shows the icon as it'll be, next to the current one
+- **Instance**: the instances whose VMF exists and has something to draw. Each one's model is made by `icon-maker-generate-model` (`backend/handlers/iconHandlers.js`: VMF to OBJ with the cartoon style) and kept in `.bpee/<item>/icon/models/<instance>/` with a stamp of its VMF, so it's only made again when the VMF changes; once one shows, the others are made in the background. The OBJ, MTL and textures are sent as text and data URLs. The Model Chooser can use these models as the item's model too.
+- **Views**: 3/4 (the default), Front, Side, Top. Each frames the model: its vertices fill 85% of the frame, centered. **Reset Camera** goes back to the 3/4 view and the 30° lens. Switching instances keeps the camera where it is.
+- Left-drag rotates, right-drag moves, the wheel zooms; **Lens** (field of view, perspective only) keeps the framing
+- **Camera presets**: the built-in **Palette** is the palette icons' shot: isometric, 30° down and 30° off the item's front. It's the camera of Konclan's Blender icon renderer for BEEmod (angles 60 0 330), turned a quarter turn from the decompiled model's axes to the instance's. Saved presets are kept in the app's settings (`iconMakerCameraPresets`, shared by all items) relative to the model's framing, so they give the same shot on any item.
+- **Model rotation**: pitch, yaw and roll that turn the model like an instance's angles in Hammer (around its origin), with +90° buttons; turning it frames it again from where the camera looks. The scene has Hammer's axes with Z up as Y (`x, z, -y`), so the angles are a `YZX` Euler of roll, yaw and -pitch.
+- **Advanced camera**: Perspective or Isometric (an orthographic camera that follows the perspective one), the camera's yaw, pitch, roll and distance, its position and the point it looks at
+- **Shadow** (a soft contact shadow under the model), **Size** (128/256/512; the view renders at twice its size and is scaled down in halves), **Background** (the palette icons' grayish white by default, `ICON_BACKGROUND`: `#E5E9E9`, RGB 229 233 233)
 
-**Use as Icon** saves the PNG (`icon-maker-save-icon`, `.bpee/<item>/icon/icon_<time>.png`) and stages it like a picked icon file: Save copies it to `resources/BEE2/items/` and makes the palette VTF.
+**Use as Icon** saves the PNG (`icon-maker-save-icon`, `.bpee/<item>/icon/icon_<time>.png`) and hands it to the item's editor (`icon-maker-send-to-editor`; the editor gets `icon-made` and comes up), which stages it like a picked icon file: Save copies it to `resources/BEE2/items/` and makes the palette VTF.

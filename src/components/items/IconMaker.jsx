@@ -25,13 +25,13 @@ import { ExpandLess, ExpandMore, RestartAlt, Save } from "@mui/icons-material"
 import { buildObjModel, disposeModel } from "../../utils/objModel"
 import GroundShadow from "./GroundShadow"
 
-/** The palette icons' grayish white background */
-export const ICON_BACKGROUND = "#E5E8E9"
+/** The palette icons' grayish white background (RGB 229, 233, 233) */
+export const ICON_BACKGROUND = "#E5E9E9"
 
 const ICON_SIZES = [128, 256, 512]
 const DEFAULT_SIZE = 256
 
-/** Directions the camera looks at the model from: the editor's icons use the 3/4 view */
+/** Directions the camera looks at the model from (the palette icons' own shot is the Palette preset) */
 const VIEWS = {
     angle: { label: "3/4", direction: [1, 0.85, 1] },
     front: { label: "Front", direction: [0, 0.12, 1] },
@@ -59,6 +59,28 @@ const HEADING_ROW = {
 
 /** Where camera presets are kept (the app's settings: shared by all items) */
 const PRESETS_SETTING = "iconMakerCameraPresets"
+
+/**
+ * Shots that are always there, before the saved ones. Palette is how the
+ * editor's palette icons are taken (like Konclan's Blender icon renderer for
+ * BEEmod): isometric, 30° down and 30° off the item's front. That renderer's
+ * camera angles (60 0 330) are in the decompiled model's axes, a quarter turn
+ * from the instance's.
+ */
+const BUILT_IN_PRESETS = [
+    {
+        name: "Palette",
+        description:
+            "The palette icons' shot: isometric, 30° down and 30° off the front",
+        projection: "iso",
+        fov: DEFAULT_FOV,
+        roll: 0,
+        yaw: 60,
+        pitch: 30,
+        distance: 1,
+        offset: [0, 0, 0],
+    },
+]
 
 /** Pitch stops short of straight up or down, where the camera can't aim */
 const MAX_PITCH = 89.9
@@ -1123,16 +1145,30 @@ export default function IconMaker({ item, onClose, onIconMade }) {
                                             Save
                                         </Button>
                                     </Box>
-                                ) : presets.length > 0 ? (
+                                ) : (
                                     <Box
                                         sx={{
                                             display: "flex",
                                             flexWrap: "wrap",
                                             gap: 0.5,
                                         }}>
+                                        {BUILT_IN_PRESETS.map((preset) => (
+                                            <Tooltip
+                                                key={`built-in:${preset.name}`}
+                                                title={preset.description}>
+                                                <Chip
+                                                    label={preset.name}
+                                                    size="small"
+                                                    disabled={!model}
+                                                    onClick={() =>
+                                                        applyPreset(preset)
+                                                    }
+                                                />
+                                            </Tooltip>
+                                        ))}
                                         {presets.map((preset) => (
                                             <Chip
-                                                key={preset.name}
+                                                key={`saved:${preset.name}`}
                                                 label={preset.name}
                                                 size="small"
                                                 variant="outlined"
@@ -1145,14 +1181,16 @@ export default function IconMaker({ item, onClose, onIconMade }) {
                                                 }
                                             />
                                         ))}
+                                        {presets.length === 0 && (
+                                            <Typography
+                                                variant="caption"
+                                                color="text.secondary"
+                                                sx={{ width: "100%" }}>
+                                                Save a shot to use it on other
+                                                items too
+                                            </Typography>
+                                        )}
                                     </Box>
-                                ) : (
-                                    <Typography
-                                        variant="caption"
-                                        color="text.secondary">
-                                        Save the camera to use its shot on other
-                                        items too
-                                    </Typography>
                                 )}
                             </Box>
 
