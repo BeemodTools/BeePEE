@@ -14,7 +14,7 @@ jest.mock("../packageManager", () => ({
 
 // A model with one texture, instead of converting a VMF
 jest.mock("../utils/vmf2obj", () => ({
-    MODEL_FORMAT: 2,
+    MODEL_FORMAT: 3,
     convertVmfToObj: jest.fn(async (vmfPath, { outputDir }) => {
         const fs = require("fs")
         const path = require("path")

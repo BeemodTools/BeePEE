@@ -517,7 +517,7 @@ async function convertVmfs(jobs, options) {
  * The version of what the converter makes: kept models (the icon maker's)
  * made by an older one are made again. Raise it when the output changes.
  */
-const MODEL_FORMAT = 2
+const MODEL_FORMAT = 3
 
 module.exports = {
     convertVmfToObj,

@@ -224,7 +224,7 @@ function assertHasGeometry(result, vmfPath) {
     }
     if (stats.toolFaces > 0) {
         reasons.push(
-            `${stats.toolFaces} brush face(s) only use tool textures, which are skipped.`,
+            `${stats.toolFaces} brush face(s) only use tool or dev textures, which are skipped.`,
         )
     }
     if (stats.skippedModels > 0) {
@@ -266,7 +266,8 @@ class VmfConverter {
      * @param {Object} options
      * @param {string[]} options.resourcePaths - VPK files and content folders, highest priority first
      * @param {string} [options.crowbarPath] - CrowbarCommandLineDecomp.exe (needed for props)
-     * @param {boolean} [options.skipTools] - Skip faces with tools/ materials
+     * @param {boolean} [options.skipTools] - Skip faces with tools/ and dev/
+     *   materials
      * @param {boolean} [options.useLastAnimFrame] - Pose props with the last frame instead of the first
      * @param {boolean} [options.includeBumpMaps] - Also export $bumpmap textures (map_bump)
      * @param {boolean} [options.quiet] - Collect warnings without logging them
@@ -442,8 +443,15 @@ class VmfConverter {
     // Brushes
     // -----------------------------------------------------------------------
 
+    /**
+     * Faces left out of the model: tool textures (nodraw, clip, triggers,
+     * ...) and dev textures (stand-ins and measuring textures for building
+     * maps), which aren't meant to be seen
+     */
     isSkippedTool(side) {
-        return this.skipTools && side.material.toLowerCase().includes("tools/")
+        if (!this.skipTools) return false
+        const material = side.material.toLowerCase()
+        return material.includes("tools/") || material.startsWith("dev/")
     }
 
     /**

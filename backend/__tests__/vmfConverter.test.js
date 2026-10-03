@@ -573,7 +573,7 @@ describe("convertVmf: empty results, model entities and tints", () => {
             result.warnings.some((w) => w.includes("models/npcs/missing.mdl")),
         ).toBe(true)
         expect(() => assertHasGeometry(result, "tools.vmf")).toThrow(
-            /6 brush face\(s\) only use tool textures[\s\S]*1 model\(s\) couldn't be loaded/,
+            /6 brush face\(s\) only use tool or dev textures[\s\S]*1 model\(s\) couldn't be loaded/,
         )
     })
 
@@ -1244,6 +1244,17 @@ describe("convertVmf: glass and entities hidden at the start", () => {
         const raw = zlib.inflateSync(png.subarray(41, 41 + png.readUInt32BE(33)))
         expect(raw[1 + 3]).toBeGreaterThan(0)
         expect(raw[1 + 3]).toBeLessThan(255)
+    })
+
+    test("leaves out faces with dev textures, like tool textures", async () => {
+        const result = await convert(
+            "dev",
+            `world { "id" "1" ${boxSolid(2, [0, 0, 0], [16, 16, 16], "test/glass")}
+                ${boxSolid(3, [32, 0, 0], [48, 16, 16], "DEV/DEV_MEASUREGENERIC01")} }`,
+        )
+        expect(result.stats.faces).toBe(6)
+        expect(result.stats.toolFaces).toBe(6)
+        expect(fs.readFileSync(result.objPath, "utf8")).not.toMatch(/dev_measure/i)
     })
 
     test("leaves out entities that can't be seen at the start", async () => {
