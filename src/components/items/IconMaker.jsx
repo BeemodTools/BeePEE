@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
-import { ContactShadows, OrbitControls } from "@react-three/drei"
+import { OrbitControls } from "@react-three/drei"
 import * as THREE from "three"
 import {
     Alert,
@@ -32,6 +32,7 @@ import {
     Save,
 } from "@mui/icons-material"
 import { buildObjModel, disposeModel } from "../../utils/objModel"
+import GroundShadow from "./GroundShadow"
 
 /** The palette icons' grayish white background */
 export const ICON_BACKGROUND = "#E5E8E9"
@@ -226,7 +227,16 @@ function IconScene({
     const bounds = useMemo(() => {
         const box = new THREE.Box3().setFromObject(model)
         const sphere = box.getBoundingSphere(new THREE.Sphere())
-        return { sphere, floor: box.min.y, points: modelPoints(model) }
+        return {
+            sphere,
+            points: modelPoints(model),
+            // Where the shadow goes: under the middle, at the bottom
+            ground: [
+                sphere.center.x,
+                box.min.y - sphere.radius * 0.002,
+                sphere.center.z,
+            ],
+        }
     }, [model])
     const isometricCamera = useMemo(() => new THREE.OrthographicCamera(), [])
 
@@ -441,7 +451,7 @@ function IconScene({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [gl, scene, camera, captureRef])
 
-    const { center, radius } = bounds.sphere
+    const { radius } = bounds.sphere
     return (
         <>
             <color attach="background" args={[background]} />
@@ -450,19 +460,11 @@ function IconScene({
             <directionalLight position={[-3, 1, -2]} intensity={0.35} />
             <primitive object={model} />
             {shadow && (
-                <ContactShadows
+                <GroundShadow
                     key={model.uuid}
-                    position={[
-                        center.x,
-                        bounds.floor - radius * 0.002,
-                        center.z,
-                    ]}
-                    scale={radius * 4}
+                    position={bounds.ground}
+                    size={radius * 4}
                     far={radius * 2}
-                    blur={2.5}
-                    opacity={0.45}
-                    resolution={512}
-                    frames={1}
                 />
             )}
         </>
@@ -937,17 +939,6 @@ export default function IconMaker({
                                         </MenuItem>
                                     ))}
                                 </Select>
-                                {leftOut.length > 0 && (
-                                    <Typography
-                                        variant="caption"
-                                        color="text.secondary"
-                                        sx={{ display: "block" }}>
-                                        Not shown (missing or empty):{" "}
-                                        {leftOut
-                                            .map((entry) => entry.instanceKey)
-                                            .join(", ")}
-                                    </Typography>
-                                )}
                                 {generatingAll && (
                                     <Typography
                                         variant="caption"
