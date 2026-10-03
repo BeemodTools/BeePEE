@@ -550,6 +550,16 @@ function ItemEditor() {
             const savePromises = []
             let hasErrors = false
 
+            // Most save handlers report a failure as { success: false, error }
+            // instead of throwing, so every result is checked: a failed part
+            // must stop the save, not end up reported as saved
+            const assertSaved = (result) => {
+                if (result?.success === false) {
+                    throw new Error(result.error || "No reason given")
+                }
+                return result
+            }
+
             // Save basic info if modified
             if (formData._modified.basicInfo) {
                 const saveData = {
@@ -572,7 +582,7 @@ function ItemEditor() {
                 }
 
                 savePromises.push(
-                    window.package?.saveItem?.(saveData).catch((error) => {
+                    window.package?.saveItem?.(saveData).then(assertSaved).catch((error) => {
                         console.error(
                             `Failed to save basic info of item "${item.name}":`,
                             error,
@@ -600,7 +610,12 @@ function ItemEditor() {
                     // Remove inputs that are in original but not in current
                     for (const inputName of Object.keys(originalInputs)) {
                         if (!(inputName in currentInputs)) {
-                            await window.package.removeInput(item.id, inputName)
+                            assertSaved(
+                                await window.package.removeInput(
+                                    item.id,
+                                    inputName,
+                                ),
+                            )
                         }
                     }
 
@@ -610,17 +625,21 @@ function ItemEditor() {
                     )) {
                         if (inputName in originalInputs) {
                             // Update existing input
-                            await window.package.updateInput(
-                                item.id,
-                                inputName,
-                                inputConfig,
+                            assertSaved(
+                                await window.package.updateInput(
+                                    item.id,
+                                    inputName,
+                                    inputConfig,
+                                ),
                             )
                         } else {
                             // Add new input
-                            await window.package.addInput(
-                                item.id,
-                                inputName,
-                                inputConfig,
+                            assertSaved(
+                                await window.package.addInput(
+                                    item.id,
+                                    inputName,
+                                    inputConfig,
+                                ),
                             )
                         }
                     }
@@ -650,9 +669,11 @@ function ItemEditor() {
                     // Remove outputs that are in original but not in current
                     for (const outputName of Object.keys(originalOutputs)) {
                         if (!(outputName in currentOutputs)) {
-                            await window.package.removeOutput(
-                                item.id,
-                                outputName,
+                            assertSaved(
+                                await window.package.removeOutput(
+                                    item.id,
+                                    outputName,
+                                ),
                             )
                         }
                     }
@@ -663,17 +684,21 @@ function ItemEditor() {
                     )) {
                         if (outputName in originalOutputs) {
                             // Update existing output
-                            await window.package.updateOutput(
-                                item.id,
-                                outputName,
-                                outputConfig,
+                            assertSaved(
+                                await window.package.updateOutput(
+                                    item.id,
+                                    outputName,
+                                    outputConfig,
+                                ),
                             )
                         } else {
                             // Add new output
-                            await window.package.addOutput(
-                                item.id,
-                                outputName,
-                                outputConfig,
+                            assertSaved(
+                                await window.package.addOutput(
+                                    item.id,
+                                    outputName,
+                                    outputConfig,
+                                ),
                             )
                         }
                     }
@@ -707,7 +732,12 @@ function ItemEditor() {
                             console.log(
                                 `Removing instance "${instanceData.Name}" from item "${item.name}"`,
                             )
-                            await window.package.removeInstance(item.id, index)
+                            assertSaved(
+                                await window.package.removeInstance(
+                                    item.id,
+                                    index,
+                                ),
+                            )
                         }
                     }
 
@@ -720,12 +750,13 @@ function ItemEditor() {
                                 `Adding instance "${instanceData.Name}" to item "${item.name}"`,
                             )
                             // Use a new backend function to add instance from file path
-                            const addResult =
+                            const addResult = assertSaved(
                                 await window.package.addInstanceFromFile(
                                     item.id,
                                     instanceData._filePath,
                                     instanceData.Name,
-                                )
+                                ),
+                            )
                             if (
                                 addResult?.success &&
                                 addResult.index !== undefined
@@ -771,16 +802,20 @@ function ItemEditor() {
 
                         if (trimmedName === defaultName || trimmedName === "") {
                             // Remove custom name
-                            await window.package.removeInstanceName(
-                                item.id,
-                                numericIndex,
+                            assertSaved(
+                                await window.package.removeInstanceName(
+                                    item.id,
+                                    numericIndex,
+                                ),
                             )
                         } else {
                             // Set custom name
-                            await window.package.setInstanceName(
-                                item.id,
-                                numericIndex,
-                                trimmedName,
+                            assertSaved(
+                                await window.package.setInstanceName(
+                                    item.id,
+                                    numericIndex,
+                                    trimmedName,
+                                ),
                             )
                         }
                     }
@@ -800,9 +835,11 @@ function ItemEditor() {
             // Save Variables data if modified
             if (formData._modified.variables) {
                 try {
-                    await window.package.saveVariables?.(
-                        item.id,
-                        formData.variables,
+                    assertSaved(
+                        await window.package.saveVariables?.(
+                            item.id,
+                            formData.variables,
+                        ),
                     )
                 } catch (error) {
                     console.error(
@@ -818,9 +855,11 @@ function ItemEditor() {
             if (formData._modified.conditions) {
                 try {
                     // Save blocks format - the backend will handle conversion and logging
-                    await window.package.saveConditions?.(item.id, {
-                        blocks: formData.blocks,
-                    })
+                    assertSaved(
+                        await window.package.saveConditions?.(item.id, {
+                            blocks: formData.blocks,
+                        }),
+                    )
                 } catch (error) {
                     console.error(
                         `Failed to save conditions of item "${item.name}":`,
@@ -836,7 +875,7 @@ function ItemEditor() {
                 try {
                     await window.package.saveOther?.(item.id, formData.other)
                     // Save model name
-                    await window.package?.saveModelName?.(item.id, formData.modelName).catch((error) => {
+                    await window.package?.saveModelName?.(item.id, formData.modelName).then(assertSaved).catch((error) => {
                         console.error(
                             `Failed to save model name of item "${item.name}":`,
                             error,
@@ -859,17 +898,21 @@ function ItemEditor() {
             // (e.g., if MDL conversion failed but VTF conversion succeeded)
             try {
                 // Step 1: Copy staged model/material files from .bpee/ to resources/
-                const copyResult = await window.electron.invoke("copy-staged-model-files", {
-                    itemId: item.id,
-                })
+                const copyResult = assertSaved(
+                    await window.electron.invoke("copy-staged-model-files", {
+                        itemId: item.id,
+                    }),
+                )
 
                 // Step 2: Save staged editoritems.json changes (only if we have them)
                 if (stagedEditorItems) {
-                    await window.electron.invoke("save-staged-editoritems", {
-                        itemId: item.id,
-                        stagedEditorItems: stagedEditorItems,
-                        hasObjFiles: copyResult.hasObjFiles || false,
-                    })
+                    assertSaved(
+                        await window.electron.invoke("save-staged-editoritems", {
+                            itemId: item.id,
+                            stagedEditorItems: stagedEditorItems,
+                            hasObjFiles: copyResult.hasObjFiles || false,
+                        }),
+                    )
                 }
             } catch (error) {
                 console.error(
@@ -886,7 +929,18 @@ function ItemEditor() {
             }
 
             // Ensure ConnectionPoints exist if item has I/O
-            await window.package?.ensureConnectionPoints?.(item.id)
+            try {
+                assertSaved(
+                    await window.package?.ensureConnectionPoints?.(item.id),
+                )
+            } catch (error) {
+                console.error(
+                    `Failed to add connection points to item "${item.name}":`,
+                    error,
+                )
+                hasErrors = true
+                throw new Error(`Connection points: ${error.message}`)
+            }
 
             if (!hasErrors) {
                 // Show checkmark icon temporarily
