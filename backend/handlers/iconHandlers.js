@@ -14,6 +14,8 @@ const path = require("path")
 const { packages } = require("../packageManager")
 const { Instance } = require("../items/Instance")
 const { convertVmfToObj, MODEL_FORMAT } = require("../utils/vmf2obj")
+const { parseVmf } = require("../utils/vmfConverter/vmf")
+const { hasDrawableContent } = require("../utils/vmfConverter")
 const { logger } = require("../utils/logger")
 
 const IMAGE_TYPES = {
@@ -158,6 +160,37 @@ function instanceKeys(item) {
         .sort((a, b) => Number(a) - Number(b))
 }
 
+// Whether VMFs have something to draw, by path, size and date
+const drawable = new Map()
+
+/**
+ * Why an instance can't be made into a model: "missing" (its VMF doesn't
+ * exist) or "empty" (nothing in it to draw); null when it can
+ */
+function instanceProblem(item, instanceKey) {
+    const source = instanceSource(item, instanceKey)
+    if (source.size === undefined) return "missing"
+    if (source.size === 0) return "empty"
+    const key = `${source.vmf}|${source.size}|${source.modified}`
+    if (!drawable.has(key)) {
+        let result
+        try {
+            const vmf = parseVmf(fs.readFileSync(source.vmf, "utf8"))
+            result = hasDrawableContent(vmf)
+        } catch {
+            // Unreadable: converting it says why
+            result = true
+        }
+        drawable.set(key, result)
+    }
+    return drawable.get(key) ? null : "empty"
+}
+
+/** The item's instances that can be made into a model, in key order */
+function usableInstanceKeys(item) {
+    return instanceKeys(item).filter((key) => !instanceProblem(item, key))
+}
+
 function register(ipcMain) {
     // The model of one of the item's instances (kept from before when its
     // VMF hasn't changed)
@@ -166,6 +199,13 @@ function register(ipcMain) {
         async (event, { itemId, instanceKey }) => {
             try {
                 const item = findItem(itemId)
+                const problem = instanceProblem(item, instanceKey)
+                if (problem === "missing") {
+                    throw new Error("The instance's VMF file doesn't exist")
+                }
+                if (problem === "empty") {
+                    throw new Error("The instance's VMF has nothing to draw")
+                }
                 const kept = keptInstanceModel(item, instanceKey)
                 if (kept) return { success: true, ...readModel(kept) }
                 return await logger.section(
@@ -186,7 +226,7 @@ function register(ipcMain) {
     ipcMain.handle("icon-maker-generate-all", async (event, { itemId }) => {
         try {
             const item = findItem(itemId)
-            const missing = instanceKeys(item).filter(
+            const missing = usableInstanceKeys(item).filter(
                 (key) => !keptInstanceModel(item, key),
             )
             const failed = {}
@@ -217,12 +257,31 @@ function register(ipcMain) {
         }
     })
 
+    // The instances the icon maker shows: those whose VMF exists and has
+    // something to draw (leftOut: the others, and why)
+    ipcMain.handle("icon-maker-list-instances", async (event, { itemId }) => {
+        try {
+            const item = findItem(itemId)
+            const instances = []
+            const leftOut = []
+            for (const key of instanceKeys(item)) {
+                const name = item.instances[key].Name.split(/[\\/]/).pop()
+                const problem = instanceProblem(item, key)
+                if (problem) leftOut.push({ instanceKey: key, name, problem })
+                else instances.push({ instanceKey: key, name })
+            }
+            return { success: true, instances, leftOut }
+        } catch (error) {
+            return { success: false, error: error.message }
+        }
+    })
+
     // The instances whose model the icon maker has made (and still matches
     // their VMF), for the Model Chooser
     ipcMain.handle("icon-maker-list-models", async (event, { itemId }) => {
         try {
             const item = findItem(itemId)
-            const models = instanceKeys(item)
+            const models = usableInstanceKeys(item)
                 .filter((key) => keptInstanceModel(item, key))
                 .map((key) => ({
                     instanceKey: key,

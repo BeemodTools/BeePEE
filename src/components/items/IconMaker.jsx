@@ -537,16 +537,10 @@ export default function IconMaker({
     onClose,
     onIconMade,
 }) {
-    const instances = useMemo(
-        () =>
-            Object.entries(item?.instances ?? {})
-                .filter(([, instance]) => instance?.Name)
-                .map(([key, instance]) => ({
-                    key,
-                    name: instance.Name.split(/[\\/]/).pop(),
-                })),
-        [item],
-    )
+    // The instances to pick from: those whose VMF exists and has something
+    // to draw (null until the backend says), and the ones left out
+    const [instances, setInstances] = useState(null)
+    const [leftOut, setLeftOut] = useState([])
     const [instanceKey, setInstanceKey] = useState(null)
     const [model, setModel] = useState(null)
     const [loading, setLoading] = useState(false)
@@ -576,9 +570,41 @@ export default function IconMaker({
     openRef.current = open
     const generatedAllRef = useRef(false)
 
+    useEffect(() => {
+        if (!open || !item?.id) return
+        let cancelled = false
+        window.package
+            .listIconInstances(item.id)
+            .then((result) => {
+                if (cancelled) return
+                if (!result?.success) {
+                    throw new Error(result?.error ?? "No instances")
+                }
+                setInstances(
+                    result.instances.map(({ instanceKey: key, name }) => ({
+                        key,
+                        name,
+                    })),
+                )
+                setLeftOut(result.leftOut ?? [])
+            })
+            .catch((err) => {
+                if (cancelled) return
+                console.error(
+                    `Failed to list the instances of "${item.name}":`,
+                    err,
+                )
+                setError(err.message)
+                setInstances([])
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [open, item])
+
     // Keep the instance picked, unless it's gone
     useEffect(() => {
-        if (!open) return
+        if (!open || !instances) return
         setInstanceKey((key) =>
             instances.some((instance) => instance.key === key)
                 ? key
@@ -671,7 +697,7 @@ export default function IconMaker({
     useEffect(() => {
         if (!open || !model || generatedAllRef.current) return
         generatedAllRef.current = true
-        if (instances.length < 2) return
+        if (!instances || instances.length < 2) return
         setGeneratingAll(true)
         window.package
             .generateAllIconModels(item.id)
@@ -879,9 +905,15 @@ export default function IconMaker({
                                 borderRadius: 4,
                             },
                         }}>
-                        {instances.length === 0 ? (
+                        {instances === null ? (
+                            <Typography variant="body2" color="text.secondary">
+                                Finding the instances...
+                            </Typography>
+                        ) : instances.length === 0 ? (
                             <Alert severity="info">
-                                Add an instance to the item first.
+                                {leftOut.length > 0
+                                    ? "The item's instances are missing or have nothing to draw."
+                                    : "Add an instance to the item first."}
                             </Alert>
                         ) : (
                             <Box>
@@ -905,10 +937,22 @@ export default function IconMaker({
                                         </MenuItem>
                                     ))}
                                 </Select>
+                                {leftOut.length > 0 && (
+                                    <Typography
+                                        variant="caption"
+                                        color="text.secondary"
+                                        sx={{ display: "block" }}>
+                                        Not shown (missing or empty):{" "}
+                                        {leftOut
+                                            .map((entry) => entry.instanceKey)
+                                            .join(", ")}
+                                    </Typography>
+                                )}
                                 {generatingAll && (
                                     <Typography
                                         variant="caption"
-                                        color="text.secondary">
+                                        color="text.secondary"
+                                        sx={{ display: "block" }}>
                                         Generating the other instances' models...
                                     </Typography>
                                 )}

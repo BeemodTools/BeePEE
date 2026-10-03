@@ -14,7 +14,7 @@ jest.mock("../packageManager", () => ({
 
 // A model with one texture, instead of converting a VMF
 jest.mock("../utils/vmf2obj", () => ({
-    MODEL_FORMAT: 3,
+    MODEL_FORMAT: 4,
     convertVmfToObj: jest.fn(async (vmfPath, { outputDir }) => {
         const fs = require("fs")
         const path = require("path")
@@ -42,8 +42,11 @@ const path = require("path")
 const { register } = require("../handlers/iconHandlers")
 const { convertVmfToObj } = require("../utils/vmf2obj")
 
+/** A VMF with something to draw: a prop */
+const VMF = `entity { "id" "2" "classname" "prop_static" "model" "models/test.mdl" }`
+
 /** Put an instance's VMF in the test package */
-function writeVmf(packagePath, name, content = "versioninfo {}") {
+function writeVmf(packagePath, name, content = VMF) {
     const file = path.join(packagePath, "resources", name)
     fs.mkdirSync(path.dirname(file), { recursive: true })
     fs.writeFileSync(file, content)
@@ -90,7 +93,7 @@ describe("icon maker handlers", () => {
         expect((await generate()).obj).toContain("mtllib item_0.mtl")
         expect(convertVmfToObj).toHaveBeenCalledTimes(1)
 
-        fs.writeFileSync(vmf, "versioninfo { changed }")
+        fs.writeFileSync(vmf, `${VMF}\nversioninfo { "editorversion" "400" }`)
         expect((await generate()).success).toBe(true)
         expect(convertVmfToObj).toHaveBeenCalledTimes(2)
     })
@@ -141,22 +144,67 @@ describe("icon maker handlers", () => {
         const all = await handlers["icon-maker-generate-all"](null, {
             itemId: "my_item",
         })
-        expect(all).toEqual({ success: true, made: 2, failed: { 0: "boom" } })
+        // The missing VMF isn't made
+        expect(all).toEqual({ success: true, made: 1, failed: { 0: "boom" } })
         const listed = await handlers["icon-maker-list-models"](null, {
             itemId: "my_item",
         })
-        // The missing VMF's model is made (by the fake converter) but can't
-        // be matched to its VMF, so it isn't kept
         expect(listed).toEqual({
             success: true,
             models: [{ instanceKey: "1", name: "item_1.vmf" }],
         })
-        // Made already: nothing to do the next time
+        // Made already: only the failed one is made the next time
         await handlers["icon-maker-generate-all"](null, { itemId: "my_item" })
-        expect(convertVmfToObj).toHaveBeenCalledTimes(3 + 2)
+        expect(convertVmfToObj).toHaveBeenCalledTimes(2 + 1)
+    })
+
+    test("leaves out instances whose VMF is missing or has nothing to draw", async () => {
+        writeVmf(packagePath, "instances/my_item/item_0.vmf")
+        writeVmf(packagePath, "instances/my_item/blank.vmf", "")
+        writeVmf(
+            packagePath,
+            "instances/my_item/logic.vmf",
+            `world { "id" "1" } entity { "id" "2" "classname" "logic_relay" }`,
+        )
+        writeVmf(
+            packagePath,
+            "instances/my_item/hidden.vmf",
+            `entity { "id" "2" "classname" "prop_dynamic" "model" "models/test.mdl" "rendermode" "10" }`,
+        )
+        mockItems[0].instances = {
+            0: { Name: "instances/my_item/item_0.vmf" },
+            1: { Name: "instances/my_item/blank.vmf" },
+            2: { Name: "instances/my_item/missing.vmf" },
+            3: { Name: "instances/my_item/logic.vmf" },
+            4: { Name: "instances/my_item/hidden.vmf" },
+        }
+        expect(
+            await handlers["icon-maker-list-instances"](null, { itemId: "my_item" }),
+        ).toEqual({
+            success: true,
+            instances: [{ instanceKey: "0", name: "item_0.vmf" }],
+            leftOut: [
+                { instanceKey: "1", name: "blank.vmf", problem: "empty" },
+                { instanceKey: "2", name: "missing.vmf", problem: "missing" },
+                { instanceKey: "3", name: "logic.vmf", problem: "empty" },
+                { instanceKey: "4", name: "hidden.vmf", problem: "empty" },
+            ],
+        })
+        await handlers["icon-maker-generate-all"](null, { itemId: "my_item" })
+        expect(convertVmfToObj).toHaveBeenCalledTimes(1)
+        expect(
+            await handlers["icon-maker-generate-model"](null, {
+                itemId: "my_item",
+                instanceKey: "2",
+            }),
+        ).toEqual({
+            success: false,
+            error: "The instance's VMF file doesn't exist",
+        })
     })
 
     test("generates the model with its textures as data URLs", async () => {
+        writeVmf(packagePath, "instances/my_item/item_0.vmf")
         const result = await handlers["icon-maker-generate-model"](null, {
             itemId: "my_item",
             instanceKey: "0",

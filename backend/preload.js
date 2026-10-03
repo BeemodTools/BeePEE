@@ -71,6 +71,10 @@ contextBridge.exposeInMainWorld("package", {
     // Icon maker (src/components/items/IconMaker.jsx)
     generateIconModel: (itemId, instanceKey) =>
         ipcRenderer.invoke("icon-maker-generate-model", { itemId, instanceKey }),
+    // The instances the icon maker can show: { instances, leftOut } of
+    // { instanceKey, name } (leftOut: missing or empty VMFs, with problem)
+    listIconInstances: (itemId) =>
+        ipcRenderer.invoke("icon-maker-list-instances", { itemId }),
     // Makes the models of all the item's instances not made yet
     generateAllIconModels: (itemId) =>
         ipcRenderer.invoke("icon-maker-generate-all", { itemId }),
