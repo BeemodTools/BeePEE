@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { ContactShadows, OrbitControls } from "@react-three/drei"
 import * as THREE from "three"
@@ -14,6 +14,7 @@ import {
     DialogContent,
     DialogTitle,
     FormControlLabel,
+    IconButton,
     MenuItem,
     Select,
     Slider,
@@ -21,6 +22,7 @@ import {
     TextField,
     ToggleButton,
     ToggleButtonGroup,
+    Tooltip,
     Typography,
 } from "@mui/material"
 import {
@@ -54,6 +56,14 @@ const FILL = 0.85
 
 /** The view's size on screen; rendered at twice that and scaled down */
 const VIEW_SIZE = 512
+
+/** A setting's name with a button on its right */
+const HEADING_ROW = {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 30,
+}
 
 /** Where camera presets are kept (the app's settings: shared by all items) */
 const PRESETS_SETTING = "iconMakerCameraPresets"
@@ -210,7 +220,6 @@ function IconScene({
     framedRef,
     rigRef,
     captureRef,
-    onReady,
     onCameraChange,
 }) {
     const { camera, gl, scene, controls, size } = useThree()
@@ -283,7 +292,13 @@ function IconScene({
             latest.current.onCameraChange?.(read())
         })
     }
-    useEffect(() => () => cancelAnimationFrame(pendingReport.current), [])
+    useEffect(
+        () => () => {
+            cancelAnimationFrame(pendingReport.current)
+            pendingReport.current = 0
+        },
+        [],
+    )
 
     const place = (target, position) => {
         camera.position.copy(position)
@@ -395,6 +410,14 @@ function IconScene({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [bounds, controls, framedRef])
 
+    // Fill in the window's camera fields once the scene is up. Also needed
+    // after StrictMode's unmount and mount again in development: that
+    // cancels the report the first lining up made, and doesn't line up again.
+    useEffect(() => {
+        if (controls) report()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [controls])
+
     // A wider or narrower lens keeps the model the same size in the frame
     useEffect(() => {
         if (camera.fov === fov) return
@@ -415,11 +438,8 @@ function IconScene({
             gl.render(scene, aimCamera())
             return scaleDown(gl.domElement, iconSize)
         }
-        // The canvas is made after the dialog: say when it can take icons
-        const frameId = requestAnimationFrame(() => onReady?.())
-        return () => cancelAnimationFrame(frameId)
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [gl, scene, camera, captureRef, onReady])
+    }, [gl, scene, camera, captureRef])
 
     const { center, radius } = bounds.sphere
     return (
@@ -509,12 +529,11 @@ function PointFields({ label, point, onCommit, disabled }) {
 /**
  * Make an item's palette icon: generate its instances' models, line up the
  * shot, and use the render as the icon
- * @param {{open: boolean, item: Object, currentIcon?: string, onClose: () => void, onIconMade: (filePath: string, fileName: string) => void}} props
+ * @param {{open: boolean, item: Object, onClose: () => void, onIconMade: (filePath: string, fileName: string) => void}} props
  */
 export default function IconMaker({
     open,
     item,
-    currentIcon,
     onClose,
     onIconMade,
 }) {
@@ -546,8 +565,6 @@ export default function IconMaker({
     const [shadow, setShadow] = useState(true)
     const [background, setBackground] = useState(ICON_BACKGROUND)
     const [size, setSize] = useState(DEFAULT_SIZE)
-    const [preview, setPreview] = useState(null)
-    const [shotKey, setShotKey] = useState(0)
     const [saving, setSaving] = useState(false)
     const captureRef = useRef(null)
     const rigRef = useRef(null)
@@ -676,19 +693,6 @@ export default function IconMaker({
             .finally(() => setGeneratingAll(false))
     }, [open, model, instances, item])
 
-    const updatePreview = useCallback(() => {
-        if (captureRef.current) setPreview(captureRef.current(size))
-    }, [size])
-
-    // The preview follows the settings (after the view is drawn)
-    useEffect(() => {
-        if (!model) return
-        const frame = requestAnimationFrame(() =>
-            requestAnimationFrame(updatePreview),
-        )
-        return () => cancelAnimationFrame(frame)
-    }, [model, shotKey, projection, fov, roll, shadow, background, updatePreview])
-
     const handleUse = async () => {
         if (!captureRef.current) return
         setSaving(true)
@@ -711,16 +715,12 @@ export default function IconMaker({
         }
     }
 
-    // A camera change made here (not by dragging): redraw the preview
-    const moved = () => setShotKey((value) => value + 1)
-
     // Picking a view (again) lines the model up from it
     const pickView = (key) => {
         if (!key) return
         setView(key)
         setRoll(0)
         rigRef.current?.frame(new THREE.Vector3(...VIEWS[key].direction))
-        moved()
     }
 
     // Back to the default shot, undoing any rotating, moving and zooming
@@ -731,7 +731,6 @@ export default function IconMaker({
         rigRef.current?.frame(new THREE.Vector3(...VIEWS[DEFAULT_VIEW].direction), {
             fov: DEFAULT_FOV,
         })
-        moved()
     }
 
     // Switching the projection lines the model up again from the same
@@ -745,12 +744,10 @@ export default function IconMaker({
                 projection: value,
             })
         }
-        moved()
     }
 
     const moveCamera = (changes) => {
         rigRef.current?.move(changes)
-        moved()
     }
 
     const savePresets = async (next) => {
@@ -780,7 +777,6 @@ export default function IconMaker({
         setFov(preset.fov ?? DEFAULT_FOV)
         setRoll(preset.roll ?? 0)
         rigRef.current.applyPreset({ ...preset, fov: preset.fov ?? DEFAULT_FOV })
-        moved()
     }
 
     const deletePreset = (name) => {
@@ -827,14 +823,12 @@ export default function IconMaker({
                                     framedRef={framedRef}
                                     rigRef={rigRef}
                                     captureRef={captureRef}
-                                    onReady={updatePreview}
                                     onCameraChange={setCameraFields}
                                 />
                             )}
                             <OrbitControls
                                 makeDefault
                                 onChange={() => rigRef.current?.report()}
-                                onEnd={updatePreview}
                             />
                         </Canvas>
                         {loading && (
@@ -859,340 +853,384 @@ export default function IconMaker({
                     <Typography variant="caption" color="text.secondary">
                         Left-drag: rotate • Right-drag: move • Wheel: zoom
                     </Typography>
+                    {error && (
+                        <Alert severity="error" sx={{ mt: 1, width: VIEW_SIZE }}>
+                            {error}
+                        </Alert>
+                    )}
                 </Box>
 
-                <Box
-                    sx={{
-                        width: 260,
-                        display: "flex",
-                        flexDirection: "column",
-                        gap: 2,
-                    }}>
-                    {instances.length === 0 ? (
-                        <Alert severity="info">
-                            Add an instance to the item first.
-                        </Alert>
-                    ) : (
-                        <Box>
-                            <Typography variant="body2" color="text.secondary">
-                                Instance
-                            </Typography>
-                            <Select
-                                size="small"
-                                fullWidth
-                                value={instanceKey ?? ""}
-                                onChange={(e) =>
-                                    setInstanceKey(e.target.value)
-                                }>
-                                {instances.map((instance) => (
-                                    <MenuItem
-                                        key={instance.key}
-                                        value={instance.key}>
-                                        {instance.key}: {instance.name}
-                                    </MenuItem>
-                                ))}
-                            </Select>
-                            {generatingAll && (
-                                <Typography
-                                    variant="caption"
-                                    color="text.secondary">
-                                    Generating the other instances' models...
-                                </Typography>
-                            )}
-                        </Box>
-                    )}
-
-                    <Box>
-                        <Typography variant="body2" color="text.secondary">
-                            View
-                        </Typography>
-                        {/* Clicking the current view again lines it up again */}
-                        <ToggleButtonGroup size="small" exclusive value={view}>
-                            {Object.entries(VIEWS).map(([key, { label }]) => (
-                                <ToggleButton
-                                    key={key}
-                                    value={key}
-                                    onClick={() => pickView(key)}>
-                                    {label}
-                                </ToggleButton>
-                            ))}
-                        </ToggleButtonGroup>
-                        <Button
-                            size="small"
-                            startIcon={<RestartAlt />}
-                            onClick={resetCamera}
-                            disabled={!model}
-                            sx={{ display: "flex", mt: 1 }}>
-                            Reset Camera
-                        </Button>
-                    </Box>
-
-                    {projection === "perspective" && (
-                        <Box>
-                            <Typography variant="body2" color="text.secondary">
-                                Lens: {fov}°
-                            </Typography>
-                            <Slider
-                                size="small"
-                                min={10}
-                                max={60}
-                                value={fov}
-                                onChange={(e, value) => setFov(value)}
-                            />
-                        </Box>
-                    )}
-
-                    <Box>
-                        <Typography variant="body2" color="text.secondary">
-                            Camera presets
-                        </Typography>
-                        {presets.length > 0 && (
-                            <Box
-                                sx={{
-                                    display: "flex",
-                                    flexWrap: "wrap",
-                                    gap: 0.5,
-                                    mt: 0.5,
-                                }}>
-                                {presets.map((preset) => (
-                                    <Chip
-                                        key={preset.name}
-                                        label={preset.name}
-                                        size="small"
-                                        variant="outlined"
-                                        disabled={!model}
-                                        onClick={() => applyPreset(preset)}
-                                        onDelete={() =>
-                                            deletePreset(preset.name)
-                                        }
-                                    />
-                                ))}
-                            </Box>
-                        )}
-                        {savingPreset ? (
-                            <Box sx={{ display: "flex", gap: 1, mt: 1 }}>
-                                <TextField
-                                    size="small"
-                                    autoFocus
-                                    label="Preset name"
-                                    value={presetName}
-                                    onChange={(e) =>
-                                        setPresetName(e.target.value)
-                                    }
-                                    onKeyDown={(e) => {
-                                        if (e.key === "Enter") savePreset()
-                                        if (e.key === "Escape") {
-                                            e.stopPropagation()
-                                            setSavingPreset(false)
-                                        }
-                                    }}
-                                    sx={{ flex: 1 }}
-                                />
-                                <Button
-                                    size="small"
-                                    onClick={savePreset}
-                                    disabled={!presetName.trim()}>
-                                    Save
-                                </Button>
-                            </Box>
+                {/* As tall as the view beside it: what doesn't fit (like the
+                    advanced camera) scrolls instead of making the window taller */}
+                <Box sx={{ width: 284, flexShrink: 0, position: "relative" }}>
+                    <Box
+                        sx={{
+                            position: "absolute",
+                            inset: 0,
+                            overflowY: "auto",
+                            scrollbarGutter: "stable",
+                            pr: 1,
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 1.5,
+                            "&::-webkit-scrollbar": { width: 8 },
+                            "&::-webkit-scrollbar-thumb": {
+                                backgroundColor: "rgba(255,255,255,0.2)",
+                                borderRadius: 4,
+                            },
+                        }}>
+                        {instances.length === 0 ? (
+                            <Alert severity="info">
+                                Add an instance to the item first.
+                            </Alert>
                         ) : (
-                            <Button
-                                size="small"
-                                startIcon={<Save />}
-                                onClick={() => setSavingPreset(true)}
-                                disabled={!model}
-                                sx={{ display: "flex", mt: 0.5 }}>
-                                Save camera as preset
-                            </Button>
-                        )}
-                    </Box>
-
-                    <Box>
-                        <Button
-                            size="small"
-                            onClick={() => setAdvancedOpen((value) => !value)}
-                            endIcon={advancedOpen ? <ExpandLess /> : <ExpandMore />}>
-                            Advanced camera
-                        </Button>
-                        <Collapse in={advancedOpen}>
-                            <Box
-                                sx={{
-                                    display: "flex",
-                                    flexDirection: "column",
-                                    gap: 1.5,
-                                    mt: 1,
-                                }}>
-                                <ToggleButtonGroup
+                            <Box>
+                                <Typography
+                                    variant="body2"
+                                    color="text.secondary">
+                                    Instance
+                                </Typography>
+                                <Select
                                     size="small"
-                                    exclusive
                                     fullWidth
-                                    value={projection}
-                                    disabled={!model}
-                                    onChange={(e, value) => pickProjection(value)}>
-                                    <ToggleButton value="perspective">
-                                        Perspective
-                                    </ToggleButton>
-                                    <ToggleButton value="iso">
-                                        Isometric
-                                    </ToggleButton>
-                                </ToggleButtonGroup>
-                                <Box sx={{ display: "flex", gap: 1 }}>
-                                    <NumberField
-                                        label="Yaw °"
-                                        value={cameraFields?.yaw}
-                                        disabled={!model}
-                                        onCommit={(yaw) => moveCamera({ yaw })}
-                                    />
-                                    <NumberField
-                                        label="Pitch °"
-                                        value={cameraFields?.pitch}
-                                        disabled={!model}
-                                        onCommit={(pitch) =>
-                                            moveCamera({ pitch })
-                                        }
-                                    />
-                                    <NumberField
-                                        label="Roll °"
-                                        value={roll}
-                                        disabled={!model}
-                                        onCommit={setRoll}
-                                    />
-                                </Box>
-                                <NumberField
-                                    label={
-                                        projection === "iso"
-                                            ? "Distance (zoom)"
-                                            : "Distance"
-                                    }
-                                    value={cameraFields?.distance}
-                                    disabled={!model}
-                                    onCommit={(distance) =>
-                                        moveCamera({ distance })
-                                    }
-                                />
-                                <PointFields
-                                    label="Camera position"
-                                    point={cameraFields?.position}
-                                    disabled={!model}
-                                    onCommit={(position) =>
-                                        moveCamera({ position })
-                                    }
-                                />
-                                <PointFields
-                                    label="Looks at"
-                                    point={cameraFields?.target}
-                                    disabled={!model}
-                                    onCommit={(target) =>
-                                        moveCamera({ target })
-                                    }
-                                />
-                            </Box>
-                        </Collapse>
-                    </Box>
-
-                    <FormControlLabel
-                        control={
-                            <Switch
-                                checked={shadow}
-                                onChange={(e) => setShadow(e.target.checked)}
-                            />
-                        }
-                        label="Shadow"
-                    />
-
-                    <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-                        <TextField
-                            size="small"
-                            label="Background"
-                            value={background}
-                            onChange={(e) => setBackground(e.target.value)}
-                            sx={{ flex: 1 }}
-                        />
-                        <input
-                            type="color"
-                            value={
-                                /^#[0-9a-f]{6}$/i.test(background)
-                                    ? background
-                                    : ICON_BACKGROUND
-                            }
-                            onChange={(e) => setBackground(e.target.value)}
-                            style={{
-                                width: 36,
-                                height: 36,
-                                border: "none",
-                                background: "none",
-                            }}
-                        />
-                    </Box>
-                    {background.toLowerCase() !==
-                        ICON_BACKGROUND.toLowerCase() && (
-                        <Button
-                            size="small"
-                            onClick={() => setBackground(ICON_BACKGROUND)}>
-                            Use the editor's background
-                        </Button>
-                    )}
-
-                    <Box>
-                        <Typography variant="body2" color="text.secondary">
-                            Size
-                        </Typography>
-                        <ToggleButtonGroup
-                            size="small"
-                            exclusive
-                            value={size}
-                            onChange={(e, value) => value && setSize(value)}>
-                            {ICON_SIZES.map((value) => (
-                                <ToggleButton key={value} value={value}>
-                                    {value}
-                                </ToggleButton>
-                            ))}
-                        </ToggleButtonGroup>
-                    </Box>
-
-                    <Box>
-                        <Typography variant="body2" color="text.secondary">
-                            Icon
-                        </Typography>
-                        <Box
-                            sx={{
-                                display: "flex",
-                                gap: 2,
-                                alignItems: "flex-end",
-                                mt: 1,
-                            }}>
-                            {[
-                                ["Now", currentIcon],
-                                ["New", preview],
-                            ].map(([label, src]) => (
-                                <Box key={label} sx={{ textAlign: "center" }}>
-                                    <Box
-                                        sx={{
-                                            width: 96,
-                                            height: 96,
-                                            border: "1px solid #555",
-                                            bgcolor: "#2d2d2d",
-                                        }}>
-                                        {src && (
-                                            <img
-                                                src={src}
-                                                alt={`${label} icon`}
-                                                width={96}
-                                                height={96}
-                                            />
-                                        )}
-                                    </Box>
+                                    value={instanceKey ?? ""}
+                                    onChange={(e) =>
+                                        setInstanceKey(e.target.value)
+                                    }>
+                                    {instances.map((instance) => (
+                                        <MenuItem
+                                            key={instance.key}
+                                            value={instance.key}>
+                                            {instance.key}: {instance.name}
+                                        </MenuItem>
+                                    ))}
+                                </Select>
+                                {generatingAll && (
                                     <Typography
                                         variant="caption"
                                         color="text.secondary">
-                                        {label}
+                                        Generating the other instances' models...
                                     </Typography>
-                                </Box>
-                            ))}
-                        </Box>
-                    </Box>
+                                )}
+                            </Box>
+                        )}
 
-                    {error && <Alert severity="error">{error}</Alert>}
+                        <Box>
+                            <Box sx={HEADING_ROW}>
+                                <Typography
+                                    variant="body2"
+                                    color="text.secondary">
+                                    View
+                                </Typography>
+                                <Button
+                                    size="small"
+                                    startIcon={<RestartAlt />}
+                                    onClick={resetCamera}
+                                    disabled={!model}>
+                                    Reset Camera
+                                </Button>
+                            </Box>
+                            {/* Clicking the current view again lines it up again */}
+                            <ToggleButtonGroup
+                                size="small"
+                                exclusive
+                                fullWidth
+                                value={view}>
+                                {Object.entries(VIEWS).map(
+                                    ([key, { label }]) => (
+                                        <ToggleButton
+                                            key={key}
+                                            value={key}
+                                            onClick={() => pickView(key)}>
+                                            {label}
+                                        </ToggleButton>
+                                    ),
+                                )}
+                            </ToggleButtonGroup>
+                        </Box>
+
+                        {projection === "perspective" && (
+                            <Box
+                                sx={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 2,
+                                }}>
+                                <Typography
+                                    variant="body2"
+                                    color="text.secondary"
+                                    sx={{ whiteSpace: "nowrap", minWidth: 64 }}>
+                                    Lens {fov}°
+                                </Typography>
+                                <Slider
+                                    size="small"
+                                    min={10}
+                                    max={60}
+                                    value={fov}
+                                    onChange={(e, value) => setFov(value)}
+                                    sx={{ flex: 1, mr: 1 }}
+                                />
+                            </Box>
+                        )}
+
+                        <Box>
+                            <Box sx={HEADING_ROW}>
+                                <Typography
+                                    variant="body2"
+                                    color="text.secondary">
+                                    Camera presets
+                                </Typography>
+                                {!savingPreset && (
+                                    <Button
+                                        size="small"
+                                        startIcon={<Save />}
+                                        onClick={() => setSavingPreset(true)}
+                                        disabled={!model}>
+                                        Save
+                                    </Button>
+                                )}
+                            </Box>
+                            {savingPreset ? (
+                                <Box sx={{ display: "flex", gap: 1, mt: 0.5 }}>
+                                    <TextField
+                                        size="small"
+                                        autoFocus
+                                        label="Preset name"
+                                        value={presetName}
+                                        onChange={(e) =>
+                                            setPresetName(e.target.value)
+                                        }
+                                        onKeyDown={(e) => {
+                                            if (e.key === "Enter") savePreset()
+                                            if (e.key === "Escape") {
+                                                e.stopPropagation()
+                                                setSavingPreset(false)
+                                            }
+                                        }}
+                                        sx={{ flex: 1 }}
+                                    />
+                                    <Button
+                                        size="small"
+                                        onClick={savePreset}
+                                        disabled={!presetName.trim()}>
+                                        Save
+                                    </Button>
+                                </Box>
+                            ) : presets.length > 0 ? (
+                                <Box
+                                    sx={{
+                                        display: "flex",
+                                        flexWrap: "wrap",
+                                        gap: 0.5,
+                                    }}>
+                                    {presets.map((preset) => (
+                                        <Chip
+                                            key={preset.name}
+                                            label={preset.name}
+                                            size="small"
+                                            variant="outlined"
+                                            disabled={!model}
+                                            onClick={() => applyPreset(preset)}
+                                            onDelete={() =>
+                                                deletePreset(preset.name)
+                                            }
+                                        />
+                                    ))}
+                                </Box>
+                            ) : (
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary">
+                                    Save the camera to use its shot on other
+                                    items too
+                                </Typography>
+                            )}
+                        </Box>
+
+                        <Box>
+                            <Button
+                                size="small"
+                                onClick={() =>
+                                    setAdvancedOpen((value) => !value)
+                                }
+                                endIcon={
+                                    advancedOpen ? (
+                                        <ExpandLess />
+                                    ) : (
+                                        <ExpandMore />
+                                    )
+                                }>
+                                Advanced camera
+                            </Button>
+                            <Collapse in={advancedOpen}>
+                                <Box
+                                    sx={{
+                                        display: "flex",
+                                        flexDirection: "column",
+                                        gap: 1.5,
+                                        mt: 1,
+                                    }}>
+                                    <ToggleButtonGroup
+                                        size="small"
+                                        exclusive
+                                        fullWidth
+                                        value={projection}
+                                        disabled={!model}
+                                        onChange={(e, value) =>
+                                            pickProjection(value)
+                                        }>
+                                        <ToggleButton value="perspective">
+                                            Perspective
+                                        </ToggleButton>
+                                        <ToggleButton value="iso">
+                                            Isometric
+                                        </ToggleButton>
+                                    </ToggleButtonGroup>
+                                    <Box sx={{ display: "flex", gap: 1 }}>
+                                        <NumberField
+                                            label="Yaw °"
+                                            value={cameraFields?.yaw}
+                                            disabled={!model}
+                                            onCommit={(yaw) =>
+                                                moveCamera({ yaw })
+                                            }
+                                        />
+                                        <NumberField
+                                            label="Pitch °"
+                                            value={cameraFields?.pitch}
+                                            disabled={!model}
+                                            onCommit={(pitch) =>
+                                                moveCamera({ pitch })
+                                            }
+                                        />
+                                        <NumberField
+                                            label="Roll °"
+                                            value={roll}
+                                            disabled={!model}
+                                            onCommit={setRoll}
+                                        />
+                                    </Box>
+                                    <NumberField
+                                        label={
+                                            projection === "iso"
+                                                ? "Distance (zoom)"
+                                                : "Distance"
+                                        }
+                                        value={cameraFields?.distance}
+                                        disabled={!model}
+                                        onCommit={(distance) =>
+                                            moveCamera({ distance })
+                                        }
+                                    />
+                                    <PointFields
+                                        label="Camera position"
+                                        point={cameraFields?.position}
+                                        disabled={!model}
+                                        onCommit={(position) =>
+                                            moveCamera({ position })
+                                        }
+                                    />
+                                    <PointFields
+                                        label="Looks at"
+                                        point={cameraFields?.target}
+                                        disabled={!model}
+                                        onCommit={(target) =>
+                                            moveCamera({ target })
+                                        }
+                                    />
+                                </Box>
+                            </Collapse>
+                        </Box>
+
+                        <Box
+                            sx={{
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                            }}>
+                            <FormControlLabel
+                                control={
+                                    <Switch
+                                        size="small"
+                                        checked={shadow}
+                                        onChange={(e) =>
+                                            setShadow(e.target.checked)
+                                        }
+                                    />
+                                }
+                                label="Shadow"
+                                sx={{ m: 0, gap: 0.5 }}
+                            />
+                            <Box
+                                sx={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 1,
+                                }}>
+                                <Typography
+                                    variant="body2"
+                                    color="text.secondary">
+                                    Size
+                                </Typography>
+                                <ToggleButtonGroup
+                                    size="small"
+                                    exclusive
+                                    value={size}
+                                    onChange={(e, value) =>
+                                        value && setSize(value)
+                                    }>
+                                    {ICON_SIZES.map((value) => (
+                                        <ToggleButton key={value} value={value}>
+                                            {value}
+                                        </ToggleButton>
+                                    ))}
+                                </ToggleButtonGroup>
+                            </Box>
+                        </Box>
+
+                        <Box
+                            sx={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 1,
+                            }}>
+                            <TextField
+                                size="small"
+                                label="Background"
+                                value={background}
+                                onChange={(e) => setBackground(e.target.value)}
+                                sx={{ flex: 1 }}
+                            />
+                            <input
+                                type="color"
+                                value={
+                                    /^#[0-9a-f]{6}$/i.test(background)
+                                        ? background
+                                        : ICON_BACKGROUND
+                                }
+                                onChange={(e) => setBackground(e.target.value)}
+                                style={{
+                                    width: 36,
+                                    height: 36,
+                                    border: "none",
+                                    background: "none",
+                                }}
+                            />
+                            {background.toLowerCase() !==
+                                ICON_BACKGROUND.toLowerCase() && (
+                                <Tooltip title="Use the editor's background">
+                                    <IconButton
+                                        size="small"
+                                        onClick={() =>
+                                            setBackground(ICON_BACKGROUND)
+                                        }>
+                                        <RestartAlt fontSize="small" />
+                                    </IconButton>
+                                </Tooltip>
+                            )}
+                        </Box>
+
+                    </Box>
                 </Box>
             </DialogContent>
             <DialogActions>

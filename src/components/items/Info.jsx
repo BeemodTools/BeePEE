@@ -292,7 +292,6 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                 <IconMaker
                     open={iconMakerOpen}
                     item={item}
-                    currentIcon={iconSrc}
                     onClose={() => setIconMakerOpen(false)}
                     onIconMade={stageIcon}
                 />
