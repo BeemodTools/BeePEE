@@ -30,7 +30,9 @@
                     "Props sometimes getting another model's shape, or going missing, when a model couldn't be decompiled",
                     "Make Model failing on very big models (more than 65,535 vertices) when making the collision model",
                     "The item editor saying an item was saved when part of the save failed (like adding an instance or saving the conditions) - it now shows what failed and keeps your unsaved changes",
-                    "Autopacking reporting an instance's materials and scripts as not packed when they were"
+                    "Autopacking reporting an instance's materials and scripts as not packed when they were",
+                    "Autopacking leaving out an instance's sounds, VScripts, model animations (.ani) and the textures of its materials when they're named differently than the material",
+                    "Autopacking leaving out custom files put straight into Portal 2/portal2"
                 ],
                 "changed": [
                     "Items with multiple models convert each instance on its own instead of merging them into one map",
@@ -42,7 +44,8 @@
                     "BeePEE no longer needs Python at all: finding a model's materials (autopacking, instance checks) and making collision models now run inside BeePEE, and finding materials is about 100x faster",
                     "Cleaner logs: plain text without emojis, with longer tasks like Make Model or loading a package shown as a tree of their steps and how long each took",
                     "The logs now also include what happens in BeePEE's windows (item editor, VBSP conditions, signage designer, ...), so bug reports show the whole picture",
-                    "Log files stay small: chatty and repeated lines were cut, a log file is capped at 5 MB and only the 10 newest are kept"
+                    "Log files stay small: chatty and repeated lines were cut, a log file is capped at 5 MB and only the 10 newest are kept",
+                    "Autopacking tells the original game's files apart from custom ones by looking inside the game's VPKs: the base game and the official DLCs are never packed, neither are BEE2's files, and files an instance uses that don't exist anywhere are reported in the log"
                 ]
             }
         },
