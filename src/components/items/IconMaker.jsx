@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { Canvas, useThree } from "@react-three/fiber"
+import { Canvas, useFrame, useThree } from "@react-three/fiber"
 import { ContactShadows, OrbitControls } from "@react-three/drei"
 import * as THREE from "three"
 import {
     Alert,
     Box,
     Button,
+    Chip,
     CircularProgress,
+    Collapse,
     Dialog,
     DialogActions,
     DialogContent,
@@ -21,13 +23,19 @@ import {
     ToggleButtonGroup,
     Typography,
 } from "@mui/material"
-import { RestartAlt } from "@mui/icons-material"
+import {
+    ExpandLess,
+    ExpandMore,
+    RestartAlt,
+    Save,
+} from "@mui/icons-material"
 import { buildObjModel, disposeModel } from "../../utils/objModel"
 
 /** The palette icons' grayish white background */
 export const ICON_BACKGROUND = "#E5E8E9"
 
-const ICON_SIZES = [64, 128, 256]
+const ICON_SIZES = [128, 256, 512]
+const DEFAULT_SIZE = 256
 
 /** Directions the camera looks at the model from: the editor's icons use the 3/4 view */
 const VIEWS = {
@@ -46,6 +54,35 @@ const FILL = 0.85
 
 /** The view's size on screen; rendered at twice that and scaled down */
 const VIEW_SIZE = 512
+
+/** Where camera presets are kept (the app's settings: shared by all items) */
+const PRESETS_SETTING = "iconMakerCameraPresets"
+
+/** Pitch stops short of straight up or down, where the camera can't aim */
+const MAX_PITCH = 89.9
+
+const radians = THREE.MathUtils.degToRad
+const degrees = THREE.MathUtils.radToDeg
+
+/** The direction from the target to the camera, for a yaw and pitch in degrees */
+function directionOf(yaw, pitch) {
+    const y = radians(yaw)
+    const p = radians(pitch)
+    return new THREE.Vector3(
+        Math.cos(p) * Math.sin(y),
+        Math.sin(p),
+        Math.cos(p) * Math.cos(y),
+    )
+}
+
+/** The yaw and pitch (degrees) of a direction from the target to the camera */
+function anglesOf(direction) {
+    const d = direction.clone().normalize()
+    return {
+        yaw: degrees(Math.atan2(d.x, d.z)),
+        pitch: degrees(Math.asin(THREE.MathUtils.clamp(d.y, -1, 1))),
+    }
+}
 
 /** The model's vertex positions (in the scene), for framing it */
 function modelPoints(model) {
@@ -69,11 +106,20 @@ function modelPoints(model) {
  * Where the camera goes to look at the model from a direction: centered, the
  * model filling FILL of the (square) frame
  * @param {number[]} points - x, y, z of the model's vertices (modelPoints)
- * @param {number[]} direction - From the model towards the camera
+ * @param {THREE.Vector3} direction - From the model towards the camera
  * @param {number} fov - The camera's field of view in degrees
+ * @param {boolean} isometric - Framed for the isometric view, where nearer
+ *   parts don't look bigger
  */
-function frameModel(points, direction, fov) {
-    const back = new THREE.Vector3(...direction).normalize()
+function frameModel(points, direction, fov, isometric = false) {
+    const back = direction.clone().normalize()
+    if (points.length === 0) {
+        return {
+            target: new THREE.Vector3(),
+            position: back.clone().multiplyScalar(100),
+            distance: 100,
+        }
+    }
     // The camera's axes, as it'll look at the model (up stays up)
     const axes = new THREE.Matrix4().lookAt(
         back,
@@ -101,19 +147,19 @@ function frameModel(points, direction, fov) {
         .addScaledVector(up, middle[1])
         .addScaledVector(back, middle[2])
 
-    // Back far enough for every vertex to be in the frame
-    const slope = Math.tan(THREE.MathUtils.degToRad(fov) / 2) * FILL
+    // Back far enough for every vertex to be in the frame (isometric: the
+    // frame's size at the target is what counts, see aimCamera)
+    const slope = Math.tan(radians(fov) / 2) * FILL
     let distance = 0
     for (let i = 0; i < points.length; i += 3) {
         const across = Math.max(
             Math.abs(along(right, i) - middle[0]),
             Math.abs(along(up, i) - middle[1]),
         )
-        distance = Math.max(
-            distance,
-            along(back, i) - middle[2] + across / slope,
-        )
+        const depth = isometric ? 0 : along(back, i) - middle[2]
+        distance = Math.max(distance, depth + across / slope)
     }
+    distance = Math.max(distance, 1e-3)
     return {
         target,
         position: target.clone().addScaledVector(back, distance),
@@ -146,66 +192,233 @@ function scaleDown(source, size) {
     return icon.toDataURL("image/png")
 }
 
-/** The model, lights and camera framing, and taking the icon */
+/**
+ * The model, lights and camera, and taking the icon. The orbit controls move
+ * a perspective camera; the isometric view is an orthographic camera that
+ * follows it (its frame at the target as big as the perspective one's), so
+ * rotating, moving and zooming work the same in both.
+ * rigRef gets the camera's controls for the window: frame, read, move,
+ * presetOf, applyPreset and report.
+ */
 function IconScene({
-    onReady,
     model,
-    view,
-    viewKey,
+    projection,
     fov,
+    roll,
     shadow,
     background,
+    framedRef,
+    rigRef,
     captureRef,
+    onReady,
+    onCameraChange,
 }) {
-    const { camera, gl, scene, controls } = useThree()
+    const { camera, gl, scene, controls, size } = useThree()
     const bounds = useMemo(() => {
         const box = new THREE.Box3().setFromObject(model)
         const sphere = box.getBoundingSphere(new THREE.Sphere())
         return { sphere, floor: box.min.y, points: modelPoints(model) }
     }, [model])
-    // The lens, for framing (changing it alone doesn't frame the model again)
-    const fovRef = useRef(fov)
-    fovRef.current = fov
+    const isometricCamera = useMemo(() => new THREE.OrthographicCamera(), [])
 
-    // Frame the model from the view (when it's picked, or Reset Camera)
-    useEffect(() => {
-        camera.fov = fovRef.current
-        const { target, position, distance } = frameModel(
-            bounds.points,
-            VIEWS[view].direction,
-            camera.fov,
-        )
-        camera.position.copy(position)
-        camera.near = distance / 100
-        camera.far = distance * 10
+    // The latest props, for the render loop and the rig
+    const latest = useRef({})
+    latest.current = { projection, roll, bounds, controls, size, onCameraChange }
+
+    const targetOf = () =>
+        latest.current.controls?.target ?? latest.current.bounds.sphere.center
+
+    /** Aim the camera (rolled) and get the one to draw with */
+    const aimCamera = () => {
+        const { projection, roll, bounds, size } = latest.current
+        const target = targetOf()
+        camera.lookAt(target)
+        if (roll) camera.rotateZ(-radians(roll))
+        const distance = camera.position.distanceTo(target)
+        const reach = distance + bounds.sphere.radius * 4
+        camera.near = Math.max(distance / 100, 1e-3)
+        camera.far = reach * 2
         camera.updateProjectionMatrix()
-        if (controls) {
-            controls.target.copy(target)
-            controls.update()
+        if (projection !== "iso") return camera
+
+        const half = distance * Math.tan(radians(camera.fov) / 2)
+        const aspect = size.width / size.height
+        isometricCamera.left = -half * aspect
+        isometricCamera.right = half * aspect
+        isometricCamera.top = half
+        isometricCamera.bottom = -half
+        isometricCamera.near = -reach
+        isometricCamera.far = reach
+        isometricCamera.position.copy(camera.position)
+        isometricCamera.quaternion.copy(camera.quaternion)
+        isometricCamera.updateProjectionMatrix()
+        isometricCamera.updateMatrixWorld()
+        return isometricCamera
+    }
+
+    // Drawn here (after the orbit controls moved the camera), with the
+    // projection picked
+    useFrame(() => {
+        gl.render(scene, aimCamera())
+    }, 1)
+
+    /** Where the camera is, for the window's fields */
+    const read = () => {
+        const target = targetOf().clone()
+        const offset = camera.position.clone().sub(target)
+        return {
+            position: camera.position.toArray(),
+            target: target.toArray(),
+            distance: offset.length(),
+            ...anglesOf(offset),
         }
-    }, [bounds, view, viewKey, camera, controls])
+    }
+
+    // Tell the window where the camera is, once a frame at most
+    const pendingReport = useRef(0)
+    const report = () => {
+        if (pendingReport.current) return
+        pendingReport.current = requestAnimationFrame(() => {
+            pendingReport.current = 0
+            latest.current.onCameraChange?.(read())
+        })
+    }
+    useEffect(() => () => cancelAnimationFrame(pendingReport.current), [])
+
+    const place = (target, position) => {
+        camera.position.copy(position)
+        latest.current.controls?.target.copy(target)
+        latest.current.controls?.update()
+        report()
+    }
+
+    /** Line the model up from a direction (the views, Reset Camera) */
+    const frame = (direction, options = {}) => {
+        const shotFov = options.fov ?? camera.fov
+        const isometric = (options.projection ?? latest.current.projection) === "iso"
+        const { target, position } = frameModel(
+            latest.current.bounds.points,
+            direction,
+            shotFov,
+            isometric,
+        )
+        camera.fov = shotFov
+        camera.updateProjectionMatrix()
+        place(target, position)
+    }
+
+    /** Move the camera: to a position, or by yaw, pitch and distance */
+    const move = (changes) => {
+        const now = read()
+        const target = new THREE.Vector3(...(changes.target ?? now.target))
+        let position
+        if (changes.position) {
+            position = new THREE.Vector3(...changes.position)
+        } else if (changes.target) {
+            // Looking at another point from where it is
+            position = new THREE.Vector3(...now.position)
+        } else {
+            const pitch = THREE.MathUtils.clamp(
+                changes.pitch ?? now.pitch,
+                -MAX_PITCH,
+                MAX_PITCH,
+            )
+            const distance = Math.max(changes.distance ?? now.distance, 1e-3)
+            position = target
+                .clone()
+                .addScaledVector(directionOf(changes.yaw ?? now.yaw, pitch), distance)
+        }
+        place(target, position)
+    }
+
+    // A preset is kept relative to the model's framing from its direction,
+    // so it gives the same shot on any item
+    const presetOf = (name) => {
+        const { projection, roll } = latest.current
+        const { yaw, pitch, distance, target } = read()
+        const framed = frameModel(
+            latest.current.bounds.points,
+            directionOf(yaw, pitch),
+            camera.fov,
+            projection === "iso",
+        )
+        const offset = new THREE.Vector3(...target)
+            .sub(framed.target)
+            .divideScalar(framed.distance)
+        return {
+            name,
+            projection,
+            fov: camera.fov,
+            roll,
+            yaw,
+            pitch,
+            distance: distance / framed.distance,
+            offset: offset.toArray(),
+        }
+    }
+
+    const applyPreset = (preset) => {
+        const direction = directionOf(preset.yaw, preset.pitch)
+        const framed = frameModel(
+            latest.current.bounds.points,
+            direction,
+            preset.fov,
+            preset.projection === "iso",
+        )
+        const target = framed.target
+            .clone()
+            .addScaledVector(
+                new THREE.Vector3(...(preset.offset ?? [0, 0, 0])),
+                framed.distance,
+            )
+        camera.fov = preset.fov
+        camera.updateProjectionMatrix()
+        place(
+            target,
+            target
+                .clone()
+                .addScaledVector(direction, preset.distance * framed.distance),
+        )
+    }
+
+    useEffect(() => {
+        rigRef.current = { frame, read, move, presetOf, applyPreset, report }
+    })
+    useEffect(() => () => (rigRef.current = null), [rigRef])
+
+    // Line up the first model; the next ones (other instances) keep the
+    // camera where it is. Waits for the controls, which hold the target.
+    useEffect(() => {
+        if (framedRef.current || !controls) return
+        framedRef.current = true
+        frame(new THREE.Vector3(...VIEWS[DEFAULT_VIEW].direction))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [bounds, controls, framedRef])
 
     // A wider or narrower lens keeps the model the same size in the frame
     useEffect(() => {
         if (camera.fov === fov) return
-        const target = controls?.target ?? bounds.sphere.center
+        const target = targetOf()
         const offset = camera.position.clone().sub(target)
-        const before = Math.sin(THREE.MathUtils.degToRad(camera.fov) / 2)
-        const after = Math.sin(THREE.MathUtils.degToRad(fov) / 2)
+        const before = Math.sin(radians(camera.fov) / 2)
+        const after = Math.sin(radians(fov) / 2)
         camera.position.copy(target).addScaledVector(offset, before / after)
         camera.fov = fov
         camera.updateProjectionMatrix()
         controls?.update()
-    }, [fov, camera, controls, bounds])
+        report()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [fov, camera, controls])
 
     useEffect(() => {
-        captureRef.current = (size) => {
-            gl.render(scene, camera)
-            return scaleDown(gl.domElement, size)
+        captureRef.current = (iconSize) => {
+            gl.render(scene, aimCamera())
+            return scaleDown(gl.domElement, iconSize)
         }
         // The canvas is made after the dialog: say when it can take icons
-        const frame = requestAnimationFrame(() => onReady?.())
-        return () => cancelAnimationFrame(frame)
+        const frameId = requestAnimationFrame(() => onReady?.())
+        return () => cancelAnimationFrame(frameId)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [gl, scene, camera, captureRef, onReady])
 
     const { center, radius } = bounds.sphere
@@ -237,8 +450,65 @@ function IconScene({
 }
 
 /**
- * Make an item's palette icon: generate one of its instances' model, line up
- * the shot, and use the render as the icon
+ * A number field that applies what's typed as soon as it's a number (and
+ * shows the actual value again when it loses focus)
+ */
+function NumberField({ label, value, onCommit, digits = 1, disabled }) {
+    const [text, setText] = useState("")
+    const [editing, setEditing] = useState(false)
+    const shown = Number.isFinite(value) ? value.toFixed(digits) : ""
+    return (
+        <TextField
+            size="small"
+            type="number"
+            label={label}
+            disabled={disabled}
+            value={editing ? text : shown}
+            onFocus={() => {
+                setText(shown)
+                setEditing(true)
+            }}
+            onBlur={() => setEditing(false)}
+            onChange={(e) => {
+                setText(e.target.value)
+                const number = parseFloat(e.target.value)
+                if (Number.isFinite(number)) onCommit(number)
+            }}
+            slotProps={{ htmlInput: { step: 1 } }}
+            sx={{ flex: 1, minWidth: 0 }}
+        />
+    )
+}
+
+/** X, Y and Z fields for a point */
+function PointFields({ label, point, onCommit, disabled }) {
+    return (
+        <Box>
+            <Typography variant="caption" color="text.secondary">
+                {label}
+            </Typography>
+            <Box sx={{ display: "flex", gap: 1, mt: 0.5 }}>
+                {["X", "Y", "Z"].map((axis, i) => (
+                    <NumberField
+                        key={axis}
+                        label={axis}
+                        value={point?.[i]}
+                        disabled={disabled}
+                        onCommit={(value) => {
+                            const next = [...(point ?? [0, 0, 0])]
+                            next[i] = value
+                            onCommit(next)
+                        }}
+                    />
+                ))}
+            </Box>
+        </Box>
+    )
+}
+
+/**
+ * Make an item's palette icon: generate its instances' models, line up the
+ * shot, and use the render as the icon
  * @param {{open: boolean, item: Object, currentIcon?: string, onClose: () => void, onIconMade: (filePath: string, fileName: string) => void}} props
  */
 export default function IconMaker({
@@ -261,40 +531,113 @@ export default function IconMaker({
     const [instanceKey, setInstanceKey] = useState(null)
     const [model, setModel] = useState(null)
     const [loading, setLoading] = useState(false)
+    const [generatingAll, setGeneratingAll] = useState(false)
     const [error, setError] = useState(null)
     const [view, setView] = useState(DEFAULT_VIEW)
-    const [viewKey, setViewKey] = useState(0)
+    const [projection, setProjection] = useState("perspective")
     const [fov, setFov] = useState(DEFAULT_FOV)
+    const [roll, setRoll] = useState(0)
+    // Where the camera is, for the advanced camera fields
+    const [cameraFields, setCameraFields] = useState(null)
+    const [advancedOpen, setAdvancedOpen] = useState(false)
+    const [presets, setPresets] = useState([])
+    const [savingPreset, setSavingPreset] = useState(false)
+    const [presetName, setPresetName] = useState("")
     const [shadow, setShadow] = useState(true)
     const [background, setBackground] = useState(ICON_BACKGROUND)
-    const [size, setSize] = useState(64)
+    const [size, setSize] = useState(DEFAULT_SIZE)
     const [preview, setPreview] = useState(null)
+    const [shotKey, setShotKey] = useState(0)
     const [saving, setSaving] = useState(false)
     const captureRef = useRef(null)
+    const rigRef = useRef(null)
+    // Whether the camera has been lined up on a model since the window opened
+    const framedRef = useRef(false)
+    // The instances' models, so switching back to one is instant
+    const modelsRef = useRef(new Map())
+    const openRef = useRef(open)
+    openRef.current = open
+    const generatedAllRef = useRef(false)
 
+    // Keep the instance picked, unless it's gone
     useEffect(() => {
-        if (open) setInstanceKey(instances[0]?.key ?? null)
+        if (!open) return
+        setInstanceKey((key) =>
+            instances.some((instance) => instance.key === key)
+                ? key
+                : (instances[0]?.key ?? null),
+        )
     }, [open, instances])
 
-    // Generate the instance's model
+    // Closing frees the models; the next time starts with a new shot (the
+    // projection, lens and icon settings stay)
+    useEffect(() => {
+        if (open) return
+        for (const kept of modelsRef.current.values()) disposeModel(kept)
+        modelsRef.current.clear()
+        setModel(null)
+        setView(DEFAULT_VIEW)
+        setRoll(0)
+        framedRef.current = false
+        generatedAllRef.current = false
+    }, [open])
+    useEffect(
+        () => () => {
+            for (const kept of modelsRef.current.values()) disposeModel(kept)
+            modelsRef.current.clear()
+        },
+        [],
+    )
+
+    // The camera presets, kept in the app's settings
+    useEffect(() => {
+        if (!open) return
+        window.package
+            ?.getSetting?.(PRESETS_SETTING)
+            .then((result) => {
+                if (result?.success && Array.isArray(result.value)) {
+                    setPresets(
+                        result.value.filter(
+                            (preset) => typeof preset?.name === "string",
+                        ),
+                    )
+                }
+            })
+            .catch((err) =>
+                console.warn("Failed to load the icon maker's camera presets:", err),
+            )
+    }, [open])
+
+    // Show the instance's model: kept from before, or generated (the
+    // backend keeps it too, until the instance's VMF changes)
     useEffect(() => {
         if (!open || instanceKey === null) return
+        const kept = modelsRef.current.get(instanceKey)
+        if (kept) {
+            setModel(kept)
+            setError(null)
+            return
+        }
         let cancelled = false
         setLoading(true)
         setError(null)
-        setPreview(null)
         window.package
             .generateIconModel(item.id, instanceKey)
             .then((result) => {
-                if (cancelled) return
                 if (!result?.success)
                     throw new Error(result?.error ?? "No model")
-                setModel(buildObjModel(result))
+                const built = buildObjModel(result)
+                if (!openRef.current) {
+                    disposeModel(built)
+                    return
+                }
+                modelsRef.current.set(instanceKey, built)
+                if (!cancelled) setModel(built)
             })
             .catch((err) => {
                 if (cancelled) return
                 console.error(
-                    `Failed to make the icon model of "${item.name}":`,
+                    `Failed to make the icon model of "${item.name}" (instance ${instanceKey}):`,
                     err,
                 )
                 setError(err.message)
@@ -306,7 +649,32 @@ export default function IconMaker({
         }
     }, [open, instanceKey, item])
 
-    useEffect(() => () => disposeModel(model), [model])
+    // Once a model shows, make the other instances' models in the
+    // background, so picking one doesn't wait for it to be generated
+    useEffect(() => {
+        if (!open || !model || generatedAllRef.current) return
+        generatedAllRef.current = true
+        if (instances.length < 2) return
+        setGeneratingAll(true)
+        window.package
+            .generateAllIconModels(item.id)
+            .then((result) => {
+                if (!result?.success) throw new Error(result?.error)
+                const failed = Object.keys(result.failed ?? {})
+                if (failed.length > 0) {
+                    console.warn(
+                        `Couldn't make the icon models of instances ${failed.join(", ")} of "${item.name}"`,
+                    )
+                }
+            })
+            .catch((err) =>
+                console.warn(
+                    `Failed to make the other icon models of "${item.name}":`,
+                    err,
+                ),
+            )
+            .finally(() => setGeneratingAll(false))
+    }, [open, model, instances, item])
 
     const updatePreview = useCallback(() => {
         if (captureRef.current) setPreview(captureRef.current(size))
@@ -319,7 +687,7 @@ export default function IconMaker({
             requestAnimationFrame(updatePreview),
         )
         return () => cancelAnimationFrame(frame)
-    }, [model, view, viewKey, fov, shadow, background, updatePreview])
+    }, [model, shotKey, projection, fov, roll, shadow, background, updatePreview])
 
     const handleUse = async () => {
         if (!captureRef.current) return
@@ -331,7 +699,7 @@ export default function IconMaker({
             const result = await window.package.saveMadeIcon(item.id, png)
             if (!result?.success) throw new Error(result?.error ?? "Not saved")
             console.log(
-                `Made a ${size}x${size} icon for "${item.name}" (${VIEWS[view].label} view)`,
+                `Made a ${size}x${size} icon for "${item.name}" (instance ${instanceKey}, ${projection === "iso" ? "isometric" : "perspective"})`,
             )
             onIconMade(result.filePath, result.fileName)
             onClose()
@@ -343,17 +711,81 @@ export default function IconMaker({
         }
     }
 
-    // Picking a view (again) frames the model from it
+    // A camera change made here (not by dragging): redraw the preview
+    const moved = () => setShotKey((value) => value + 1)
+
+    // Picking a view (again) lines the model up from it
     const pickView = (key) => {
         if (!key) return
         setView(key)
-        setViewKey((value) => value + 1)
+        setRoll(0)
+        rigRef.current?.frame(new THREE.Vector3(...VIEWS[key].direction))
+        moved()
     }
 
     // Back to the default shot, undoing any rotating, moving and zooming
     const resetCamera = () => {
+        setView(DEFAULT_VIEW)
+        setRoll(0)
         setFov(DEFAULT_FOV)
-        pickView(DEFAULT_VIEW)
+        rigRef.current?.frame(new THREE.Vector3(...VIEWS[DEFAULT_VIEW].direction), {
+            fov: DEFAULT_FOV,
+        })
+        moved()
+    }
+
+    // Switching the projection lines the model up again from the same
+    // direction, so it fills the frame the same
+    const pickProjection = (value) => {
+        if (!value || value === projection) return
+        setProjection(value)
+        const now = rigRef.current?.read()
+        if (now) {
+            rigRef.current.frame(directionOf(now.yaw, now.pitch), {
+                projection: value,
+            })
+        }
+        moved()
+    }
+
+    const moveCamera = (changes) => {
+        rigRef.current?.move(changes)
+        moved()
+    }
+
+    const savePresets = async (next) => {
+        setPresets(next)
+        try {
+            const result = await window.package.setSetting(PRESETS_SETTING, next)
+            if (result?.success === false) throw new Error(result.error)
+        } catch (err) {
+            console.error("Failed to save the icon maker's camera presets:", err)
+            setError(`Couldn't save the presets: ${err.message}`)
+        }
+    }
+
+    const savePreset = () => {
+        const name = presetName.trim()
+        if (!name || !rigRef.current) return
+        const preset = rigRef.current.presetOf(name)
+        savePresets([...presets.filter((p) => p.name !== name), preset])
+        console.log(`Saved the icon maker camera preset "${name}"`)
+        setSavingPreset(false)
+        setPresetName("")
+    }
+
+    const applyPreset = (preset) => {
+        if (!rigRef.current) return
+        setProjection(preset.projection === "iso" ? "iso" : "perspective")
+        setFov(preset.fov ?? DEFAULT_FOV)
+        setRoll(preset.roll ?? 0)
+        rigRef.current.applyPreset({ ...preset, fov: preset.fov ?? DEFAULT_FOV })
+        moved()
+    }
+
+    const deletePreset = (name) => {
+        savePresets(presets.filter((p) => p.name !== name))
+        console.log(`Deleted the icon maker camera preset "${name}"`)
     }
 
     return (
@@ -373,34 +805,38 @@ export default function IconMaker({
                             border: "1px solid #555",
                             bgcolor: background,
                         }}>
-                        {model && (
-                            <Canvas
-                                flat
-                                dpr={2}
-                                gl={{
-                                    preserveDrawingBuffer: true,
-                                    antialias: true,
-                                }}
-                                camera={{
-                                    fov: DEFAULT_FOV,
-                                    position: [1, 1, 1],
-                                }}>
+                        <Canvas
+                            flat
+                            dpr={2}
+                            gl={{
+                                preserveDrawingBuffer: true,
+                                antialias: true,
+                            }}
+                            camera={{
+                                fov: DEFAULT_FOV,
+                                position: [1, 1, 1],
+                            }}>
+                            {model && (
                                 <IconScene
-                                    onReady={updatePreview}
                                     model={model}
-                                    view={view}
-                                    viewKey={viewKey}
+                                    projection={projection}
                                     fov={fov}
+                                    roll={roll}
                                     shadow={shadow}
                                     background={background}
+                                    framedRef={framedRef}
+                                    rigRef={rigRef}
                                     captureRef={captureRef}
+                                    onReady={updatePreview}
+                                    onCameraChange={setCameraFields}
                                 />
-                                <OrbitControls
-                                    makeDefault
-                                    onEnd={updatePreview}
-                                />
-                            </Canvas>
-                        )}
+                            )}
+                            <OrbitControls
+                                makeDefault
+                                onChange={() => rigRef.current?.report()}
+                                onEnd={updatePreview}
+                            />
+                        </Canvas>
                         {loading && (
                             <Box
                                 sx={{
@@ -415,7 +851,7 @@ export default function IconMaker({
                                 }}>
                                 <CircularProgress />
                                 <Typography variant="body2">
-                                    Generating the model...
+                                    Loading the model...
                                 </Typography>
                             </Box>
                         )}
@@ -456,6 +892,13 @@ export default function IconMaker({
                                     </MenuItem>
                                 ))}
                             </Select>
+                            {generatingAll && (
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary">
+                                    Generating the other instances' models...
+                                </Typography>
+                            )}
                         </Box>
                     )}
 
@@ -484,17 +927,167 @@ export default function IconMaker({
                         </Button>
                     </Box>
 
+                    {projection === "perspective" && (
+                        <Box>
+                            <Typography variant="body2" color="text.secondary">
+                                Lens: {fov}°
+                            </Typography>
+                            <Slider
+                                size="small"
+                                min={10}
+                                max={60}
+                                value={fov}
+                                onChange={(e, value) => setFov(value)}
+                            />
+                        </Box>
+                    )}
+
                     <Box>
                         <Typography variant="body2" color="text.secondary">
-                            Lens: {fov}°
+                            Camera presets
                         </Typography>
-                        <Slider
+                        {presets.length > 0 && (
+                            <Box
+                                sx={{
+                                    display: "flex",
+                                    flexWrap: "wrap",
+                                    gap: 0.5,
+                                    mt: 0.5,
+                                }}>
+                                {presets.map((preset) => (
+                                    <Chip
+                                        key={preset.name}
+                                        label={preset.name}
+                                        size="small"
+                                        variant="outlined"
+                                        disabled={!model}
+                                        onClick={() => applyPreset(preset)}
+                                        onDelete={() =>
+                                            deletePreset(preset.name)
+                                        }
+                                    />
+                                ))}
+                            </Box>
+                        )}
+                        {savingPreset ? (
+                            <Box sx={{ display: "flex", gap: 1, mt: 1 }}>
+                                <TextField
+                                    size="small"
+                                    autoFocus
+                                    label="Preset name"
+                                    value={presetName}
+                                    onChange={(e) =>
+                                        setPresetName(e.target.value)
+                                    }
+                                    onKeyDown={(e) => {
+                                        if (e.key === "Enter") savePreset()
+                                        if (e.key === "Escape") {
+                                            e.stopPropagation()
+                                            setSavingPreset(false)
+                                        }
+                                    }}
+                                    sx={{ flex: 1 }}
+                                />
+                                <Button
+                                    size="small"
+                                    onClick={savePreset}
+                                    disabled={!presetName.trim()}>
+                                    Save
+                                </Button>
+                            </Box>
+                        ) : (
+                            <Button
+                                size="small"
+                                startIcon={<Save />}
+                                onClick={() => setSavingPreset(true)}
+                                disabled={!model}
+                                sx={{ display: "flex", mt: 0.5 }}>
+                                Save camera as preset
+                            </Button>
+                        )}
+                    </Box>
+
+                    <Box>
+                        <Button
                             size="small"
-                            min={10}
-                            max={60}
-                            value={fov}
-                            onChange={(e, value) => setFov(value)}
-                        />
+                            onClick={() => setAdvancedOpen((value) => !value)}
+                            endIcon={advancedOpen ? <ExpandLess /> : <ExpandMore />}>
+                            Advanced camera
+                        </Button>
+                        <Collapse in={advancedOpen}>
+                            <Box
+                                sx={{
+                                    display: "flex",
+                                    flexDirection: "column",
+                                    gap: 1.5,
+                                    mt: 1,
+                                }}>
+                                <ToggleButtonGroup
+                                    size="small"
+                                    exclusive
+                                    fullWidth
+                                    value={projection}
+                                    disabled={!model}
+                                    onChange={(e, value) => pickProjection(value)}>
+                                    <ToggleButton value="perspective">
+                                        Perspective
+                                    </ToggleButton>
+                                    <ToggleButton value="iso">
+                                        Isometric
+                                    </ToggleButton>
+                                </ToggleButtonGroup>
+                                <Box sx={{ display: "flex", gap: 1 }}>
+                                    <NumberField
+                                        label="Yaw °"
+                                        value={cameraFields?.yaw}
+                                        disabled={!model}
+                                        onCommit={(yaw) => moveCamera({ yaw })}
+                                    />
+                                    <NumberField
+                                        label="Pitch °"
+                                        value={cameraFields?.pitch}
+                                        disabled={!model}
+                                        onCommit={(pitch) =>
+                                            moveCamera({ pitch })
+                                        }
+                                    />
+                                    <NumberField
+                                        label="Roll °"
+                                        value={roll}
+                                        disabled={!model}
+                                        onCommit={setRoll}
+                                    />
+                                </Box>
+                                <NumberField
+                                    label={
+                                        projection === "iso"
+                                            ? "Distance (zoom)"
+                                            : "Distance"
+                                    }
+                                    value={cameraFields?.distance}
+                                    disabled={!model}
+                                    onCommit={(distance) =>
+                                        moveCamera({ distance })
+                                    }
+                                />
+                                <PointFields
+                                    label="Camera position"
+                                    point={cameraFields?.position}
+                                    disabled={!model}
+                                    onCommit={(position) =>
+                                        moveCamera({ position })
+                                    }
+                                />
+                                <PointFields
+                                    label="Looks at"
+                                    point={cameraFields?.target}
+                                    disabled={!model}
+                                    onCommit={(target) =>
+                                        moveCamera({ target })
+                                    }
+                                />
+                            </Box>
+                        </Collapse>
                     </Box>
 
                     <FormControlLabel

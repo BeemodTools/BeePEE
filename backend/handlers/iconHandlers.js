@@ -3,6 +3,10 @@
  * src/components/items/IconMaker.jsx), and saves the icon the window renders.
  * The icon is staged like a picked icon file: Save copies it into the package
  * and makes the palette VTF (saveItem.js).
+ *
+ * Each instance's model is kept in .bpee/<item>/icon/models/<instance>/ with
+ * a stamp of the VMF it was made from, so it's only made again when the VMF
+ * changes. The Model Chooser can use these models as the item's model too.
  */
 
 const fs = require("fs")
@@ -18,10 +22,19 @@ const IMAGE_TYPES = {
     ".tga": "image/x-tga",
 }
 
+/** What a kept model was made from (next to its OBJ) */
+const STAMP = "source.json"
+
 /** The icon maker's folder for an item, in the package's staging folder */
 function iconFolder(item) {
     const safeId = item.id.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase()
     return path.join(item.packagePath, ".bpee", safeId, "icon")
+}
+
+/** Where an instance's model is kept */
+function instanceModelFolder(item, instanceKey) {
+    const safeKey = String(instanceKey).replace(/[^a-zA-Z0-9_-]/g, "_")
+    return path.join(iconFolder(item), "models", safeKey)
 }
 
 function findItem(itemId) {
@@ -30,60 +43,193 @@ function findItem(itemId) {
     return item
 }
 
+/** The instance's VMF and its size and date, which the stamp compares */
+function instanceSource(item, instanceKey) {
+    const instance = item.instances?.[instanceKey]
+    if (!instance?.Name) throw new Error("Instance not found")
+    const vmf = Instance.getCleanPath(item.packagePath, instance.Name)
+    let stats = null
+    try {
+        stats = fs.statSync(vmf)
+    } catch {
+        // Missing: converting it says so
+    }
+    return { vmf, size: stats?.size, modified: stats?.mtimeMs }
+}
+
+/**
+ * The kept model of an instance, if it was made from the VMF as it is now
+ * @returns {{folder: string, objPath: string, mtlPath: string} | null}
+ */
+function keptInstanceModel(item, instanceKey) {
+    const folder = instanceModelFolder(item, instanceKey)
+    let stamp
+    try {
+        stamp = JSON.parse(fs.readFileSync(path.join(folder, STAMP), "utf8"))
+    } catch {
+        return null
+    }
+    const source = instanceSource(item, instanceKey)
+    if (
+        source.size === undefined ||
+        stamp.vmf !== source.vmf ||
+        stamp.size !== source.size ||
+        stamp.modified !== source.modified
+    ) {
+        return null
+    }
+    const objPath = path.join(folder, stamp.obj)
+    const mtlPath = path.join(folder, stamp.mtl)
+    if (!fs.existsSync(objPath) || !fs.existsSync(mtlPath)) return null
+    return { folder, objPath, mtlPath }
+}
+
+// Models being made, by folder: asking for one that's being made waits for
+// it instead of making it twice at once
+const making = new Map()
+
+/**
+ * An instance's model: the kept one, or made (and kept) now
+ * @returns {Promise<{folder: string, objPath: string, mtlPath: string, made: boolean}>}
+ */
+function instanceModel(item, instanceKey) {
+    const kept = keptInstanceModel(item, instanceKey)
+    if (kept) return Promise.resolve({ ...kept, made: false })
+    const folder = instanceModelFolder(item, instanceKey)
+    if (!making.has(folder)) {
+        const make = async () => {
+            const source = instanceSource(item, instanceKey)
+            // A clean folder: only this instance's textures
+            fs.rmSync(folder, { recursive: true, force: true })
+            const result = await convertVmfToObj(source.vmf, {
+                outputDir: folder,
+                textureStyle: "cartoon",
+            })
+            fs.writeFileSync(
+                path.join(folder, STAMP),
+                JSON.stringify({
+                    ...source,
+                    obj: path.basename(result.objPath),
+                    mtl: path.basename(result.mtlPath),
+                }),
+            )
+            return {
+                folder,
+                objPath: result.objPath,
+                mtlPath: result.mtlPath,
+                made: true,
+            }
+        }
+        making.set(
+            folder,
+            make().finally(() => making.delete(folder)),
+        )
+    }
+    return making.get(folder)
+}
+
+/**
+ * A model's OBJ and MTL text, and the textures the MTL names as data URLs
+ * (the editor window can't load local files itself)
+ */
+function readModel({ folder, objPath, mtlPath }) {
+    const mtl = fs.readFileSync(mtlPath, "utf8")
+    const textures = {}
+    for (const [, name] of mtl.matchAll(/^map_\w+\s+(.+)$/gm)) {
+        const relative = name.trim()
+        const file = path.join(folder, relative)
+        const type = IMAGE_TYPES[path.extname(file).toLowerCase()]
+        if (textures[relative] || !type) continue
+        if (!fs.existsSync(file)) continue
+        const data = fs.readFileSync(file).toString("base64")
+        textures[relative] = `data:${type};base64,${data}`
+    }
+    return { obj: fs.readFileSync(objPath, "utf8"), mtl, textures }
+}
+
+/** The item's instances with a VMF, in key order */
+function instanceKeys(item) {
+    return Object.entries(item.instances ?? {})
+        .filter(([, instance]) => instance?.Name)
+        .map(([key]) => key)
+        .sort((a, b) => Number(a) - Number(b))
+}
+
 function register(ipcMain) {
-    // The model of one of the item's instances: its OBJ and MTL text, and
-    // the textures the MTL names as data URLs (the editor window can't load
-    // local files itself)
+    // The model of one of the item's instances (kept from before when its
+    // VMF hasn't changed)
     ipcMain.handle(
         "icon-maker-generate-model",
         async (event, { itemId, instanceKey }) => {
             try {
                 const item = findItem(itemId)
-                const instance = item.instances?.[instanceKey]
-                if (!instance?.Name) throw new Error("Instance not found")
-                const vmfPath = Instance.getCleanPath(
-                    item.packagePath,
-                    instance.Name,
-                )
+                const kept = keptInstanceModel(item, instanceKey)
+                if (kept) return { success: true, ...readModel(kept) }
                 return await logger.section(
                     `Making the icon model of "${item.name}" (instance ${instanceKey})`,
-                    async () => {
-                        const outputDir = path.join(iconFolder(item), "model")
-                        // A clean folder: only this instance's textures
-                        fs.rmSync(outputDir, { recursive: true, force: true })
-                        const result = await convertVmfToObj(vmfPath, {
-                            outputDir,
-                            textureStyle: "cartoon",
-                        })
-                        const mtl = fs.readFileSync(result.mtlPath, "utf8")
-                        const textures = {}
-                        for (const [, name] of mtl.matchAll(
-                            /^map_\w+\s+(.+)$/gm,
-                        )) {
-                            const relative = name.trim()
-                            const file = path.join(outputDir, relative)
-                            const type =
-                                IMAGE_TYPES[path.extname(file).toLowerCase()]
-                            if (textures[relative] || !type) continue
-                            if (!fs.existsSync(file)) continue
-                            const data = fs
-                                .readFileSync(file)
-                                .toString("base64")
-                            textures[relative] = `data:${type};base64,${data}`
-                        }
-                        return {
-                            success: true,
-                            obj: fs.readFileSync(result.objPath, "utf8"),
-                            mtl,
-                            textures,
-                        }
-                    },
+                    async () => ({
+                        success: true,
+                        ...readModel(await instanceModel(item, instanceKey)),
+                    }),
                 )
             } catch (error) {
                 return { success: false, error: error.message }
             }
         },
     )
+
+    // Make the models of all the item's instances that aren't kept yet, so
+    // switching instances in the icon maker doesn't wait for one
+    ipcMain.handle("icon-maker-generate-all", async (event, { itemId }) => {
+        try {
+            const item = findItem(itemId)
+            const missing = instanceKeys(item).filter(
+                (key) => !keptInstanceModel(item, key),
+            )
+            const failed = {}
+            if (missing.length > 0) {
+                await logger.section(
+                    `Making the icon models of "${item.name}" (${missing.length} ${missing.length === 1 ? "instance" : "instances"})`,
+                    async () => {
+                        for (const key of missing) {
+                            try {
+                                await instanceModel(item, key)
+                            } catch (error) {
+                                console.warn(
+                                    `Couldn't make the model of instance ${key}: ${error.message}`,
+                                )
+                                failed[key] = error.message
+                            }
+                        }
+                    },
+                )
+            }
+            return {
+                success: true,
+                made: missing.length - Object.keys(failed).length,
+                failed,
+            }
+        } catch (error) {
+            return { success: false, error: error.message }
+        }
+    })
+
+    // The instances whose model the icon maker has made (and still matches
+    // their VMF), for the Model Chooser
+    ipcMain.handle("icon-maker-list-models", async (event, { itemId }) => {
+        try {
+            const item = findItem(itemId)
+            const models = instanceKeys(item)
+                .filter((key) => keptInstanceModel(item, key))
+                .map((key) => ({
+                    instanceKey: key,
+                    name: item.instances[key].Name.split(/[\\/]/).pop(),
+                }))
+            return { success: true, models }
+        } catch (error) {
+            return { success: false, error: error.message }
+        }
+    })
 
     // Save the rendered icon (a PNG) to stage it as the item's icon
     ipcMain.handle("icon-maker-save-icon", async (event, { itemId, png }) => {
@@ -110,4 +256,10 @@ function register(ipcMain) {
     })
 }
 
-module.exports = { register, iconFolder }
+module.exports = {
+    register,
+    iconFolder,
+    instanceModel,
+    keptInstanceModel,
+    findItem,
+}

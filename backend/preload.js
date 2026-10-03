@@ -71,6 +71,12 @@ contextBridge.exposeInMainWorld("package", {
     // Icon maker (src/components/items/IconMaker.jsx)
     generateIconModel: (itemId, instanceKey) =>
         ipcRenderer.invoke("icon-maker-generate-model", { itemId, instanceKey }),
+    // Makes the models of all the item's instances not made yet
+    generateAllIconModels: (itemId) =>
+        ipcRenderer.invoke("icon-maker-generate-all", { itemId }),
+    // The instances whose icon maker model is made: [{ instanceKey, name }]
+    listIconModels: (itemId) =>
+        ipcRenderer.invoke("icon-maker-list-models", { itemId }),
     saveMadeIcon: (itemId, png) =>
         ipcRenderer.invoke("icon-maker-save-icon", { itemId, png }),
     saveItem: (itemData) => ipcRenderer.invoke("save-item", itemData),
