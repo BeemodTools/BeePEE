@@ -17,7 +17,8 @@
                     "Overlays (info_overlay) like signage and indicator lights now show up in generated models, drawn into the textures of the faces they're on",
                     "Decals (infodecal) now show up in generated models",
                     "Displacements with blend materials now show both textures blended like in game",
-                    "Adding or replacing an instance now tells you when it uses files that don't exist on your PC or aren't mounted properly (with what uses them), so you can fix them before players see missing textures"
+                    "Adding or replacing an instance now tells you when it uses files that don't exist on your PC or aren't mounted properly (with what uses them), so you can fix them before players see missing textures",
+                    "Icon maker: Make Icon in the item editor's Info tab generates the item's model and lets you line up the shot (3/4, front, side and top views, rotate, move, zoom, lens, shadow) to make its palette icon on the editor icons' grayish white background"
                 ],
                 "fixed": [
                     "Props (prop_static, prop_dynamic, ...) facing the wrong way in generated models",
