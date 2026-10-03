@@ -1,6 +1,7 @@
 const openEditors = new Map()
 const openSignageEditors = new Map() // Track signage editor windows
 const openModelPreviewWindows = new Map() // Track model preview windows
+const openIconMakers = new Map() // Track icon maker windows (one per item)
 let createItemWindow = null // Track the create item window
 let createPackageWindow = null // Track the create package window
 let signageDesignerWindow = null // Track the signage designer window
@@ -117,6 +118,8 @@ function createItemEditor(item, mainWindow) {
 
     window.on("closed", () => {
         openEditors.delete(item.id)
+        // Its icon maker hands the icons it makes to this window
+        closeIconMakerWindow(item.id)
     })
 
     if (isDev) {
@@ -144,6 +147,80 @@ function sendItemUpdateToEditor(itemId, updatedItem) {
     if (editorWindow && !editorWindow.isDestroyed()) {
         editorWindow.webContents.send("item-updated", updatedItem)
     }
+}
+
+/**
+ * Open an item's icon maker in its own window, or bring it up if it's open
+ * already. The page (src/pages/IconMakerPage.jsx) gets the item from its
+ * address and hands the icon it makes to the item's editor
+ * (sendMadeIconToEditor), so it closes with that editor.
+ * @param {{id: string, name: string}} item
+ */
+function createIconMakerWindow(item) {
+    const existing = openIconMakers.get(item.id)
+    if (existing && !existing.isDestroyed()) {
+        if (existing.isMinimized()) existing.restore()
+        existing.focus()
+        return existing
+    }
+
+    const window = new BrowserWindow({
+        // The 512px view with the settings beside it, and the buttons
+        width: 880,
+        height: 660,
+        useContentSize: true,
+        minWidth: 480,
+        minHeight: 360,
+        title: `Make Icon: ${item.name}`,
+        backgroundColor: "#1e1e1e",
+        webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            preload: path.join(__dirname, "..", "preload.js"),
+        },
+        skipTaskbar: false,
+        minimizable: true,
+        maximizable: true,
+        resizable: true,
+        autoHideMenuBar: true,
+    })
+
+    openIconMakers.set(item.id, window)
+
+    window.on("closed", () => {
+        if (openIconMakers.get(item.id) === window) {
+            openIconMakers.delete(item.id)
+        }
+    })
+
+    const query = { route: "icon-maker", itemId: item.id, itemName: item.name }
+    if (isDev) {
+        window.loadURL(`http://localhost:5173/?${new URLSearchParams(query)}`)
+    } else {
+        const appPath = app.getAppPath()
+        window.loadFile(path.join(appPath, "dist", "index.html"), { query })
+    }
+
+    window.setMenuBarVisibility(false)
+    return window
+}
+
+function closeIconMakerWindow(itemId) {
+    const window = openIconMakers.get(itemId)
+    if (window && !window.isDestroyed()) window.close()
+}
+
+// Hands an icon the icon maker made ({ filePath, fileName }) to the item's
+// editor window, which stages it like a picked icon file (applied on Save).
+// Returns false when that editor isn't open.
+function sendMadeIconToEditor(itemId, icon) {
+    const editorWindow = openEditors.get(itemId)
+    if (editorWindow && !editorWindow.isDestroyed()) {
+        editorWindow.webContents.send("icon-made", icon)
+        editorWindow.focus()
+        return true
+    }
+    return false
 }
 
 /**
@@ -747,18 +824,36 @@ async function closeAllSignageEditorWindows() {
 }
 
 /**
+ * Close all icon maker windows
+ */
+async function closeAllIconMakerWindows() {
+    const closing = [...openIconMakers.values()]
+        .filter((window) => !window.isDestroyed())
+        .map(
+            (window) =>
+                new Promise((resolve) => {
+                    window.once("closed", resolve)
+                    window.close()
+                }),
+        )
+    await Promise.all(closing)
+}
+
+/**
  * Close all windows (editors, model previews, etc.) to release all file handles
  */
 async function closeAllWindows() {
     const isOpen = (window) => window && !window.isDestroyed()
     const open = [
         ...openEditors.values(),
+        ...openIconMakers.values(),
         ...openSignageEditors.values(),
         ...openModelPreviewWindows.values(),
         createItemWindow,
         createPackageWindow,
     ].filter(isOpen).length
     const closeAll = async () => {
+        await closeAllIconMakerWindows()
         await closeAllEditorWindows()
         await closeAllSignageEditorWindows()
         await closeAllModelPreviewWindows()
@@ -970,6 +1065,8 @@ module.exports = {
     createItemEditor,
     sendItemUpdateToEditor,
     openEditors,
+    createIconMakerWindow,
+    sendMadeIconToEditor,
     createSignageEditor,
     sendSignageUpdateToEditor,
     sendStagedDesignToEditor,

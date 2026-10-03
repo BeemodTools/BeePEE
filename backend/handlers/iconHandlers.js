@@ -1,8 +1,10 @@
 /**
  * Icon maker: generates an item's model to take its palette icon from (see
  * src/components/items/IconMaker.jsx), and saves the icon the window renders.
- * The icon is staged like a picked icon file: Save copies it into the package
- * and makes the palette VTF (saveItem.js).
+ * The icon maker has its own window (src/pages/IconMakerPage.jsx), which
+ * hands the icon to the item's editor. There it's staged like a picked icon
+ * file: Save copies it into the package and makes the palette VTF
+ * (saveItem.js).
  *
  * Each instance's model is kept in .bpee/<item>/icon/models/<instance>/ with
  * a stamp of the VMF it was made from, so it's only made again when the VMF
@@ -17,6 +19,10 @@ const { convertVmfToObj, MODEL_FORMAT } = require("../utils/vmf2obj")
 const { parseVmf } = require("../utils/vmfConverter/vmf")
 const { hasDrawableContent } = require("../utils/vmfConverter")
 const { logger } = require("../utils/logger")
+const {
+    createIconMakerWindow,
+    sendMadeIconToEditor,
+} = require("../items/itemEditor")
 
 const IMAGE_TYPES = {
     ".png": "image/png",
@@ -316,6 +322,28 @@ function register(ipcMain) {
             return { success: false, error: error.message }
         }
     })
+
+    // Open the item's icon maker in its own window
+    ipcMain.handle("open-icon-maker", async (event, { itemId }) => {
+        try {
+            createIconMakerWindow(findItem(itemId))
+            return { success: true }
+        } catch (error) {
+            console.error(`Failed to open the icon maker for ${itemId}:`, error)
+            return { success: false, error: error.message }
+        }
+    })
+
+    // Hand a saved icon to the item's editor, which stages it
+    ipcMain.handle(
+        "icon-maker-send-to-editor",
+        async (event, { itemId, filePath, fileName }) => {
+            if (sendMadeIconToEditor(itemId, { filePath, fileName })) {
+                return { success: true }
+            }
+            return { success: false, error: "The item's editor isn't open" }
+        },
+    )
 }
 
 module.exports = {

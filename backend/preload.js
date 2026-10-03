@@ -86,6 +86,23 @@ contextBridge.exposeInMainWorld("package", {
         ipcRenderer.invoke("make-model-from-icon-model", { itemId, instanceKey }),
     saveMadeIcon: (itemId, png) =>
         ipcRenderer.invoke("icon-maker-save-icon", { itemId, png }),
+    // The icon maker's own window, for an item (Info tab > Make Icon)
+    openIconMaker: (itemId) =>
+        ipcRenderer.invoke("open-icon-maker", { itemId }),
+    // Hands an icon saved with saveMadeIcon to the item's editor
+    sendMadeIconToEditor: (itemId, filePath, fileName) =>
+        ipcRenderer.invoke("icon-maker-send-to-editor", {
+            itemId,
+            filePath,
+            fileName,
+        }),
+    // In the item editor: the icons the icon maker makes ({ filePath,
+    // fileName }), to stage. Returns a function that stops listening.
+    onIconMade: (callback) => {
+        const listener = (event, icon) => callback(icon)
+        ipcRenderer.on("icon-made", listener)
+        return () => ipcRenderer.removeListener("icon-made", listener)
+    },
     saveItem: (itemData) => ipcRenderer.invoke("save-item", itemData),
     onItemUpdated: (callback) => {
         // Remove existing listeners to prevent stacking
