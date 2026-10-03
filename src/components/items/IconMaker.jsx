@@ -63,6 +63,14 @@ const PRESETS_SETTING = "iconMakerCameraPresets"
 /** Pitch stops short of straight up or down, where the camera can't aim */
 const MAX_PITCH = 89.9
 
+/** The model's rotation fields: like an instance's angles in Hammer */
+const MODEL_ANGLES = ["Pitch", "Yaw", "Roll"]
+
+/** An angle in degrees as one over -180 up to 180 */
+function wrapAngle(angle) {
+    return angle - 360 * Math.ceil((angle - 180) / 360)
+}
+
 const radians = THREE.MathUtils.degToRad
 const degrees = THREE.MathUtils.radToDeg
 
@@ -201,9 +209,11 @@ function scaleDown(source, size) {
  * rotating, moving and zooming work the same in both.
  * rigRef gets the camera's controls for the window: frame, read, move,
  * presetOf, applyPreset and report.
+ * angles turns the model: Hammer's pitch, yaw and roll, in degrees.
  */
 function IconScene({
     model,
+    angles,
     projection,
     fov,
     roll,
@@ -215,12 +225,23 @@ function IconScene({
     onCameraChange,
 }) {
     const { camera, gl, scene, controls, size } = useThree()
+    const [modelPitch, modelYaw, modelRoll] = angles
     const bounds = useMemo(() => {
-        const box = new THREE.Box3().setFromObject(model)
+        // Turned like an instance with these angles in Hammer, around its
+        // origin. The scene has Hammer's axes with Z up as Y (x, z, -y): yaw
+        // turns around Y, pitch around -Z and roll around X, in Hammer's order.
+        model.rotation.set(
+            radians(modelRoll),
+            radians(modelYaw),
+            -radians(modelPitch),
+            "YZX",
+        )
+        const points = modelPoints(model)
+        const box = new THREE.Box3().setFromArray(points)
         const sphere = box.getBoundingSphere(new THREE.Sphere())
         return {
             sphere,
-            points: modelPoints(model),
+            points,
             // Where the shadow goes: under the middle, at the bottom
             ground: [
                 sphere.center.x,
@@ -228,7 +249,7 @@ function IconScene({
                 sphere.center.z,
             ],
         }
-    }, [model])
+    }, [model, modelPitch, modelYaw, modelRoll])
     const isometricCamera = useMemo(() => new THREE.OrthographicCamera(), [])
 
     // The latest props, for the render loop and the rig
@@ -422,6 +443,17 @@ function IconScene({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [bounds, controls, framedRef])
 
+    // Turning the model lines it up again, from where the camera looks
+    const turnedTo = useRef(angles.join(" "))
+    useEffect(() => {
+        const turn = angles.join(" ")
+        if (turnedTo.current === turn || !controls) return
+        turnedTo.current = turn
+        const now = read()
+        frame(directionOf(now.yaw, now.pitch))
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [modelPitch, modelYaw, modelRoll, controls])
+
     // Fill in the window's camera fields once the scene is up. Also needed
     // after StrictMode's unmount and mount again in development: that
     // cancels the report the first lining up made, and doesn't line up again.
@@ -551,6 +583,9 @@ export default function IconMaker({ item, onClose, onIconMade }) {
     const [projection, setProjection] = useState("perspective")
     const [fov, setFov] = useState(DEFAULT_FOV)
     const [roll, setRoll] = useState(0)
+    // The model's rotation (pitch, yaw, roll), for whichever instance shows
+    const [modelAngles, setModelAngles] = useState([0, 0, 0])
+    const [rotationOpen, setRotationOpen] = useState(false)
     // Where the camera is, for the advanced camera fields
     const [cameraFields, setCameraFields] = useState(null)
     const [advancedOpen, setAdvancedOpen] = useState(false)
@@ -714,8 +749,11 @@ export default function IconMaker({ item, onClose, onIconMade }) {
                 .replace(/^data:image\/png;base64,/, "")
             const result = await window.package.saveMadeIcon(item.id, png)
             if (!result?.success) throw new Error(result?.error ?? "Not saved")
+            const turned = modelAngles.some((angle) => angle !== 0)
+                ? `, model turned ${modelAngles.join(" ")}`
+                : ""
             console.log(
-                `Made a ${size}x${size} icon for "${item.name}" (instance ${instanceKey}, ${projection === "iso" ? "isometric" : "perspective"})`,
+                `Made a ${size}x${size} icon for "${item.name}" (instance ${instanceKey}, ${projection === "iso" ? "isometric" : "perspective"}${turned})`,
             )
             await onIconMade(result.filePath, result.fileName)
             onClose()
@@ -759,6 +797,12 @@ export default function IconMaker({ item, onClose, onIconMade }) {
                 projection: value,
             })
         }
+    }
+
+    const turnModel = (axis, angle) => {
+        setModelAngles((angles) =>
+            angles.map((value, i) => (i === axis ? angle : value)),
+        )
     }
 
     const moveCamera = (changes) => {
@@ -849,6 +893,7 @@ export default function IconMaker({ item, onClose, onIconMade }) {
                                 {model && (
                                     <IconScene
                                         model={model}
+                                        angles={modelAngles}
                                         projection={projection}
                                         fov={fov}
                                         roll={roll}
@@ -1109,6 +1154,92 @@ export default function IconMaker({ item, onClose, onIconMade }) {
                                         items too
                                     </Typography>
                                 )}
+                            </Box>
+
+                            <Box>
+                                <Box sx={HEADING_ROW}>
+                                    <Button
+                                        size="small"
+                                        onClick={() =>
+                                            setRotationOpen((value) => !value)
+                                        }
+                                        endIcon={
+                                            rotationOpen ? (
+                                                <ExpandLess />
+                                            ) : (
+                                                <ExpandMore />
+                                            )
+                                        }>
+                                        Model rotation
+                                    </Button>
+                                    {modelAngles.some(
+                                        (angle) => angle !== 0,
+                                    ) && (
+                                        <Tooltip title="Reset the model's rotation">
+                                            <IconButton
+                                                size="small"
+                                                onClick={() =>
+                                                    setModelAngles([0, 0, 0])
+                                                }>
+                                                <RestartAlt fontSize="small" />
+                                            </IconButton>
+                                        </Tooltip>
+                                    )}
+                                </Box>
+                                <Collapse in={rotationOpen}>
+                                    <Box
+                                        sx={{
+                                            display: "flex",
+                                            flexDirection: "column",
+                                            gap: 1,
+                                            mt: 1,
+                                        }}>
+                                        <Box sx={{ display: "flex", gap: 1 }}>
+                                            {MODEL_ANGLES.map((label, axis) => (
+                                                <NumberField
+                                                    key={label}
+                                                    label={`${label} °`}
+                                                    value={modelAngles[axis]}
+                                                    disabled={!model}
+                                                    onCommit={(angle) =>
+                                                        turnModel(axis, angle)
+                                                    }
+                                                />
+                                            ))}
+                                        </Box>
+                                        <Box sx={{ display: "flex", gap: 1 }}>
+                                            {MODEL_ANGLES.map((label, axis) => (
+                                                <Button
+                                                    key={label}
+                                                    size="small"
+                                                    variant="outlined"
+                                                    disabled={!model}
+                                                    onClick={() =>
+                                                        turnModel(
+                                                            axis,
+                                                            wrapAngle(
+                                                                modelAngles[
+                                                                    axis
+                                                                ] + 90,
+                                                            ),
+                                                        )
+                                                    }
+                                                    sx={{
+                                                        flex: 1,
+                                                        minWidth: 0,
+                                                    }}>
+                                                    +90°
+                                                </Button>
+                                            ))}
+                                        </Box>
+                                        <Typography
+                                            variant="caption"
+                                            color="text.secondary">
+                                            Turns it like an instance's angles
+                                            in Hammer
+                                        </Typography>
+                                    </Box>
+                                </Collapse>
                             </Box>
 
                             <Box>
