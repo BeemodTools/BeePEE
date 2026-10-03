@@ -40,7 +40,8 @@
                     "An item's input delays showing as 0 (and its entities and inputs as empty) when editing the input without Portal 2's FGD, and changing anything then wiping the saved command",
                     "Signage designer: typing text past the edge of the canvas shifting every glyph to the left, and dragging glyphs afterwards not putting them back where they were",
                     "Uploading a PNG for a signage doing nothing (Select existing, clicking a style's tile, Upload image..., and dropping a PNG on a tile) - failures now show an error",
-                    "A signage's uploaded icon disappearing from its editor right after saving, and saving again failing if the picked file was moved"
+                    "A signage's uploaded icon disappearing from its editor right after saving, and saving again failing if the picked file was moved",
+                    "The model preview showing invisible and see-through brushes (like an item's invisible collision) as black surfaces, which could hide most of the model"
                 ],
                 "changed": [
                     "Items with multiple models convert each instance on its own instead of merging them into one map",
@@ -53,7 +54,8 @@
                     "Cleaner logs: plain text without emojis, with longer tasks like Make Model or loading a package shown as a tree of their steps and how long each took",
                     "The logs now also include what happens in BeePEE's windows (item editor, VBSP conditions, signage designer, ...), so bug reports show the whole picture",
                     "Log files stay small: chatty and repeated lines were cut, a log file is capped at 5 MB and only the 10 newest are kept",
-                    "Autopacking tells the original game's files apart from custom ones by looking inside the game's VPKs: the base game and the official DLCs are never packed, neither are BEE2's files, and files an instance uses that don't exist anywhere are reported in the log"
+                    "Autopacking tells the original game's files apart from custom ones by looking inside the game's VPKs: the base game and the official DLCs are never packed, neither are BEE2's files, and files an instance uses that don't exist anywhere are reported in the log",
+                    "The model preview keeps the camera where you put it when switching between an item's models"
                 ]
             }
         },

@@ -2,8 +2,7 @@ import { useEffect, useState, useRef, Suspense, useMemo } from "react"
 import { Canvas, useThree } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import * as THREE from "three"
-import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader"
-import { MTLLoader } from "three/examples/jsm/loaders/MTLLoader"
+import { buildObjModel, disposeModel } from "../utils/objModel"
 
 // Dual grid component: main grid at 128 units, lighter sub-grid at 64 units
 function SimpleGrid({ size = 20480, position = [0, -64, 0] }) {
@@ -27,146 +26,109 @@ function SimpleGrid({ size = 20480, position = [0, -64, 0] }) {
     )
 }
 
-// Custom OBJ model component that handles beep:// URLs
-function Model({ objUrl, mtlUrl, onLoad, onError }) {
+/** Frame the camera on a model: from the front-right, a little above */
+function frameModel(camera, controls, object) {
+    const box = new THREE.Box3().setFromObject(object)
+    const size = box.getSize(new THREE.Vector3())
+    const center = box.getCenter(new THREE.Vector3())
+    const maxSize = Math.max(size.x, size.y, size.z)
+    if (maxSize <= 0) return
+    const fov = camera.fov * (Math.PI / 180)
+    const distance = (maxSize / 2) / Math.tan(fov / 2)
+    const nearDistance = distance * 0.85
+    camera.position.set(
+        center.x + nearDistance,
+        center.y + nearDistance * 0.35,
+        center.z + nearDistance
+    )
+    if (controls) {
+        controls.target.copy(center)
+        controls.update()
+    }
+}
+
+async function fetchText(url) {
+    const response = await fetch(url)
+    if (!response.ok) {
+        throw new Error(`Failed to fetch ${url}: ${response.status}`)
+    }
+    return response.text()
+}
+
+// An OBJ model from beep:// URLs. The camera is framed on the first model
+// only (framedRef), so switching segments keeps the view.
+function Model({ objUrl, mtlUrl, framedRef, onLoad, onError }) {
     const [model, setModel] = useState(null)
     const { camera, controls } = useThree()
+    // The latest of these, without loading the model again when they change
+    const latest = useRef({})
+    latest.current = { camera, controls, onLoad, onError }
 
     useEffect(() => {
         if (!objUrl) return
+        let cancelled = false
 
         const loadModel = async () => {
             try {
-                const objLoader = new OBJLoader()
+                const [obj, mtl] = await Promise.all([
+                    fetchText(objUrl),
+                    mtlUrl
+                        ? fetchText(mtlUrl).catch((mtlError) => {
+                              console.warn(
+                                  `Failed to load MTL ${mtlUrl}, continuing without materials:`,
+                                  mtlError,
+                              )
+                              return null
+                          })
+                        : null,
+                ])
+                if (cancelled) return
 
-                // Load MTL first if available
-                if (mtlUrl) {
-                    try {
-                        const mtlResponse = await fetch(mtlUrl)
-                        if (mtlResponse.ok) {
-                            const mtlText = await mtlResponse.text()
-                            const mtlLoader = new MTLLoader()
-
-                            // Extract base directory for texture paths
-                            const mtlBaseDir = mtlUrl.substring(0, mtlUrl.lastIndexOf("/") + 1)
-                            const materials = mtlLoader.parse(mtlText, mtlBaseDir)
-
-                            // Preload materials and set up texture loader override
-                            materials.preload()
-
-                            // Override texture loader to handle beep:// URLs
-                            const originalLoad = THREE.TextureLoader.prototype.load
-                            THREE.TextureLoader.prototype.load = function (url, onLoad, onProgress, onError) {
-                                let normalizedUrl = url.replace(/\\\\/g, "/").replace(/\\/g, "/")
-                                normalizedUrl = normalizedUrl.replace(/([^:])\/\//g, "$1/")
-
-                                if (normalizedUrl.startsWith("beep://")) {
-                                    const texture = new THREE.Texture()
-                                    fetch(normalizedUrl)
-                                        .then((response) => response.blob())
-                                        .then((blob) => {
-                                            const objectUrl = URL.createObjectURL(blob)
-                                            const img = new Image()
-                                            img.onload = () => {
-                                                texture.image = img
-                                                texture.needsUpdate = true
-                                                URL.revokeObjectURL(objectUrl)
-                                                if (onLoad) onLoad(texture)
-                                            }
-                                            img.onerror = (err) => {
-                                                URL.revokeObjectURL(objectUrl)
-                                                if (onError) onError(err)
-                                            }
-                                            img.src = objectUrl
-                                        })
-                                        .catch((err) => {
-                                            if (onError) onError(err)
-                                        })
-                                    return texture
-                                }
-                                return originalLoad.call(this, normalizedUrl, onLoad, onProgress, onError)
-                            }
-
-                            objLoader.setMaterials(materials)
-                        }
-                    } catch (mtlError) {
-                        console.warn(
-                            `Failed to load MTL ${mtlUrl}, continuing without materials:`,
-                            mtlError,
-                        )
-                    }
-                }
-
-                // Load OBJ
-                const objResponse = await fetch(objUrl)
-                if (!objResponse.ok) {
-                    throw new Error(`Failed to fetch OBJ: ${objResponse.status}`)
-                }
-                const objText = await objResponse.text()
-                const object = objLoader.parse(objText)
-
-                // Apply default material settings
+                // Textures load from next to the MTL. Invisible and see-through
+                // materials (the converter marks them in the MTL) show as such,
+                // instead of as opaque dark surfaces in their textures' color
+                const object = buildObjModel({
+                    obj,
+                    mtl,
+                    baseUrl: mtlUrl
+                        ? mtlUrl.substring(0, mtlUrl.lastIndexOf("/") + 1)
+                        : "",
+                })
                 object.traverse((child) => {
                     if (child.isMesh) {
                         child.castShadow = true
                         child.receiveShadow = true
-                        if (child.material) {
-                            if (Array.isArray(child.material)) {
-                                child.material.forEach((mat) => {
-                                    mat.side = THREE.DoubleSide
-                                })
-                            } else {
-                                child.material.side = THREE.DoubleSide
-                            }
-                        } else {
-                            child.material = new THREE.MeshStandardMaterial({
-                                color: 0xcccccc,
-                                roughness: 0.7,
-                                metalness: 0.1,
-                                side: THREE.DoubleSide,
-                            })
-                        }
                     }
                 })
 
-                // Center camera on model
-                const box = new THREE.Box3().setFromObject(object)
-                const size = box.getSize(new THREE.Vector3())
-                const center = box.getCenter(new THREE.Vector3())
-
-                const maxSize = Math.max(size.x, size.y, size.z)
-                if (maxSize > 0) {
-                    const fov = camera.fov * (Math.PI / 180)
-                    const distance = (maxSize / 2) / Math.tan(fov / 2)
-                    const nearDistance = distance * 0.85
-
-                    camera.position.set(
-                        center.x + nearDistance,
-                        center.y + nearDistance * 0.35,
-                        center.z + nearDistance
-                    )
-                    if (controls) {
-                        controls.target.copy(center)
-                        controls.update()
-                    }
+                const { camera, controls, onLoad } = latest.current
+                if (!framedRef.current) {
+                    frameModel(camera, controls, object)
+                    framedRef.current = true
                 }
-
                 setModel(object)
                 if (onLoad) onLoad()
             } catch (error) {
+                if (cancelled) return
                 console.error(`Failed to load model ${objUrl}:`, error)
-                if (onError) onError(error)
+                latest.current.onError?.(error)
             }
         }
 
         loadModel()
-    }, [objUrl, mtlUrl, camera, controls, onLoad, onError])
+        return () => {
+            cancelled = true
+        }
+    }, [objUrl, mtlUrl, framedRef])
+
+    // Free the model shown before when it's replaced
+    useEffect(() => () => disposeModel(model), [model])
 
     return model ? <primitive object={model} /> : null
 }
 
 // Scene setup component
-function Scene({ objUrl, mtlUrl, onLoad, onError }) {
+function Scene({ objUrl, mtlUrl, framedRef, onLoad, onError }) {
     return (
         <>
             {/* Lighting */}
@@ -184,7 +146,13 @@ function Scene({ objUrl, mtlUrl, onLoad, onError }) {
             <SimpleGrid />
 
             {/* Model */}
-            <Model objUrl={objUrl} mtlUrl={mtlUrl} onLoad={onLoad} onError={onError} />
+            <Model
+                objUrl={objUrl}
+                mtlUrl={mtlUrl}
+                framedRef={framedRef}
+                onLoad={onLoad}
+                onError={onError}
+            />
 
             {/* Controls */}
             <OrbitControls
@@ -252,6 +220,9 @@ export default function ModelPreviewPage() {
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
     const [infoText, setInfoText] = useState("Loading model...")
+    // Whether the camera was framed on a model yet: later models (segments)
+    // keep the view
+    const framedRef = useRef(false)
 
     // Receive model data from main process
     useEffect(() => {
@@ -348,9 +319,9 @@ export default function ModelPreviewPage() {
                 <Suspense fallback={null}>
                     {objUrl && (
                         <Scene
-                            key={`${objUrl}-${currentSegmentIndex}`}
                             objUrl={objUrl}
                             mtlUrl={mtlUrl}
+                            framedRef={framedRef}
                             onLoad={handleLoad}
                             onError={handleError}
                         />

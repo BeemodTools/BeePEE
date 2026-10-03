@@ -20,16 +20,17 @@ function alphaModes(mtl) {
 
 /**
  * A model from OBJ and MTL text, its textures loaded from the URLs given for
- * the paths the MTL names them by (data URLs for local files)
- * @param {{obj: string, mtl?: string, textures?: Object<string, string>}} model
+ * the paths the MTL names them by (data URLs for local files), or from
+ * baseUrl + the path
+ * @param {{obj: string, mtl?: string, textures?: Object<string, string>, baseUrl?: string}} model
  * @returns {THREE.Group}
  */
-export function buildObjModel({ obj, mtl, textures = {} }) {
+export function buildObjModel({ obj, mtl, textures = {}, baseUrl = "" }) {
     const objLoader = new OBJLoader()
     if (mtl) {
         const manager = new THREE.LoadingManager()
         manager.setURLModifier((url) => textures[url] ?? url)
-        const materials = new MTLLoader(manager).parse(mtl, "")
+        const materials = new MTLLoader(manager).parse(mtl, baseUrl)
         materials.preload()
         for (const [name, mode] of alphaModes(mtl)) {
             const material = materials.materials[name]
