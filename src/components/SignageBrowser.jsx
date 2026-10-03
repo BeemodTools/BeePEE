@@ -3,6 +3,7 @@ import { Box, Grid, Tooltip } from "@mui/material"
 import { Image as SignageIcon } from "@mui/icons-material"
 import AddButton from "./AddItem"
 import AddSignageDialog from "./signages/AddSignageDialog"
+import { useGridColumns } from "../utils/useGridColumns"
 
 // Signage icon component with hidden signage handling
 function SignageIconCell({ signage, onEdit }) {
@@ -90,7 +91,8 @@ function SignageIconCell({ signage, onEdit }) {
 
 function SignageBrowser() {
     const [signages, setSignages] = useState([])
-    const [gridSize, setGridSize] = useState({ cols: 12, rows: 8 })
+    // The empty cells fill the last row (and one more)
+    const [gridRef, columns] = useGridColumns()
     const [addDialogOpen, setAddDialogOpen] = useState(false)
 
     useEffect(() => {
@@ -127,22 +129,6 @@ function SignageBrowser() {
         window.package.onPackageClosed(handlePackageClosed)
     }, [])
 
-    useEffect(() => {
-        const updateGridSize = () => {
-            const itemSize = 96
-            const spacing = 8
-            const totalItemSize = itemSize + spacing
-
-            const cols = Math.floor((window.innerWidth - 40) / totalItemSize)
-            const rows = Math.floor((window.innerHeight - 40) / totalItemSize)
-            setGridSize({ cols, rows })
-        }
-
-        updateGridSize()
-        window.addEventListener("resize", updateGridSize)
-        return () => window.removeEventListener("resize", updateGridSize)
-    }, [])
-
     const handleEditSignage = (signageId) => {
         // Find the signage in current state
         const signage = signages.find((s) => s.id === signageId)
@@ -162,14 +148,14 @@ function SignageBrowser() {
         setAddDialogOpen(true)
     }
 
-    const signagesInLastRow = signages.length % gridSize.cols
+    const signagesInLastRow = signages.length % columns
     const placeholdersToCompleteRow =
-        signagesInLastRow === 0 ? 0 : gridSize.cols - signagesInLastRow
-    const totalPlaceholders = placeholdersToCompleteRow + gridSize.cols
+        signagesInLastRow === 0 ? 0 : columns - signagesInLastRow
+    const totalPlaceholders = placeholdersToCompleteRow + columns
 
     return (
         <Box sx={{ width: "100%", height: "100vh" }}>
-            <Grid container spacing={1} sx={{ py: 2, px: 2 }}>
+            <Grid container ref={gridRef} spacing={1} sx={{ py: 2, px: 2 }}>
                 {/* Actual signages */}
                 {signages.map((signage) => (
                     <Grid key={signage.id} size="auto">

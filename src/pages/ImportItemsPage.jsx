@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react"
+import { useGridColumns } from "../utils/useGridColumns"
 import {
     Box,
     Button,
@@ -108,7 +109,8 @@ function ImportItemsPage() {
     const [selected, setSelected] = useState(new Set())
     const [error, setError] = useState(null)
     const [activeTab, setActiveTab] = useState(0)
-    const [gridCols, setGridCols] = useState(7)
+    // The empty cells fill the last row (and one more), like the browsers
+    const [gridRef, gridCols] = useGridColumns(7)
 
     useEffect(() => {
         document.title = "BeePEE - Import from Package"
@@ -141,17 +143,6 @@ function ImportItemsPage() {
         const cancel = () => window.package.importItemsCancel?.()
         window.addEventListener("beforeunload", cancel)
         return () => window.removeEventListener("beforeunload", cancel)
-    }, [])
-
-    // Same placeholder-grid math as the browsers (56px sidebar + padding)
-    useEffect(() => {
-        const update = () =>
-            setGridCols(
-                Math.max(1, Math.floor((window.innerWidth - 56 - 40) / 104)),
-            )
-        update()
-        window.addEventListener("resize", update)
-        return () => window.removeEventListener("resize", update)
     }, [])
 
     const entries = useMemo(() => {
@@ -342,6 +333,7 @@ function ImportItemsPage() {
                                 </Typography>
                             ) : (
                                 <Box
+                                    ref={gridRef}
                                     sx={{
                                         display: "flex",
                                         flexWrap: "wrap",
