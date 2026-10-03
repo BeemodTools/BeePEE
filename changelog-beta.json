@@ -14,7 +14,9 @@
                     "Color tints now show in generated models (render color on props and brush entities, and material tints)",
                     "Models of other entities like turrets (npc_portal_turret_floor) are now included in generated models",
                     "Entities that get their model from the game (security cameras, buttons, chamber doors, cubes, ...) now show up in generated models",
-                    "Overlays (info_overlay) like signage and indicator lights now show up in generated models, drawn into the textures of the faces they're on"
+                    "Overlays (info_overlay) like signage and indicator lights now show up in generated models, drawn into the textures of the faces they're on",
+                    "Decals (infodecal) now show up in generated models",
+                    "Displacements with blend materials now show both textures blended like in game"
                 ],
                 "fixed": [
                     "Props (prop_static, prop_dynamic, ...) facing the wrong way in generated models",
