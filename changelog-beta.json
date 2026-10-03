@@ -26,12 +26,16 @@
                     "Some brush faces missing from generated models",
                     "Make Model saying it completed when the generated model was empty - it now shows an error explaining why",
                     "Content in Portal 2/bee2 not being found during model generation",
-                    "Transparent textures (glass, grates) showing up solid in generated models"
+                    "Transparent textures (glass, grates) showing up solid in generated models",
+                    "Props sometimes getting another model's shape, or going missing, when a model couldn't be decompiled"
                 ],
                 "changed": [
                     "Items with multiple models convert each instance on its own instead of merging them into one map",
                     "Normal maps are no longer copied into item materials (editor models don't use them)",
-                    "Missing textures show as a purple/black checkerboard instead of the faces being left out"
+                    "Missing textures show as a purple/black checkerboard instead of the faces being left out",
+                    "A prop's render color now only colors models made to be recolored (like BEE2's color cubes); other models keep their look",
+                    "New cartoon style for generated models, closer to the editor's own models: flat clean colors, light greys and vivid accents",
+                    "The cartoon style now runs inside BeePEE, so it's much faster and BeePEE no longer ships the Python cartoonify runtime"
                 ]
             }
         },
