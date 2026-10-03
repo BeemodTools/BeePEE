@@ -2034,7 +2034,12 @@ function SignageDesigner({
                             })(),
                             border: dropHint ? `2px solid ${gold}` : "2px dashed #555",
                             boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.12)",
-                            overflow: "hidden",
+                            // clip, not hidden: a hidden box can still be
+                            // scrolled, and typing text past the canvas edge
+                            // scrolled it to keep the caret in view - shifting
+                            // every layer off the grid and throwing off the
+                            // pointer math (toCanvas ignores this box's scroll)
+                            overflow: "clip",
                             flexShrink: 0,
                             m: "auto",
                         }}>

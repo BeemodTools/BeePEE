@@ -37,7 +37,8 @@
                     "Autopacking leaving out custom files put straight into Portal 2/portal2",
                     "Replacing an instance not packing the custom files the new one uses",
                     "Signage designer: Export as PNG and the signage's icon ignoring the texture resolution setting (they were always 512x512)",
-                    "An item's input delays showing as 0 (and its entities and inputs as empty) when editing the input without Portal 2's FGD, and changing anything then wiping the saved command"
+                    "An item's input delays showing as 0 (and its entities and inputs as empty) when editing the input without Portal 2's FGD, and changing anything then wiping the saved command",
+                    "Signage designer: typing text past the edge of the canvas shifting every glyph to the left, and dragging glyphs afterwards not putting them back where they were"
                 ],
                 "changed": [
                     "Items with multiple models convert each instance on its own instead of merging them into one map",
