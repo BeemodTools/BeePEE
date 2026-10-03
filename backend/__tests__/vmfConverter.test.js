@@ -566,7 +566,7 @@ describe("convertVmf: empty results, model entities and tints", () => {
         const result = await convert(
             "tools",
             `world { ${boxSolid(2, [0, 0, 0], [16, 16, 16], "tools/toolsnodraw")} }
-             entity { "id" "4" "classname" "npc_portal_turret_floor" "model" "models/npcs/missing.mdl" }`,
+             entity { "id" "4" "classname" "npc_portal_turret_floor" "ModelIndex" "1" "model" "models/npcs/missing.mdl" }`,
         )
         expect(result.stats.modelEntities).toBe(1)
         expect(
@@ -1201,6 +1201,23 @@ describe("convertVmf: glass and entities hidden at the start", () => {
             path.join(materials, "glass.vmt"),
             `"Refract" { "$refracttint" "{255 255 255}" "$normalmap" "test/glass_normal" "$translucent" "1" }`,
         )
+        // Invisible like BEE2's collision material: no visible pixel
+        fs.writeFileSync(
+            path.join(materials, "alpha.vtf"),
+            buildVtf(4, 4, FORMAT.RGBA8888, Buffer.alloc(4 * 4 * 4, 0)),
+        )
+        fs.writeFileSync(
+            path.join(materials, "invisible.vmt"),
+            `"LightmappedGeneric" { "$basetexture" "test/alpha" "$translucent" "1" }`,
+        )
+        fs.writeFileSync(
+            path.join(materials, "wall.vtf"),
+            buildVtf(4, 4, FORMAT.RGBA8888, Buffer.alloc(4 * 4 * 4, 200)),
+        )
+        fs.writeFileSync(
+            path.join(materials, "faded.vmt"),
+            `"LightmappedGeneric" { "$basetexture" "test/wall" "$alpha" "0" }`,
+        )
     })
 
     afterAll(() => {
@@ -1244,6 +1261,36 @@ describe("convertVmf: glass and entities hidden at the start", () => {
         const raw = zlib.inflateSync(png.subarray(41, 41 + png.readUInt32BE(33)))
         expect(raw[1 + 3]).toBeGreaterThan(0)
         expect(raw[1 + 3]).toBeLessThan(255)
+    })
+
+    test("leaves out faces that can't be seen", async () => {
+        const result = await convert(
+            "invisible",
+            `world { "id" "1" ${boxSolid(2, [0, 0, 0], [16, 16, 16], "test/glass")}
+                ${boxSolid(3, [32, 0, 0], [48, 16, 16], "test/invisible")}
+                ${boxSolid(4, [64, 0, 0], [80, 16, 16], "test/faded")} }`,
+        )
+        expect(result.stats.faces).toBe(6)
+        expect(result.stats.invisibleFaces).toBe(12)
+        const obj = fs.readFileSync(result.objPath, "utf8")
+        expect(obj).not.toContain("test/invisible")
+        expect(obj).not.toContain("test/faded")
+        // Only the shown box's corners
+        expect(obj.match(/^v /gm)).toHaveLength(8)
+    })
+
+    test("picks a floor turret's model and skin like the game", () => {
+        const { entities } = parseVmf(
+            `entity { "id" "1" "classname" "npc_portal_turret_floor" "ModelIndex" "4" "SkinNumber" "1" }
+            entity { "id" "2" "classname" "npc_portal_turret_floor" }
+            entity { "id" "3" "classname" "npc_portal_turret_floor" "ModelIndex" "1" "model" "models/custom/turret.mdl" }`,
+        )
+        const converter = Object.create(VmfConverter.prototype)
+        expect(entities.map((entity) => converter.modelOf(entity))).toEqual([
+            { path: "models/npcs/turret/turret_skeleton.mdl", skin: 1 },
+            { path: "models/npcs/turret/turret.mdl", skin: 0 },
+            { path: "models/custom/turret.mdl", skin: 0 },
+        ])
     })
 
     test("leaves out faces with dev textures, like tool textures", async () => {

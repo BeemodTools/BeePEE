@@ -344,6 +344,9 @@ function logConversion({ warnings, stats }) {
     if (stats.overlays) parts.push(plural(stats.overlays, "overlay"))
     if (stats.decals) parts.push(plural(stats.decals, "decal"))
     if (stats.blends) parts.push(plural(stats.blends, "blended displacement"))
+    if (stats.invisibleFaces) {
+        parts.push(`${plural(stats.invisibleFaces, "invisible face")} left out`)
+    }
     if (stats.hiddenEntities) {
         parts.push(
             `${plural(stats.hiddenEntities, "entity", "entities")} hidden at the start left out`,
@@ -517,7 +520,7 @@ async function convertVmfs(jobs, options) {
  * The version of what the converter makes: kept models (the icon maker's)
  * made by an older one are made again. Raise it when the output changes.
  */
-const MODEL_FORMAT = 3
+const MODEL_FORMAT = 4
 
 module.exports = {
     convertVmfToObj,

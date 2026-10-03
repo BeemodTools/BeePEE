@@ -90,6 +90,17 @@ const BUILT_IN_MODELS = {
     prop_linked_portal_door: "models/props/portal_door.mdl",
 }
 
+/**
+ * npc_portal_turret_floor's model by its "ModelIndex" (1, "Custom Model",
+ * is its "model" keyvalue)
+ */
+const TURRET_MODELS = {
+    0: "models/npcs/turret/turret.mdl",
+    2: "models/npcs/turret/turret_boxed.mdl",
+    3: "models/npcs/turret/turret_backwards.mdl",
+    4: "models/npcs/turret/turret_skeleton.mdl",
+}
+
 /** prop_weighted_cube's model (and skin) by its "CubeType" */
 const CUBE_TYPES = [
     { path: "models/props/metal_box.mdl", skin: 0 }, // storage cube
@@ -133,6 +144,12 @@ function placeholderTexture() {
         rgba: placeholderPixels(),
     }
 }
+
+/**
+ * What registerMaterial gives for a material that can't be seen: its faces
+ * are left out
+ */
+const INVISIBLE = Symbol("invisible material")
 
 /** Folder (under materials/) for the see-through textures of glass */
 const GLASS_FOLDER = "bpee_glass"
@@ -221,6 +238,11 @@ function assertHasGeometry(result, vmfPath) {
     const reasons = []
     if (stats.brushes === 0 && stats.modelEntities === 0) {
         reasons.push("The instance has no brushes and no models to convert.")
+    }
+    if (stats.invisibleFaces > 0) {
+        reasons.push(
+            `${stats.invisibleFaces} face(s) are see-through everywhere (invisible), which are skipped.`,
+        )
     }
     if (stats.toolFaces > 0) {
         reasons.push(
@@ -393,6 +415,8 @@ class VmfConverter {
                 skippedModels: 0,
                 // Entities not drawn because they can't be seen at the start
                 hiddenEntities: 0,
+                // Faces whose material can't be seen (see INVISIBLE)
+                invisibleFaces: 0,
                 placeholderMaterials: 0,
                 overlays: 0,
                 decals: 0,
@@ -478,12 +502,30 @@ class VmfConverter {
         }
 
         const isDisplacementSolid = solid.sides.some((side) => side.dispinfo)
-        const vertices = new VertexList()
-        const materials = new Set()
 
+        // Brush entities can be tinted with their render color
+        const entityTint = parseRenderColor(solid.owner?.get("rendercolor"))
+        const materialNames = new Map()
         for (const side of solid.sides) {
             if (this.isSkippedTool(side)) continue
-            materials.add(side.material.toLowerCase())
+            const material = side.material.toLowerCase()
+            if (materialNames.has(material)) continue
+            materialNames.set(
+                material,
+                await this.registerMaterial(
+                    state,
+                    material,
+                    [`materials/${material}.vmt`],
+                    entityTint,
+                ),
+            )
+        }
+        const invisible = (side) =>
+            materialNames.get(side.material.toLowerCase()) === INVISIBLE
+
+        const vertices = new VertexList()
+        for (const side of solid.sides) {
+            if (this.isSkippedTool(side) || invisible(side)) continue
             if (!side.dispinfo) {
                 if (isDisplacementSolid) continue
                 for (const point of side.points) vertices.add(point)
@@ -505,20 +547,6 @@ class VmfConverter {
         for (const p of vertices.list)
             state.obj.push(`v ${p[0]} ${p[1]} ${p[2]}`)
 
-        // Brush entities can be tinted with their render color
-        const entityTint = parseRenderColor(solid.owner?.get("rendercolor"))
-        const materialNames = new Map()
-        for (const material of materials) {
-            materialNames.set(
-                material,
-                await this.registerMaterial(
-                    state,
-                    material,
-                    [`materials/${material}.vmt`],
-                    entityTint,
-                ),
-            )
-        }
         state.obj.push("")
 
         const faces = []
@@ -526,6 +554,10 @@ class VmfConverter {
             if (!side.dispinfo && isDisplacementSolid) continue
             if (this.isSkippedTool(side)) {
                 state.stats.toolFaces++
+                continue
+            }
+            if (invisible(side)) {
+                state.stats.invisibleFaces++
                 continue
             }
             const material = materialNames.get(side.material.toLowerCase())
@@ -653,6 +685,9 @@ class VmfConverter {
             )
         }
 
+        // Faded out completely ($alpha 0)
+        if (info.alpha === 0 && !info.modulate) return INVISIBLE
+
         const tint = combineTints(info.tint, entityTint)
         const suffix = tint ? `_tint_${tintKey(tint, info.tintMask)}` : ""
         const materialName = `${name}${suffix}`
@@ -669,6 +704,10 @@ class VmfConverter {
                 tintMask: info.tintMask,
             },
         )
+        // See-through everywhere, like BEE2's invisible collision material
+        if (texture.invisible && (info.translucent || info.alphatest)) {
+            return INVISIBLE
+        }
         if (!texture.written) {
             if (!texture.found) {
                 this.warnOnce(
@@ -898,7 +937,10 @@ class VmfConverter {
         return this.textures.get(key)
     }
 
-    /** @returns {Promise<{found: boolean, written?: boolean, width?: number, height?: number}>} */
+    /**
+     * @returns {Promise<{found: boolean, written?: boolean, width?: number, height?: number, invisible?: boolean}>}
+     *   invisible: written with alpha, which is 0 everywhere
+     */
     async writeTexture(outDir, texture, options) {
         const data = await this.resources.read(`materials/${texture}.vtf`)
         if (!data) return { found: false }
@@ -928,7 +970,11 @@ class VmfConverter {
             target,
             encodePng(width, height, pixels, options.withAlpha),
         )
-        return { found: true, written: true, width, height }
+        let invisible = options.withAlpha
+        for (let i = 3; invisible && i < pixels.length; i += 4) {
+            if (pixels[i] !== 0) invisible = false
+        }
+        return { found: true, written: true, width, height, invisible }
     }
 
     // -----------------------------------------------------------------------
@@ -941,9 +987,22 @@ class VmfConverter {
      *   skin for built-in models (the entity's "skin" keyvalue still wins)
      */
     modelOf(entity) {
+        const classname = entity.classname.toLowerCase()
+        if (classname === "npc_portal_turret_floor") {
+            // "ModelIndex" picks the model (normal, box, backwards, skeleton
+            // or the "model" keyvalue) and "SkinNumber" the skin, like the
+            // game does
+            const index = Number.parseInt(entity.get("modelindex") ?? "0", 10)
+            const custom = index === 1 ? entity.get("model") : null
+            return {
+                path: custom
+                    ? normalizeContentPath(custom)
+                    : (TURRET_MODELS[index] ?? TURRET_MODELS[0]),
+                skin: Number.parseInt(entity.get("skinnumber") ?? "0", 10) || 0,
+            }
+        }
         const model = entity.get("model")
         if (model) return { path: normalizeContentPath(model), skin: null }
-        const classname = entity.classname.toLowerCase()
         if (classname === "prop_weighted_cube") {
             const type = Number.parseInt(entity.get("cubetype") ?? "0", 10)
             return CUBE_TYPES[type] ?? CUBE_TYPES[0]
@@ -1094,16 +1153,6 @@ class VmfConverter {
                 }
             }),
         }))
-        for (const tri of triangles)
-            for (const v of tri.verts) vertices.add(v.pos)
-
-        const modelName = path.posix
-            .basename(model.qc.modelName || modelPath)
-            .replace(/\.[^.]*$/, "")
-        state.obj.push("", "", `o ${modelName}`, "")
-        for (const p of vertices.list)
-            state.obj.push(`v ${p[0]} ${p[1]} ${p[2]}`)
-
         const cdmaterials = model.qc.cdmaterials.length
             ? model.qc.cdmaterials
             : [""]
@@ -1138,10 +1187,27 @@ class VmfConverter {
             // Prop faces are kept even without a material (as in VMF2OBJ)
             materialNames.set(material, name ?? material)
         }
+
+        // Triangles whose material can't be seen are left out
+        const shownTriangles = triangles.filter((tri) => {
+            if (materialNames.get(tri.material) !== INVISIBLE) return true
+            state.stats.invisibleFaces++
+            return false
+        })
+        for (const tri of shownTriangles)
+            for (const v of tri.verts) vertices.add(v.pos)
+
+        const modelName = path.posix
+            .basename(model.qc.modelName || modelPath)
+            .replace(/\.[^.]*$/, "")
+        state.obj.push("", "", `o ${modelName}`, "")
+        for (const p of vertices.list)
+            state.obj.push(`v ${p[0]} ${p[1]} ${p[2]}`)
+
         state.obj.push("")
 
         const faces = []
-        for (const tri of triangles) {
+        for (const tri of shownTriangles) {
             let text = ""
             tri.verts.forEach((v, i) => {
                 state.obj.push(`vt ${v.uv[0]} ${v.uv[1]}`)
@@ -1534,4 +1600,23 @@ async function convertVmf(vmfPath, outputBase, options = {}) {
     }
 }
 
-module.exports = { VmfConverter, convertVmf, assertHasGeometry }
+/**
+ * Whether a parsed VMF (parseVmf) has anything to draw: brushes or model
+ * entities that can be seen at the start. Their textures aren't checked, so
+ * only tool-textured brushes still count.
+ */
+function hasDrawableContent(vmf) {
+    if (vmf.solids.some((solid) => !hiddenAtStart(solid.owner))) return true
+    // isModelEntity and modelOf don't use a session (no init needed)
+    const converter = Object.create(VmfConverter.prototype)
+    return vmf.entities.some(
+        (entity) => converter.isModelEntity(entity) && !hiddenAtStart(entity),
+    )
+}
+
+module.exports = {
+    VmfConverter,
+    convertVmf,
+    assertHasGeometry,
+    hasDrawableContent,
+}
