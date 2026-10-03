@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import {
     Box,
     Typography,
@@ -157,6 +157,18 @@ function AlignIcon({ type, gold, bar }) {
 // like "1" jump to the min (24) before you can finish typing "1024". Instead
 // we hold an uncommitted draft string while focused and only commit - firing
 // onChange - on blur or Enter. Escape cancels back to the current value.
+/**
+ * A layer's artwork. Its markup goes in as innerHTML, which React sets again
+ * whenever the { __html } object is a new one: the object is kept while the
+ * markup is the same. Setting it on every render replaced the shapes under
+ * the pointer between a click's press and release, so a click (and double-
+ * clicking a text layer to edit it) didn't register on them.
+ */
+function LayerArt({ markup, ...props }) {
+    const html = useMemo(() => ({ __html: markup }), [markup])
+    return <svg {...props} dangerouslySetInnerHTML={html} />
+}
+
 function NumField({ label, value, min, max, onChange }) {
     const [draft, setDraft] = useState(null)
     const commit = () => {
@@ -2102,7 +2114,12 @@ function SignageDesigner({
                                     {/* Flip only the artwork - the selection
                                         outline and resize handles stay in
                                         data space so drag math is unaffected */}
-                                    <svg
+                                    <LayerArt
+                                        markup={
+                                            hasEraserPart(l)
+                                                ? eraserGhostSvg(l, `cv-${l.id}`)
+                                                : layerInnerSvg(l, `cv-${l.id}`)
+                                        }
                                         width={l.w * s}
                                         height={l.h * s}
                                         viewBox={layerVb(l)}
@@ -2118,11 +2135,6 @@ function SignageDesigner({
                                                     : (l.opacity ?? 1),
                                             transform: `scale(${l.flipH ? -1 : 1}, ${l.flipV ? -1 : 1})`,
                                             transformOrigin: "center center",
-                                        }}
-                                        dangerouslySetInnerHTML={{
-                                            __html: hasEraserPart(l)
-                                                ? eraserGhostSvg(l, `cv-${l.id}`)
-                                                : layerInnerSvg(l, `cv-${l.id}`),
                                         }}
                                     />
                                     {/* In-place text editor - lives inside

@@ -41,6 +41,7 @@
                     "Signage designer: Export as PNG and the signage's icon ignoring the texture resolution setting (they were always 512x512)",
                     "An item's input delays showing as 0 (and its entities and inputs as empty) when editing the input without Portal 2's FGD, and changing anything then wiping the saved command",
                     "Signage designer: typing text past the edge of the canvas shifting every glyph to the left, and dragging glyphs afterwards not putting them back where they were",
+                    "Signage designer: double-clicking a text glyph's letters not starting to edit its text",
                     "Uploading a PNG for a signage doing nothing (Select existing, clicking a style's tile, Upload image..., and dropping a PNG on a tile) - failures now show an error",
                     "A signage's uploaded icon disappearing from its editor right after saving, and saving again failing if the picked file was moved",
                     "The model preview showing invisible and see-through brushes (like an item's invisible collision) as black surfaces, which could hide most of the model",
