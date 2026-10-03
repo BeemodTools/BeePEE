@@ -1,12 +1,67 @@
 const fs = require("fs")
 const path = require("path")
-const vdf = require("vdf-parser")
-const { logger } = require("./logger")
+const { parseKeyValues } = require("./vmfConverter/keyvalues")
+
+/** Leading characters that set how a sound plays: ")ambient/x.wav" */
+const SOUND_CHARS = /^[*#@><^)}$!?&~]+/
+
+const SOUND_FILE = /\.(wav|mp3|ogg)$/i
+
+/** Keys that name a sound: a sound file or a soundscript entry */
+const SOUND_KEYS = new Set([
+    "noise1",
+    "noise2",
+    "startsound",
+    "stopsound",
+    "movesound",
+    "startclosesound",
+    "closesound",
+    "soundopenoverride",
+    "soundcloseoverride",
+    "soundmoveoverride",
+    "soundlockedoverride",
+    "soundunlockedoverride",
+    "sound",
+    "soundfile",
+    "soundname",
+])
+
+/** Entities whose "message" is a sound (for others it's text) */
+const SOUND_MESSAGE_CLASSES = new Set(["ambient_generic", "func_rotating"])
+
+/** Keys that name a material: overlays, decals, beams, ropes, ... */
+const MATERIAL_KEYS = new Set([
+    "material",
+    "texture",
+    "texturename",
+    "ropematerial",
+    "spritename",
+    "smokematerial",
+    "overlaymaterial",
+    "dustmaterial",
+])
+
+/** Materials every game has, never packed */
+const SKIPPED_MATERIALS = ["tools/", "dev/", "skybox/"]
+
+/** A keyvalue's value, or null when empty or an instance variable ("$skin") */
+function cleanValue(value) {
+    const text = String(value ?? "").trim()
+    return text && !text.startsWith("$") ? text : null
+}
+
+const slashes = (value) => value.replace(/\\/g, "/").toLowerCase()
 
 /**
- * Extract assets (models, materials, sounds, scripts) from a VMF file
+ * Extract the assets a VMF uses: the models, materials, sounds and scripts its
+ * entities and brushes name
  * @param {string} vmfPath - Path to the VMF file
- * @returns {Object} Object containing arrays of assets by type
+ * @returns {{MODEL: string[], MATERIAL: string[], SOUND: string[], SOUNDSCRIPT: string[], SCRIPT: string[]}}
+ *   MODEL: model paths ("models/props/x.mdl"). MATERIAL: material paths
+ *   under materials/, without extension ("metal/black_wall_metal_002c").
+ *   SOUND: sound files under sound/ ("ambient/hum.wav"). SOUNDSCRIPT: names
+ *   of soundscript entries ("portal.button_down"). SCRIPT: script files
+ *   under scripts/ ("vscripts/bee2/foo.nut").
  */
 function extractAssetsFromVMF(vmfPath) {
     if (!fs.existsSync(vmfPath)) {
@@ -14,329 +69,137 @@ function extractAssetsFromVMF(vmfPath) {
     }
 
     try {
-        const content = fs.readFileSync(vmfPath, "utf-8")
-        const vmfData = vdf.parse(content)
-
-        const assets = {
-            MODEL: [],
-            MATERIAL: [],
-            SOUND: [],
-            SCRIPT: [],
+        const nodes = parseKeyValues(fs.readFileSync(vmfPath, "utf-8"))
+        const found = {
+            MODEL: new Set(),
+            MATERIAL: new Set(),
+            SOUND: new Set(),
+            SOUNDSCRIPT: new Set(),
+            SCRIPT: new Set(),
         }
 
-        // Recursive function to find entities and extract their assets
-        const extractAssetsRecursive = (obj, parentKey = "") => {
-            if (typeof obj !== "object" || obj === null) return
-
-            // Check if this is an entity with asset properties
-            if (obj.classname) {
-                // Extract model paths
-                if (obj.model) {
-                    assets.MODEL.push(obj.model.toLowerCase())
-                }
-
-                // Extract material paths from various properties
-                const materialProps = ["material", "texture", "skin", "overlay"]
-                for (const prop of materialProps) {
-                    if (obj[prop]) {
-                        assets.MATERIAL.push(obj[prop].toLowerCase())
-                    }
-                }
-
-                // Extract sound paths
-                const soundProps = [
-                    "sound",
-                    "soundfile",
-                    "soundname",
-                    "ambient_generic",
-                ]
-                for (const prop of soundProps) {
-                    if (obj[prop]) {
-                        assets.SOUND.push(obj[prop].toLowerCase())
-                    }
-                }
-
-                // Extract script paths
-                if (obj.scriptfile) {
-                    assets.SCRIPT.push(obj.scriptfile.toLowerCase())
-                }
-            }
-
-            // Extract materials from brush sides (key is "side" in VMF structure)
-            if (parentKey === "side" || obj.material) {
-                if (obj.material && typeof obj.material === "string") {
-                    assets.MATERIAL.push(obj.material.toLowerCase())
-                }
-            }
-
-            // Recursively search all properties
-            for (const [key, value] of Object.entries(obj)) {
-                if (typeof value === "object" && value !== null) {
-                    extractAssetsRecursive(value, key)
-                }
+        const addMaterial = (value) => {
+            const material = slashes(value)
+                .replace(/^materials\//, "")
+                .replace(/\.(vmt|spr)$/, "")
+            // func_breakable's "material" is a number: glass, wood, metal, ...
+            if (/^\d+$/.test(material)) return
+            if (
+                !SKIPPED_MATERIALS.some((prefix) => material.startsWith(prefix))
+            ) {
+                found.MATERIAL.add(material)
             }
         }
+        const addModel = (value) => {
+            const model = slashes(value)
+            // Brush entity models ("*3") are in the map itself, and sprites
+            // (env_sprite, env_glow) are materials
+            if (model.startsWith("*")) return
+            if (/\.(vmt|spr)$/.test(model)) addMaterial(model)
+            else found.MODEL.add(model)
+        }
+        const addSound = (value) => {
+            const file = slashes(value).replace(SOUND_CHARS, "")
+            if (SOUND_FILE.test(file)) {
+                found.SOUND.add(file.replace(/^sound\//, ""))
+            } else if (!/^\d+$/.test(file)) {
+                // Not a number (some sound keys are a choice of sounds)
+                found.SOUNDSCRIPT.add(file)
+            }
+        }
+        // VScripts are named from scripts/vscripts/, ".nut" optional
+        const addVScript = (value) => {
+            let script = slashes(value)
+                .replace(/^\/+/, "")
+                .replace(/^scripts\/vscripts\//, "")
+            if (!path.posix.extname(script)) script += ".nut"
+            found.SCRIPT.add(`vscripts/${script}`)
+        }
 
-        // Start recursive search from root
-        extractAssetsRecursive(vmfData)
-
-        // Remove duplicates and filter out empty values
-        for (const assetType in assets) {
-            assets[assetType] = [...new Set(assets[assetType])].filter(
-                (asset) => asset && asset.trim(),
+        const addEntity = (block) => {
+            const leaves = block.children.filter(
+                (c) => c.children === undefined,
             )
+            const classname = slashes(
+                leaves.find((c) => c.key.toLowerCase() === "classname")
+                    ?.value ?? "",
+            )
+            for (const { key, value } of leaves) {
+                const name = key.toLowerCase()
+                const text = cleanValue(value)
+                if (!text) continue
+                if (name === "model") {
+                    addModel(text)
+                } else if (
+                    MATERIAL_KEYS.has(name) ||
+                    /^overlayname\d+$/.test(name)
+                ) {
+                    // env_screenoverlay: overlayname1, overlayname2, ...
+                    addMaterial(text)
+                } else if (name === "vscripts") {
+                    for (const script of text.split(/\s+/)) addVScript(script)
+                } else if (name === "scriptfile") {
+                    found.SCRIPT.add(slashes(text).replace(/^scripts\//, ""))
+                } else if (
+                    SOUND_KEYS.has(name) ||
+                    (name === "message" &&
+                        SOUND_MESSAGE_CLASSES.has(classname)) ||
+                    SOUND_FILE.test(text)
+                ) {
+                    addSound(text)
+                }
+            }
+
+            // Scripts run by outputs: "target<ESC>RunScriptFile<ESC>file.nut..."
+            const connections = block.children.find(
+                (c) => c.children && c.key.toLowerCase() === "connections",
+            )
+            for (const output of connections?.children ?? []) {
+                if (output.children !== undefined) continue
+                const parts = output.value.split(
+                    output.value.includes("\x1b") ? "\x1b" : ",",
+                )
+                const param = cleanValue(parts[2])
+                if (
+                    parts[1]?.trim().toLowerCase() === "runscriptfile" &&
+                    param
+                ) {
+                    addVScript(param)
+                }
+            }
         }
 
-        // Filter out tool textures and common engine materials from the check
-        assets.MATERIAL = assets.MATERIAL.filter((mat) => {
-            // Skip tool textures (these are always available)
-            if (mat.startsWith("tools/")) return false
-            // Skip dev textures
-            if (mat.startsWith("dev/")) return false
-            // Skip skybox textures (handled specially)
-            if (mat.startsWith("skybox/")) return false
-            return true
-        })
+        const walk = (blocks) => {
+            for (const block of blocks) {
+                if (!block.children) continue
+                const kind = block.key.toLowerCase()
+                if (kind === "side") {
+                    // Brush faces
+                    const material = block.children.find(
+                        (c) =>
+                            c.children === undefined &&
+                            c.key.toLowerCase() === "material",
+                    )
+                    const value = cleanValue(material?.value)
+                    if (value) addMaterial(value)
+                } else if (kind === "entity" || kind === "world") {
+                    addEntity(block)
+                }
+                walk(block.children)
+            }
+        }
+        walk(nodes)
 
-        return assets
+        return Object.fromEntries(
+            Object.entries(found).map(([type, values]) => [
+                type,
+                [...values].sort(),
+            ]),
+        )
     } catch (error) {
         console.error(`Failed to extract the assets of ${vmfPath}:`, error)
         throw error
     }
 }
 
-/**
- * Find dependent materials for models
- * @param {string} modelPath - Path to the model file
- * @param {string} portal2Dir - Portal 2 directory path
- * @returns {Array} Array of dependent material paths
- */
-function findDependentMaterials(modelPath, portal2Dir) {
-    const dependentMaterials = []
-
-    try {
-        // For now, we'll implement a basic version that looks for common material patterns
-        // This could be enhanced to actually parse MDL files and extract material references
-
-        // Extract model name without extension
-        const modelName = path.basename(modelPath, ".mdl")
-
-        // Common material patterns for models
-        const commonMaterialPatterns = [
-            `materials/models/${modelName}.vmt`,
-            `materials/models/props/${modelName}.vmt`,
-            `materials/models/props_map_editor/${modelName}.vmt`,
-        ]
-
-        for (const materialPattern of commonMaterialPatterns) {
-            const fullPath = path.join(portal2Dir, materialPattern)
-            if (fs.existsSync(fullPath)) {
-                dependentMaterials.push(materialPattern)
-            }
-        }
-    } catch (error) {
-        console.error(`Failed to find the materials of ${modelPath}:`, error)
-    }
-
-    return dependentMaterials
-}
-
-/**
- * Check if an asset exists in Portal 2 search paths (from gameinfo.txt)
- * @param {string} assetPath - Asset path to check
- * @param {string} portal2Dir - Portal 2 directory path
- * @param {Array} searchDirs - Portal 2 search directories from gameinfo.txt
- * @returns {boolean} True if asset exists in Portal 2 search paths
- */
-function assetExistsInPortal2(assetPath, portal2Dir, searchDirs) {
-    try {
-        // Determine file extensions based on asset type
-        let extensions = []
-        let baseAssetPath = assetPath
-        
-        if (assetPath.startsWith("materials/")) {
-            extensions = [".vtf", ".vmt"]
-        } else if (assetPath.startsWith("models/")) {
-            // Strip .mdl extension from the path before adding extensions
-            baseAssetPath = assetPath.replace(".mdl", "")
-            extensions = [".mdl", ".phy", ".vvd", ".dx90.vtx"]
-        } else if (assetPath.startsWith("scripts/")) {
-            extensions = [".nut"]
-        } else if (assetPath.startsWith("messages/")) {
-            const ext = path.extname(assetPath)
-            extensions = [ext]
-        } else if (assetPath.startsWith("sounds/")) {
-            extensions = [".wav", ".mp3"]
-        }
-        
-        // Check if asset exists in Portal 2 search paths
-        // If it exists here, Portal 2 can find it, so we should pack it
-        for (const searchDir of searchDirs) {
-            // Skip gameinfo_path and bee2 paths as they're not actual asset locations
-            if (searchDir === "|gameinfo_path|." || searchDir.includes("bee2")) {
-                continue
-            }
-
-            for (const ext of extensions) {
-                const fullPath = path.join(portal2Dir, searchDir, baseAssetPath + ext)
-
-                if (fs.existsSync(fullPath)) {
-                    logger.debug(`Found ${baseAssetPath + ext} in ${searchDir}`)
-                    return true // Asset exists in Portal 2 search paths - PACK IT!
-                }
-            }
-        }
-
-        logger.debug(`Did not find ${assetPath} in Portal 2's search paths`)
-        return false // Asset doesn't exist in Portal 2 search paths - DON'T PACK IT!
-    } catch (error) {
-        console.error(
-            `Failed to check whether ${assetPath} is in Portal 2's search paths:`,
-            error,
-        )
-        return false // Assume it doesn't exist if we can't check
-    }
-}
-
-/**
- * Get base assets list (now uses dynamic VPK checking instead of hardcoded list)
- * @returns {Promise<Array>} Empty array since we now check dynamically
- */
-async function getBaseAssets() {
-    return [] // Return empty array since we check dynamically now
-}
-
-/**
- * Find Portal 2 search directories from gameinfo.txt
- * @param {string} portal2Dir - Portal 2 directory path
- * @returns {Array} Array of search directories
- */
-function getPortal2SearchDirs(portal2Dir) {
-    const searchDirs = []
-
-    try {
-        const gameinfoPath = path.join(portal2Dir, "portal2", "gameinfo.txt")
-        if (!fs.existsSync(gameinfoPath)) {
-            return searchDirs
-        }
-
-        const content = fs.readFileSync(gameinfoPath, "utf-8")
-
-        // Find Game entries
-        const gameMatches = content.match(/Game\s+("[^"]+"|\w+)/g)
-        if (gameMatches) {
-            for (const match of gameMatches) {
-                const dir = match.replace(/Game\s+/, "").replace(/"/g, "")
-                searchDirs.push(dir)
-            }
-        }
-
-        // Find portal2_dlc folders
-        let count = 1
-        while (true) {
-            const dlcPath = path.join(portal2Dir, `portal2_dlc${count}`)
-            if (!fs.existsSync(dlcPath)) {
-                break
-            }
-            searchDirs.push(`portal2_dlc${count}`)
-            count++
-        }
-    } catch (error) {
-        console.error(
-            "Failed to read Portal 2's search paths from gameinfo.txt:",
-            error,
-        )
-    }
-
-    return searchDirs
-}
-
-/**
- * Copy asset from Portal 2 to package resources
- * @param {string} assetPath - Asset path in Portal 2
- * @param {string} portal2Dir - Portal 2 directory path
- * @param {string} packageDir - Package directory path
- * @param {Array} searchDirs - Portal 2 search directories
- * @returns {Array} Array of copied file paths
- */
-function copyAssetToPackage(assetPath, portal2Dir, packageDir, searchDirs) {
-    const copiedFiles = []
-
-    try {
-        // Determine file extensions based on asset type
-        let extensions = []
-        let baseAssetPath = assetPath
-        
-        if (assetPath.startsWith("materials/")) {
-            extensions = [".vtf", ".vmt"]
-        } else if (assetPath.startsWith("models/")) {
-            // Strip .mdl extension from the path before adding extensions
-            baseAssetPath = assetPath.replace(".mdl", "")
-            extensions = [".mdl", ".phy", ".vvd", ".dx90.vtx"]
-        } else if (assetPath.startsWith("scripts/")) {
-            extensions = [".nut"]
-        } else if (assetPath.startsWith("messages/")) {
-            const ext = path.extname(assetPath)
-            extensions = [ext]
-        } else if (assetPath.startsWith("sounds/")) {
-            extensions = [".wav", ".mp3"]
-        }
-
-        // Search for the asset in Portal 2 directories
-        for (const searchDir of searchDirs) {
-            // Skip gameinfo_path and bee2 paths as they're not actual asset locations
-            if (searchDir === "|gameinfo_path|." || searchDir.includes("bee2")) {
-                continue
-            }
-            
-            for (const ext of extensions) {
-                const sourcePath = path.join(
-                    portal2Dir,
-                    searchDir,
-                    baseAssetPath + ext,
-                )
-
-                if (fs.existsSync(sourcePath)) {
-                    // Create target path using just the asset path, not the full Portal 2 structure
-                    const targetPath = path.join(
-                        packageDir,
-                        "resources",
-                        baseAssetPath + ext,
-                    )
-
-                    // Create target directory if it doesn't exist
-                    const targetDir = path.dirname(targetPath)
-                    if (!fs.existsSync(targetDir)) {
-                        fs.mkdirSync(targetDir, { recursive: true })
-                    }
-
-                    // Copy file if target doesn't exist
-                    if (!fs.existsSync(targetPath)) {
-                        fs.copyFileSync(sourcePath, targetPath)
-                        copiedFiles.push(targetPath)
-                        logger.debug(
-                            `Copied ${baseAssetPath + ext} from ${searchDir}`,
-                        )
-                    } else {
-                        logger.debug(
-                            `Skipped ${baseAssetPath + ext}, the package already has it`,
-                        )
-                    }
-                }
-            }
-        }
-    } catch (error) {
-        console.error(`Failed to copy ${assetPath} into the package:`, error)
-    }
-
-    return copiedFiles
-}
-
-module.exports = {
-    extractAssetsFromVMF,
-    findDependentMaterials,
-    getBaseAssets,
-    getPortal2SearchDirs,
-    copyAssetToPackage,
-    assetExistsInPortal2,
-}
+module.exports = { extractAssetsFromVMF }

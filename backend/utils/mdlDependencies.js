@@ -382,16 +382,35 @@ function gameSearchPaths(portal2Root) {
 
 const indexes = new Map()
 
-/** The file index for a set of search paths, built once and reused for a while */
-function getIndex(searchPaths) {
-    const key = searchPaths.join("|").toLowerCase()
+/**
+ * The file index for a set of search paths, built once and reused for a while
+ * @param {string[]} searchPaths
+ * @param {string[]} [folders] - The subfolders of loose folders to index
+ *   (VPKs are indexed whole)
+ */
+function getIndex(searchPaths, folders = ["materials", "models"]) {
+    const key = `${searchPaths.join("|")}|${folders.join(",")}`.toLowerCase()
     let entry = indexes.get(key)
     if (!entry || Date.now() - entry.used > INDEX_TTL_MS) {
-        entry = { index: buildResourceIndex(searchPaths) }
+        entry = { index: buildResourceIndex(searchPaths, undefined, folders) }
         indexes.set(key, entry)
     }
     entry.used = Date.now()
     return entry.index
+}
+
+/**
+ * The game's file index: its VPKs, then its folders (see gameSearchPaths)
+ * and `extraPaths`, with loose sound and script files too
+ * @param {string} portal2Root
+ * @param {string[]} [extraPaths] - Searched after the game's own
+ * @returns {Promise<import("./vmfConverter/resources").ResourceIndex>}
+ */
+function gameIndex(portal2Root, extraPaths = []) {
+    return getIndex(
+        [...gameSearchPaths(portal2Root), ...extraPaths],
+        ["materials", "models", "sound", "scripts"],
+    )
 }
 
 const readInt = (buffer, offset) =>
@@ -533,6 +552,70 @@ async function materialParams(index, file, parents, depth = 0) {
 }
 
 /**
+ * Collects what models and materials need, with srctools' rules: a model's
+ * files, materials, included models and gibs; a material's textures and the
+ * materials it includes or names
+ * @param {Object} index - A file index (see getIndex)
+ */
+function dependencyCollector(index) {
+    const materials = new Set()
+    const models = new Set()
+    const visitedMaterials = new Set()
+
+    const addMaterial = async (file) => {
+        if (!file || visitedMaterials.has(file)) return
+        visitedMaterials.add(file)
+        materials.add(file)
+        const parents = []
+        const params = await materialParams(index, file, parents)
+        for (const parent of parents) await addMaterial(parent)
+        for (const [rawKey, rawValue] of params ?? []) {
+            // Conditional parameters ("gpu>=2?$basetexture") count too
+            const key = rawKey.slice(rawKey.indexOf("?") + 1).replace(/^\$/, "")
+            const value = String(rawValue).toLowerCase()
+            if (TEXTURE_PARAMS.has(key)) {
+                if (value === "env_cubemap" || value.startsWith("_rt_"))
+                    continue
+                const texture = texturePath(value)
+                if (texture) materials.add(texture)
+            } else if (MATERIAL_PARAMS.has(key)) {
+                await addMaterial(materialPath(value))
+            }
+        }
+    }
+
+    const addModel = async (file) => {
+        if (!file || models.has(file)) return
+        models.add(file)
+        const data = await index.read(file)
+        if (!data) return
+        const stem = file.slice(0, -".mdl".length)
+        for (const extension of MODEL_FILE_EXTENSIONS) {
+            if (index.has(stem + extension)) models.add(stem + extension)
+        }
+        const mdl = readMdl(data)
+        for (const name of mdl.textures) {
+            for (const folder of mdl.cdmaterials) {
+                const vmt = materialPath(`${folder}${name}`)
+                if (vmt && index.has(vmt)) {
+                    await addMaterial(vmt)
+                    break
+                }
+            }
+        }
+        for (const include of mdl.includes) await addModel(modelPath(include))
+        const phy = await index.read(file.replace(/\.mdl$/, ".phy"))
+        if (phy) {
+            for (const gib of readPhyBreakModels(phy)) {
+                await addModel(modelPath(gib))
+            }
+        }
+    }
+
+    return { materials, models, addMaterial, addModel }
+}
+
+/**
  * Find the files a model needs
  * @param {string} mdlPath - Model path, like "models/props/cube.mdl" (folder and extension optional)
  * @param {{portal2Root: string, searchPaths?: string[]}} options - Extra
@@ -547,63 +630,7 @@ async function findMdlDependencies(mdlPath, options) {
             ...gameSearchPaths(options.portal2Root),
             ...(options.searchPaths ?? []),
         ])
-        const materials = new Set()
-        const models = new Set()
-        const visitedMaterials = new Set()
-
-        const addMaterial = async (file) => {
-            if (!file || visitedMaterials.has(file)) return
-            visitedMaterials.add(file)
-            materials.add(file)
-            const parents = []
-            const params = await materialParams(index, file, parents)
-            for (const parent of parents) await addMaterial(parent)
-            for (const [rawKey, rawValue] of params ?? []) {
-                // Conditional parameters ("gpu>=2?$basetexture") count too
-                const key = rawKey
-                    .slice(rawKey.indexOf("?") + 1)
-                    .replace(/^\$/, "")
-                const value = String(rawValue).toLowerCase()
-                if (TEXTURE_PARAMS.has(key)) {
-                    if (value === "env_cubemap" || value.startsWith("_rt_"))
-                        continue
-                    const texture = texturePath(value)
-                    if (texture) materials.add(texture)
-                } else if (MATERIAL_PARAMS.has(key)) {
-                    await addMaterial(materialPath(value))
-                }
-            }
-        }
-
-        const addModel = async (file) => {
-            if (!file || models.has(file)) return
-            models.add(file)
-            const data = await index.read(file)
-            if (!data) return
-            const stem = file.slice(0, -".mdl".length)
-            for (const extension of MODEL_FILE_EXTENSIONS) {
-                if (index.has(stem + extension)) models.add(stem + extension)
-            }
-            const mdl = readMdl(data)
-            for (const name of mdl.textures) {
-                for (const folder of mdl.cdmaterials) {
-                    const vmt = materialPath(`${folder}${name}`)
-                    if (vmt && index.has(vmt)) {
-                        await addMaterial(vmt)
-                        break
-                    }
-                }
-            }
-            for (const include of mdl.includes)
-                await addModel(modelPath(include))
-            const phy = await index.read(file.replace(/\.mdl$/, ".phy"))
-            if (phy) {
-                for (const gib of readPhyBreakModels(phy)) {
-                    await addModel(modelPath(gib))
-                }
-            }
-        }
-
+        const { materials, models, addModel } = dependencyCollector(index)
         // A model that isn't found is listed without dependencies, as in srctools
         await addModel(start)
         return {
@@ -617,4 +644,33 @@ async function findMdlDependencies(mdlPath, options) {
     }
 }
 
-module.exports = { findMdlDependencies, gameSearchPaths, readMdl }
+/**
+ * Find every file models and materials need (themselves included)
+ * @param {Object} index - The game's file index (see gameIndex)
+ * @param {{models?: string[], materials?: string[]}} start - Model and
+ *   material paths ("models/" or "materials/" and the extension optional)
+ * @returns {Promise<string[]>} Content paths with extensions, sorted
+ */
+async function findDependencies(index, { models = [], materials = [] }) {
+    const collector = dependencyCollector(index)
+    for (const model of models) {
+        try {
+            await collector.addModel(modelPath(model))
+        } catch (error) {
+            // Its own files are listed, not what's in it
+            console.warn(`Could not read ${model}: ${error.message}`)
+        }
+    }
+    for (const material of materials) {
+        await collector.addMaterial(materialPath(material))
+    }
+    return [...collector.models, ...collector.materials].sort()
+}
+
+module.exports = {
+    findMdlDependencies,
+    findDependencies,
+    gameIndex,
+    gameSearchPaths,
+    readMdl,
+}

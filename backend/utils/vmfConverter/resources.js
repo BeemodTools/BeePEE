@@ -53,6 +53,14 @@ class ResourceIndex {
     }
 
     /**
+     * Where a file comes from: { vpk, entry } for a file in a VPK, { file }
+     * for a loose file, null when not found
+     */
+    source(contentPath) {
+        return this.files.get(normalizeContentPath(contentPath)) ?? null
+    }
+
+    /**
      * Read a file by content path
      * @returns {Promise<Buffer|null>} null when not found
      */
@@ -79,16 +87,16 @@ class ResourceIndex {
     }
 }
 
-// Only these content folders are ever read, so others (sound, maps, ...) are
+// The content folders read by default, so others (sound, maps, ...) are
 // not walked
 const CONTENT_FOLDERS = ["materials", "models"]
 
-async function addFolder(index, root) {
+async function addFolder(index, root, folders) {
     const rootEntries = await fs.promises.readdir(root, { withFileTypes: true })
     for (const folder of rootEntries) {
         if (
             !folder.isDirectory() ||
-            !CONTENT_FOLDERS.includes(folder.name.toLowerCase())
+            !folders.includes(folder.name.toLowerCase())
         ) {
             continue
         }
@@ -113,15 +121,20 @@ async function addFolder(index, root) {
  * "materials"/"models" subfolders, not those subfolders themselves).
  * @param {string[]} resourcePaths
  * @param {(message: string) => void} warn
+ * @param {string[]} [folders] - The subfolders of content folders to index
  * @returns {Promise<ResourceIndex>}
  */
-async function buildResourceIndex(resourcePaths, warn = () => {}) {
+async function buildResourceIndex(
+    resourcePaths,
+    warn = () => {},
+    folders = CONTENT_FOLDERS,
+) {
     const index = new ResourceIndex()
     for (const resourcePath of resourcePaths) {
         try {
             const stat = await fs.promises.stat(resourcePath)
             if (stat.isDirectory()) {
-                await addFolder(index, resourcePath)
+                await addFolder(index, resourcePath, folders)
             } else {
                 const vpk = loadVpk(resourcePath)
                 for (const [contentPath, entry] of vpk.entries) {

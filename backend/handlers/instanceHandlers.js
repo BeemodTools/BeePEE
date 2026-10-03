@@ -6,31 +6,11 @@ const { app, dialog, BrowserWindow } = require("electron")
 const { spawn } = require("child_process")
 const fs = require("fs")
 const path = require("path")
-const { findMdlDependencies } = require("../utils/mdlDependencies")
 const { packages } = require("../packageManager")
 const { sendItemUpdateToEditor } = require("../items/itemEditor")
 const { Instance } = require("../items/Instance")
 const { vmfStatsCache } = require("../utils/vmfParser")
 const { getHammerPath, getHammerAvailability, findPortal2Dir } = require("../data")
-const { extractAssetsFromVMF, getPortal2SearchDirs, assetExistsInPortal2 } = require("../utils/vmfAssetExtractor")
-
-/**
- * Get the materials a model needs (see mdlDependencies.js)
- * @param {string} mdlPath - Model path, like "models/props/cube.mdl"
- * @param {string} portal2Dir - Portal 2's install folder
- * @returns {Promise<{success: boolean, materials: string[], error?: string}>}
- */
-async function getMdlDependencies(mdlPath, portal2Dir) {
-    const result = await findMdlDependencies(mdlPath, { portal2Root: portal2Dir })
-    if (!result.success) {
-        console.warn(
-            `Failed to find the materials of ${mdlPath}: ${result.error}`,
-        )
-        return { ...result, materials: [] }
-    }
-    return result
-}
-
 
 /**
  * Helper function to fix instance paths by removing BEE2/ prefix
@@ -710,86 +690,28 @@ function register(ipcMain, mainWindow) {
                 }
             }
 
-            // Get search directories from gameinfo.txt
-            const searchDirs = getPortal2SearchDirs(portal2Dir)
-
-            // Extract assets from the VMF
-            const assets = extractAssetsFromVMF(vmfPath)
-
-            const externalAssets = []
-            const foundAssets = []
-
-            // Track materials we've already checked (to avoid duplicates from MDL dependencies)
-            const checkedMaterials = new Set()
-
-            // Check models and their material dependencies
-            for (const model of assets.MODEL) {
-                const modelPath = model.startsWith("models/") ? model : `models/${model}`
-                if (assetExistsInPortal2(modelPath, portal2Dir, searchDirs)) {
-                    foundAssets.push({ type: "MODEL", path: model })
-                } else {
-                    externalAssets.push({ type: "MODEL", path: model })
-                }
-
-                // Get MDL material dependencies using srctools
-                const mdlDeps = await getMdlDependencies(modelPath, portal2Dir)
-                if (mdlDeps.success && mdlDeps.materials) {
-                    for (const matPath of mdlDeps.materials) {
-                        // Skip if already checked
-                        const matKey = matPath.toLowerCase()
-                        if (checkedMaterials.has(matKey)) continue
-                        checkedMaterials.add(matKey)
-
-                        // Check if material exists in Portal 2
-                        if (assetExistsInPortal2(matPath, portal2Dir, searchDirs)) {
-                            foundAssets.push({ type: "MATERIAL", path: matPath, source: "mdl" })
-                        } else {
-                            externalAssets.push({ type: "MATERIAL", path: matPath, source: "mdl" })
-                        }
-                    }
-                }
-            }
-
-            // Check materials (from VMF brushes and entities)
-            for (const material of assets.MATERIAL) {
-                // Skip tool textures and common materials
-                if (material.startsWith("tools/") || material.startsWith("dev/")) {
-                    continue // Already filtered in extractor, but double-check
-                }
-
-                const materialPath = material.startsWith("materials/") ? material : `materials/${material}`
-
-                // Skip if already checked from MDL dependencies
-                const matKey = materialPath.toLowerCase()
-                if (checkedMaterials.has(matKey)) continue
-                checkedMaterials.add(matKey)
-
-                if (assetExistsInPortal2(materialPath, portal2Dir, searchDirs)) {
-                    foundAssets.push({ type: "MATERIAL", path: material })
-                } else {
-                    externalAssets.push({ type: "MATERIAL", path: material })
-                }
-            }
-
-            // Check sounds
-            for (const sound of assets.SOUND) {
-                const soundPath = sound.startsWith("sound/") ? sound : `sound/${sound}`
-                if (assetExistsInPortal2(soundPath, portal2Dir, searchDirs)) {
-                    foundAssets.push({ type: "SOUND", path: sound })
-                } else {
-                    externalAssets.push({ type: "SOUND", path: sound })
-                }
-            }
-
-            // Check scripts
-            for (const script of assets.SCRIPT) {
-                const scriptPath = script.startsWith("scripts/") ? script : `scripts/${script}`
-                if (assetExistsInPortal2(scriptPath, portal2Dir, searchDirs)) {
-                    foundAssets.push({ type: "SCRIPT", path: script })
-                } else {
-                    externalAssets.push({ type: "SCRIPT", path: script })
-                }
-            }
+            // Sorted like autopacking does (see autopacker.js): "found" are
+            // the custom files autopacking packs, "external" the rest (the
+            // game's files, BEE2's files and missing ones)
+            const { sortInstanceFiles } = require("../utils/autopacker")
+            const files = await sortInstanceFiles(vmfPath, portal2Dir)
+            const asset = (file) => ({
+                type: file.startsWith("models/")
+                    ? "MODEL"
+                    : file.startsWith("sound/")
+                      ? "SOUND"
+                      : file.startsWith("scripts/")
+                        ? "SCRIPT"
+                        : "MATERIAL",
+                path: file,
+            })
+            const foundAssets = files.custom.map(({ file }) => asset(file))
+            const externalAssets = [
+                ...files.baseGame,
+                ...files.bee2,
+                ...files.missing,
+                ...files.missingDependencies,
+            ].map(asset)
 
             return {
                 success: true,

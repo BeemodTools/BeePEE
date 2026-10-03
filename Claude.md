@@ -808,6 +808,27 @@ It follows srctools' `PackList` rules:
 
 No Python is needed anywhere in BeePEE.
 
+---
+
+## Autopacking
+
+When an instance is added to an item, `backend/utils/autopacker.js` copies the files it uses that aren't part of the game into the package's `resources/` (same paths). The instance asset check (`check-vmf-external-assets`) sorts files the same way.
+
+**What the instance needs** (`vmfAssetExtractor.js` reads the VMF with the KeyValues parser):
+
+- Models (`model`; sprite `.vmt`/`.spr` models are materials), with all their files (`.vvd`, `.phy`, `.ani`, `.vtx`), materials, `$includemodel`s and gibs (`mdlDependencies.js`)
+- Materials: brush faces, `material`/`texture`/`texturename`/`ropematerial`/`spritename`/`overlaynameN`... keys (numbers like `func_breakable`'s `material` skipped), with their textures and included materials
+- Sounds: sound files in any key (`.wav`/`.mp3`/`.ogg`, sound characters like `)` stripped) and soundscript names in sound keys (`ambient_generic`'s `message`, `noise1`, ...). A custom soundscript entry brings its sound files and its soundscript file.
+- VScripts: `vscripts` (several, `.nut` optional, under `scripts/vscripts/`) and `RunScriptFile` outputs
+
+**Where each file comes from** (the game's file index, VPKs first):
+
+- **The original game, never packed**: the game's VPKs; the official DLC folders (`portal2_dlc1`, `portal2_dlc2`), `platform` and `update` (only the game has files there); and loose files in `Portal 2/portal2` dated like the game's own files (the dates of its VPKs and of the `platform` files, when Steam installed or updated it) - the game ships ~250 scripts loose there, outside its VPKs
+- **BEE2's, never packed**: `bee2/`, the DLC folder BEE2 puts its generated VPK in (marked with `bee2_vpk_autogen_marker.txt`), and `bee2/` content paths that don't exist yet (made when BEE2 exports)
+- **In the package already**: nothing to do
+- **Custom, packed**: everything else - custom content folders, files added to `Portal 2/portal2` later, other VPKs (extracted)
+- **Missing**: warned about when the instance names the file; missing files that models and materials name (like gibs the game itself lacks) only in the debug log
+
 ## VMF to OBJ Conversion (VMF2OBJ port)
 
 ### Overview
