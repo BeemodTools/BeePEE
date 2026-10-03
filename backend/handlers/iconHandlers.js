@@ -13,7 +13,7 @@ const fs = require("fs")
 const path = require("path")
 const { packages } = require("../packageManager")
 const { Instance } = require("../items/Instance")
-const { convertVmfToObj } = require("../utils/vmf2obj")
+const { convertVmfToObj, MODEL_FORMAT } = require("../utils/vmf2obj")
 const { logger } = require("../utils/logger")
 
 const IMAGE_TYPES = {
@@ -59,6 +59,7 @@ function instanceSource(item, instanceKey) {
 
 /**
  * The kept model of an instance, if it was made from the VMF as it is now
+ * (by the converter as it is now: MODEL_FORMAT)
  * @returns {{folder: string, objPath: string, mtlPath: string} | null}
  */
 function keptInstanceModel(item, instanceKey) {
@@ -72,6 +73,7 @@ function keptInstanceModel(item, instanceKey) {
     const source = instanceSource(item, instanceKey)
     if (
         source.size === undefined ||
+        stamp.format !== MODEL_FORMAT ||
         stamp.vmf !== source.vmf ||
         stamp.size !== source.size ||
         stamp.modified !== source.modified
@@ -109,6 +111,7 @@ function instanceModel(item, instanceKey) {
                 path.join(folder, STAMP),
                 JSON.stringify({
                     ...source,
+                    format: MODEL_FORMAT,
                     obj: path.basename(result.objPath),
                     mtl: path.basename(result.mtlPath),
                 }),

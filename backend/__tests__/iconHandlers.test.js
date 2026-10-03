@@ -14,6 +14,7 @@ jest.mock("../packageManager", () => ({
 
 // A model with one texture, instead of converting a VMF
 jest.mock("../utils/vmf2obj", () => ({
+    MODEL_FORMAT: 2,
     convertVmfToObj: jest.fn(async (vmfPath, { outputDir }) => {
         const fs = require("fs")
         const path = require("path")
@@ -91,6 +92,24 @@ describe("icon maker handlers", () => {
 
         fs.writeFileSync(vmf, "versioninfo { changed }")
         expect((await generate()).success).toBe(true)
+        expect(convertVmfToObj).toHaveBeenCalledTimes(2)
+    })
+
+    test("makes a kept model again when an older converter made it", async () => {
+        writeVmf(packagePath, "instances/my_item/item_0.vmf")
+        const generate = () =>
+            handlers["icon-maker-generate-model"](null, {
+                itemId: "my_item",
+                instanceKey: "0",
+            })
+        await generate()
+        const stampPath = path.join(
+            packagePath,
+            ".bpee/my_item/icon/models/0/source.json",
+        )
+        const stamp = JSON.parse(fs.readFileSync(stampPath, "utf8"))
+        fs.writeFileSync(stampPath, JSON.stringify({ ...stamp, format: 1 }))
+        await generate()
         expect(convertVmfToObj).toHaveBeenCalledTimes(2)
     })
 
