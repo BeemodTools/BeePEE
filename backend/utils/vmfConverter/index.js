@@ -1162,19 +1162,11 @@ class VmfConverter {
             )
         const materials = [...new Set(triangles.map((tri) => tri.material))]
 
-        // The render color only colors models that declare colorable parts
-        // with a tint mask ($blendtintbybasealpha) in one of their materials.
-        // Their other materials take the whole color (like the tint strips
-        // of BEE2's color cubes); models without a mask keep their look.
-        let entityTint = parseRenderColor(entity.get("rendercolor"))
-        if (entityTint) {
-            let recolorable = false
-            for (const material of materials) {
-                const info = await this.resolveMaterial(candidates(material))
-                if (!info.error && info.tintMask) recolorable = true
-            }
-            if (!recolorable) entityTint = null
-        }
+        // The render color tints the model as the game does: materials with
+        // a tint mask ($blendtintbybasealpha) inside their mask, the others
+        // whole (like the tint strips of BEE2's color cubes, or a model with
+        // no mask at all)
+        const entityTint = parseRenderColor(entity.get("rendercolor"))
 
         const materialNames = new Map()
         for (const material of materials) {

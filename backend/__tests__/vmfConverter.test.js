@@ -617,7 +617,7 @@ describe("convertVmf: empty results, model entities and tints", () => {
         ).toEqual([200, 0, 0])
     })
 
-    test("only colors models with a tint mask with their render color", async () => {
+    test("colors props with their render color, masked materials only inside the mask", async () => {
         const folder = path.join(content(), "materials", "test")
         fs.writeFileSync(
             path.join(folder, "masked.vmt"),
@@ -674,12 +674,11 @@ describe("convertVmf: empty results, model entities and tints", () => {
                 path.join(root, "out", "props"),
             )
             const obj = fs.readFileSync(result.objPath, "utf8")
-            // The mask colors part of its material, and the model's other
-            // materials take the whole color
+            // The mask colors part of its material; materials without a
+            // mask take the whole color, in both models
             expect(obj).toContain("usemtl masked_tint_ff0000m\n")
             expect(obj).toContain("usemtl plain_tint_ff0000\n")
-            // A model without a mask keeps its look
-            expect(obj).toContain("usemtl plain\n")
+            expect(obj).not.toContain("usemtl plain\n")
         } finally {
             await converter.dispose()
         }
