@@ -9,33 +9,29 @@
             ],
             "changes": {
                 "added": [
-                    "Model generation now runs inside BeePEE: much faster, no Java or Python needed",
-                    "Generated models now show prop skins, color tints, overlays, decals, blended displacements and entity models (turrets, cubes, buttons, ...)",
-                    "Icon maker: make an item's palette icon from its model (Info tab > Make Icon)",
-                    "Models made in the icon maker can be picked in the Model Chooser",
-                    "A warning when an instance uses files that are missing or not mounted"
+                    "Model generation without Java or Python (way faster)",
+                    "Skins, tints, overlays, decals and entities to generated models",
+                    "Icon maker (Info tab > Make Icon)",
+                    "Icon maker models to the Model Chooser",
+                    "Warning for missing or unmounted files in instances"
                 ],
                 "fixed": [
-                    "Props facing the wrong way, in the wrong pose or with the wrong model in generated models",
-                    "Brushes misplaced, mirrored or missing in generated models",
-                    "Glass, grates and invisible brushes showing up solid, black or as a checkerboard",
-                    "Hidden parts (like cracked glass) and dev textures showing up in generated models",
-                    "Make Model failing on very big models, or saying it worked when nothing was made",
-                    "The item editor saying it saved when part of the save failed",
-                    "Autopacking missing custom sounds, scripts, animations and textures",
-                    "Signage designer: Export as PNG ignoring the texture size, typing shifting the canvas, and double-clicking text not editing it",
-                    "Uploading a PNG for a signage doing nothing, or the icon disappearing after saving",
-                    "Input delays resetting to 0 without Portal 2's FGD",
-                    "Empty tiles not filling the last row of the item list"
+                    "Props and brushes in generated models being rotated, mirrored or missing",
+                    "Glass, invisible and hidden stuff showing up wrong in generated models",
+                    "Make Model failing on big models",
+                    "Item editor saying it saved when it didnt",
+                    "Autopacking missing custom files",
+                    "Signage designer export size, text shifting and double click to edit",
+                    "Uploading PNGs for signage doing nothing",
+                    "Input delay resetting to 0",
+                    "Empty tiles not filling the last row"
                 ],
                 "changed": [
-                    "New cartoon style for generated models, closer to the editor's own",
-                    "Missing textures show as a purple/black checkerboard instead of being left out",
-                    "Autopacking never packs base game, DLC or BEE2 files",
-                    "Cleaner, smaller logs that also cover BeePEE's windows",
-                    "Make Model opens the model preview when it's done",
-                    "The model preview keeps its camera when switching models",
-                    "Icon buttons are now Preview, Make Icon and Change Icon"
+                    "New cartoon style for generated models",
+                    "Autopacking skips base game, DLC and BEE2 files",
+                    "Cleaner logs",
+                    "Model preview opens after Make Model and keeps its camera",
+                    "Icon buttons reordered (Preview, Make Icon, Change Icon)"
                 ]
             }
         },
