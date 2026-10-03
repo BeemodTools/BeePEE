@@ -392,6 +392,7 @@ function SignageEditor() {
                             onUpdate={handleUpdate}
                             onEditDesign={handleEditDesign}
                             stagedDesign={stagedDesign}
+                            onError={setSaveError}
                         />
                     </Box>
                 </Box>

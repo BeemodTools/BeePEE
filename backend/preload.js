@@ -1,12 +1,16 @@
-const { contextBridge, ipcRenderer } = require("electron")
+const { contextBridge, ipcRenderer, webUtils } = require("electron")
 
 // Expose general electron API
 contextBridge.exposeInMainWorld("electron", {
     invoke: (channel, data) => ipcRenderer.invoke(channel, data),
+    // Resolves Electron's { canceled, filePaths }
     showOpenDialog: (options) =>
         ipcRenderer.invoke("show-open-dialog", options),
     showMessageBox: (options) =>
         ipcRenderer.invoke("show-message-box", options),
+    // Disk path of a dropped File ("" if it has none). Replaces File.path,
+    // which Electron 32 removed.
+    getPathForFile: (file) => webUtils.getPathForFile(file),
     // Console output for the log file (src/utils/logForwarding.js)
     log: (level, text) => ipcRenderer.send("renderer:log", level, text),
 })

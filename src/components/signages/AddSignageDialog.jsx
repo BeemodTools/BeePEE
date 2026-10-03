@@ -110,14 +110,16 @@ export function AddSignageFlow({ onClose, onCreated }) {
     }
 
     const handlePickFile = async () => {
+        setError(null)
         try {
+            // Resolves Electron's { canceled, filePaths }, not an array
             const result = await window.electron.showOpenDialog({
                 title: "Select Signage Picture",
                 filters: [{ name: "Images", extensions: ["png"] }],
                 properties: ["openFile"],
             })
-            if (result && result.length > 0) {
-                const filePath = result[0]
+            if (!result.canceled && result.filePaths.length > 0) {
+                const filePath = result.filePaths[0]
                 const fileName = filePath.split(/[\\/]/).pop()
                 const preview = await window.package
                     ?.loadFile(filePath)
@@ -132,6 +134,7 @@ export function AddSignageFlow({ onClose, onCreated }) {
             }
         } catch (err) {
             console.error("Failed to select signage picture:", err)
+            setError(`Failed to select the picture: ${err.message}`)
         }
     }
 

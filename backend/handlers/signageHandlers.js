@@ -767,6 +767,17 @@ function register(ipcMain, mainWindow) {
                             )) {
                                 if (typeof styleConfig === "string") {
                                     resolvedStyles[styleId] = styleConfig
+                                } else if (styleConfig._stagedIconPath) {
+                                    // The picked icon was copied into
+                                    // resources/BEE2 above: point at that copy
+                                    // (not the user's file), as a reload would
+                                    resolvedStyles[styleId] = {
+                                        ...processedStyles[styleId],
+                                        icon: path.join(
+                                            bee2Dir,
+                                            processedStyles[styleId].icon,
+                                        ),
+                                    }
                                 } else {
                                     resolvedStyles[styleId] = { ...styleConfig }
                                     // Re-resolve icon path if needed

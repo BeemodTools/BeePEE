@@ -142,9 +142,7 @@ function StyleTile({
                 e.preventDefault()
                 setDropHover(false)
                 const file = e.dataTransfer.files?.[0]
-                if (file && /\.png$/i.test(file.name)) {
-                    onDropFile(styleId, file.path)
-                }
+                if (file) onDropFile(styleId, file)
             }}
             sx={{
                 position: "relative",
@@ -510,7 +508,13 @@ function CustomStyleDialog({ open, usedStyleIds, onAdd, onClose }) {
 // Icons tab: a grid covering every BEE2 style (plus any custom ones on the
 // signage). Empty tiles are set with one click or a PNG drop - no add-dialog
 // dance. Designer work lives in the separate Designs tab.
-function SignageStyles({ formData, onUpdate, onEditDesign, stagedDesign }) {
+function SignageStyles({
+    formData,
+    onUpdate,
+    onEditDesign,
+    stagedDesign,
+    onError,
+}) {
     const styles = formData.styles || {}
     const [customDialogOpen, setCustomDialogOpen] = useState(false)
 
@@ -551,24 +555,41 @@ function SignageStyles({ formData, onUpdate, onEditDesign, stagedDesign }) {
 
     const handleUpload = async (styleId) => {
         try {
+            // Resolves Electron's { canceled, filePaths }, not an array
             const result = await window.electron.showOpenDialog({
                 title: "Select Signage Icon",
                 filters: [{ name: "Images", extensions: ["png"] }],
                 properties: ["openFile"],
             })
-            if (result && result.length > 0) {
+            if (!result.canceled && result.filePaths.length > 0) {
                 patchStyle(styleId, {
-                    icon: result[0],
-                    _stagedIconPath: result[0],
+                    icon: result.filePaths[0],
+                    _stagedIconPath: result.filePaths[0],
                 })
             }
         } catch (error) {
             console.error(`Failed to select icon for style ${styleId}:`, error)
+            onError?.(`Failed to select the icon: ${error.message}`)
         }
     }
 
-    const handleDropFile = (styleId, filePath) => {
-        if (!filePath) return
+    const handleDropFile = (styleId, file) => {
+        if (!/\.png$/i.test(file.name)) {
+            console.warn(`Ignored dropped file "${file.name}": not a PNG`)
+            onError?.(
+                `"${file.name}" isn't a PNG. Signage icons must be PNG images.`,
+            )
+            return
+        }
+        // File.path was removed in Electron 32, the preload looks it up
+        const filePath = window.electron?.getPathForFile?.(file)
+        if (!filePath) {
+            console.warn(`Ignored dropped file "${file.name}": no path on disk`)
+            onError?.(
+                `Couldn't find "${file.name}" on disk. Save it to your computer first, then drop it here.`,
+            )
+            return
+        }
         patchStyle(styleId, { icon: filePath, _stagedIconPath: filePath })
     }
 
