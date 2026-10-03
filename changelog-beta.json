@@ -19,7 +19,8 @@
                     "Displacements with blend materials now show both textures blended like in game",
                     "Adding or replacing an instance now tells you when it uses files that don't exist on your PC or aren't mounted properly (with what uses them), so you can fix them before players see missing textures",
                     "Icon maker: Make Icon in the item editor's Info tab generates the item's models and lets you line up the shot to make its palette icon (128, 256 or 512 px) on the editor icons' grayish white background: 3/4, front, side and top views, rotate, move and zoom, lens, shadow, a perspective or isometric camera, exact yaw, pitch, roll and position, and camera presets that give the same shot on any item",
-                    "Icon maker: each instance's model is generated once and kept (the others are generated in the background), so switching instances is quick and keeps the camera where it is"
+                    "Icon maker: each instance's model is generated once and kept (the others are generated in the background), so switching instances is quick and keeps the camera where it is",
+                    "The Model Chooser lists the models the icon maker made (Made in the icon maker): pick one to make it the item's editor model without generating it again"
                 ],
                 "fixed": [
                     "Props (prop_static, prop_dynamic, ...) facing the wrong way in generated models",
@@ -57,7 +58,8 @@
                     "Log files stay small: chatty and repeated lines were cut, a log file is capped at 5 MB and only the 10 newest are kept",
                     "Autopacking tells the original game's files apart from custom ones by looking inside the game's VPKs: the base game and the official DLCs are never packed, neither are BEE2's files, and files an instance uses that don't exist anywhere are reported in the log",
                     "The model preview keeps the camera where you put it when switching between an item's models",
-                    "The item editor's icon buttons are now Preview (the biggest), Make Icon and Change Icon"
+                    "The item editor's icon buttons are now Preview (the biggest), Make Icon and Change Icon",
+                    "Make Model opens the model preview when it's done, instead of a \"Model Generated Successfully\" box (it now says to save the item right under the generator)"
                 ]
             }
         },

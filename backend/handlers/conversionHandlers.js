@@ -10,6 +10,7 @@ const { convertVmfToObj, convertVmfsToObj } = require("../utils/vmf2obj")
 const { Instance } = require("../items/Instance")
 const { fixInstancePath } = require("./instanceHandlers")
 const { closeAllModelPreviewWindows } = require("../items/itemEditor")
+const { instanceModel, findItem } = require("./iconHandlers")
 const { logger } = require("../utils/logger")
 
 /** "1 model", "3 models" */
@@ -102,6 +103,49 @@ function register(ipcMain, mainWindow) {
             }
         },
     )
+
+    // Make the item's model from the icon maker's model of one of its
+    // instances (see iconHandlers.js), without converting the VMF again
+    ipcMain.handle(
+        "make-model-from-icon-model",
+        async (event, { itemId, instanceKey }) => {
+            try {
+                const item = findItem(itemId)
+                return await logger.section(
+                    `Making the model of "${item.name}" from the icon maker's model (instance ${instanceKey})`,
+                    () => convertIconModel(item, instanceKey),
+                )
+            } catch (error) {
+                return { success: false, error: error.message }
+            }
+        },
+    )
+}
+
+/**
+ * Make the item's model from the icon maker's model of one of its instances:
+ * the kept one, or made now when it's missing or out of date
+ * @returns {Promise<Object>} { success, objPath, mtlPath, mdlResult } like
+ *   Make Model's; not a success when no model was staged
+ */
+async function convertIconModel(item, instanceKey) {
+    // Close any open model preview windows to release file handles
+    await closeAllModelPreviewWindows()
+
+    const { objPath, mtlPath, made } = await instanceModel(item, instanceKey)
+    if (!made) console.log(`Using the model the icon maker made before: ${objPath}`)
+
+    const mdlResult = await makeModel(item, objPath, {})
+    if (!mdlResult.success || !mdlResult.stagedEditorItems) {
+        return {
+            success: false,
+            error: mdlResult.error ?? "No model was made",
+            objPath,
+            mtlPath,
+            mdlResult,
+        }
+    }
+    return { success: true, objPath, mtlPath, mdlResult }
 }
 
 /**
@@ -522,17 +566,19 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
         `Made ${successfulResults.length} of ${plural(conversionResults.length, "model")}, staged as ${plural(newSubTypes.length, "subtype")} (applied on Save)`,
     )
 
-    const failureDetail = failedResults.length
-        ? `\n\nNot generated:\n${failedResults
-              .map((r) => `• ${path.basename(r.instancePath)}: ${r.error}`)
-              .join("\n")}`
-        : ""
-    dialog.showMessageBox({
-        type: successfulResults.length === conversionResults.length ? "info" : "warning",
-        title: "Multi-Model Generation Complete",
-        message: `Successfully converted ${successfulResults.length} of ${conversionResults.length} models.`,
-        detail: `Click Save in the editor to apply ${newSubTypes.length} SubTypes to editoritems.json.${failureDetail}`,
-    })
+    // Say which models couldn't be made (when all were, the item editor says
+    // so itself and opens their preview)
+    if (failedResults.length > 0) {
+        const failureDetail = failedResults
+            .map((r) => `• ${path.basename(r.instancePath)}: ${r.error}`)
+            .join("\n")
+        dialog.showMessageBox({
+            type: "warning",
+            title: "Multi-Model Generation Complete",
+            message: `Successfully converted ${successfulResults.length} of ${conversionResults.length} models.`,
+            detail: `Click Save in the editor to apply ${newSubTypes.length} SubTypes to editoritems.json.\n\nNot generated:\n${failureDetail}`,
+        })
+    }
 
     return { success: true, results: conversionResults, stagedEditorItems: editorItems }
 }

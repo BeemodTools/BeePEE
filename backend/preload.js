@@ -77,6 +77,9 @@ contextBridge.exposeInMainWorld("package", {
     // The instances whose icon maker model is made: [{ instanceKey, name }]
     listIconModels: (itemId) =>
         ipcRenderer.invoke("icon-maker-list-models", { itemId }),
+    // Makes the item's model from an instance's icon maker model (Model Chooser)
+    makeModelFromIconModel: (itemId, instanceKey) =>
+        ipcRenderer.invoke("make-model-from-icon-model", { itemId, instanceKey }),
     saveMadeIcon: (itemId, png) =>
         ipcRenderer.invoke("icon-maker-save-icon", { itemId, png }),
     saveItem: (itemData) => ipcRenderer.invoke("save-item", itemData),
