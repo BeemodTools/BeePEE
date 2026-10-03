@@ -975,15 +975,32 @@ class VmfConverter {
         const cdmaterials = model.qc.cdmaterials.length
             ? model.qc.cdmaterials
             : [""]
-        const entityTint = parseRenderColor(entity.get("rendercolor"))
+        const candidates = (material) =>
+            cdmaterials.map(
+                (dir) => `materials/${dir ? `${dir}/` : ""}${material}.vmt`,
+            )
+        const materials = [...new Set(triangles.map((tri) => tri.material))]
+
+        // The render color only colors models that declare colorable parts
+        // with a tint mask ($blendtintbybasealpha) in one of their materials.
+        // Their other materials take the whole color (like the tint strips
+        // of BEE2's color cubes); models without a mask keep their look.
+        let entityTint = parseRenderColor(entity.get("rendercolor"))
+        if (entityTint) {
+            let recolorable = false
+            for (const material of materials) {
+                const info = await this.resolveMaterial(candidates(material))
+                if (!info.error && info.tintMask) recolorable = true
+            }
+            if (!recolorable) entityTint = null
+        }
+
         const materialNames = new Map()
-        for (const material of new Set(triangles.map((tri) => tri.material))) {
+        for (const material of materials) {
             const name = await this.registerMaterial(
                 state,
                 material,
-                cdmaterials.map(
-                    (dir) => `materials/${dir ? `${dir}/` : ""}${material}.vmt`,
-                ),
+                candidates(material),
                 entityTint,
             )
             // Prop faces are kept even without a material (as in VMF2OBJ)

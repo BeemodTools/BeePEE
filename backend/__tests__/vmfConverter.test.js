@@ -25,7 +25,11 @@ const {
     FORMAT,
 } = require("../utils/vmfConverter/textures")
 const { loadVpk, readVpkEntry } = require("../utils/vmfConverter/vpk")
-const { convertVmf, assertHasGeometry } = require("../utils/vmfConverter")
+const {
+    VmfConverter,
+    convertVmf,
+    assertHasGeometry,
+} = require("../utils/vmfConverter")
 
 const close = (actual, expected) =>
     expected.forEach((value, i) => expect(actual[i]).toBeCloseTo(value, 6))
@@ -611,6 +615,74 @@ describe("convertVmf: empty results, model entities and tints", () => {
         expect(
             readPngPixel(path.join(textures, "wall_tint_ff0000.png"), 0, 0),
         ).toEqual([200, 0, 0])
+    })
+
+    test("only colors models with a tint mask with their render color", async () => {
+        const folder = path.join(content(), "materials", "test")
+        fs.writeFileSync(
+            path.join(folder, "masked.vmt"),
+            `"VertexLitGeneric" { "$basetexture" "test/wall" "$blendtintbybasealpha" "1" }`,
+        )
+        fs.writeFileSync(
+            path.join(folder, "plain.vmt"),
+            `"VertexLitGeneric" { "$basetexture" "test/wall" }`,
+        )
+        const models = {
+            "models/recolorable.mdl": ["masked", "plain"],
+            "models/fixed.mdl": ["plain"],
+        }
+        const triangle = (material) => ({
+            material,
+            verts: [
+                [0, 0, 0],
+                [16, 0, 0],
+                [0, 16, 0],
+            ].map((pos) => ({ pos, normal: [0, 0, 1], uv: [0, 0] })),
+        })
+
+        const converter = await new VmfConverter({
+            resourcePaths: [content()],
+            quiet: true,
+        }).init()
+        // Stand-ins for decompiled models
+        converter.getModel = async () => ({
+            qc: {
+                cdmaterials: ["test"],
+                textureGroups: [],
+                modelName: null,
+                sequences: [],
+            },
+            references: [],
+            missing: [],
+        })
+        converter.getGeometry = async (modelPath) => ({
+            triangles: models[modelPath].map(triangle),
+        })
+        const vmfPath = path.join(root, "props.vmf")
+        fs.writeFileSync(
+            vmfPath,
+            Object.keys(models)
+                .map(
+                    (model, i) =>
+                        `entity { "id" "${i + 1}" "classname" "prop_static" "model" "${model}" "origin" "0 0 0" "rendercolor" "255 0 0" }`,
+                )
+                .join("\n"),
+        )
+        try {
+            const result = await converter.convert(
+                vmfPath,
+                path.join(root, "out", "props"),
+            )
+            const obj = fs.readFileSync(result.objPath, "utf8")
+            // The mask colors part of its material, and the model's other
+            // materials take the whole color
+            expect(obj).toContain("usemtl masked_tint_ff0000m\n")
+            expect(obj).toContain("usemtl plain_tint_ff0000\n")
+            // A model without a mask keeps its look
+            expect(obj).toContain("usemtl plain\n")
+        } finally {
+            await converter.dispose()
+        }
     })
 })
 
