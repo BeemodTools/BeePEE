@@ -42,10 +42,9 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
     const makeIconButton = (
         <Button
             variant="outlined"
-            fullWidth
             startIcon={<PhotoCamera />}
             onClick={() => setIconMakerOpen(true)}
-            sx={{ py: 1.5 }}
+            sx={{ py: 1.5, flex: 1 }}
         >
             Make Icon
         </Button>
@@ -205,12 +204,32 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                     error={!formData.author?.trim()}
                 />
 
-                {/* Icon upload */}
+                {/* Icon: Preview (the widest), Make Icon, Change Icon */}
                 {(iconSrc || formData.stagedIconPath || item?.icon) ? (
                     <Box sx={{ display: "flex", gap: 1 }}>
                         <Button
+                            variant="contained"
+                            startIcon={<Visibility />}
+                            onClick={async () => {
+                                const iconToShow = formData.stagedIconPath || item?.icon
+                                if (iconToShow) {
+                                    try {
+                                        await window.package.showIconPreview(iconToShow, item.name)
+                                    } catch (error) {
+                                        console.error(
+                                            `Failed to show the icon preview for item "${item?.name}":`,
+                                            error,
+                                        )
+                                    }
+                                }
+                            }}
+                            sx={{ py: 1.5, flex: 2 }}
+                        >
+                            Preview
+                        </Button>
+                        {makeIconButton}
+                        <Button
                             variant="outlined"
-                            fullWidth
                             startIcon={<FolderOpen />}
                             onClick={async () => {
                                 try {
@@ -232,38 +251,16 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                                     )
                                 }
                             }}
-                            sx={{ py: 1.5 }}
+                            sx={{ py: 1.5, flex: 1 }}
                         >
                             Change Icon
                         </Button>
-                        <Button
-                            variant="contained"
-                            fullWidth
-                            startIcon={<Visibility />}
-                            onClick={async () => {
-                                const iconToShow = formData.stagedIconPath || item?.icon
-                                if (iconToShow) {
-                                    try {
-                                        await window.package.showIconPreview(iconToShow, item.name)
-                                    } catch (error) {
-                                        console.error(
-                                            `Failed to show the icon preview for item "${item?.name}":`,
-                                            error,
-                                        )
-                                    }
-                                }
-                            }}
-                            sx={{ py: 1.5 }}
-                        >
-                            Preview
-                        </Button>
-                        {makeIconButton}
                     </Box>
                 ) : (
                     <Box sx={{ display: "flex", gap: 1 }}>
+                    {makeIconButton}
                     <Button
                         variant="contained"
-                        fullWidth
                         color="warning"
                         startIcon={<FolderOpen />}
                         onClick={async () => {
@@ -286,11 +283,10 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                                 )
                             }
                         }}
-                        sx={{ py: 1.5 }}
+                        sx={{ py: 1.5, flex: 1 }}
                     >
                         Upload Icon
                     </Button>
-                    {makeIconButton}
                     </Box>
                 )}
                 <IconMaker
