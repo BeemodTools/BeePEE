@@ -20,14 +20,36 @@ import {
     Image,
     Warning,
     Lock,
+    PhotoCamera,
 } from "@mui/icons-material"
 import ReactMarkdown from "react-markdown"
 import { useState, useEffect } from "react"
+import IconMaker from "./IconMaker"
 
 function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }) {
     const [iconSrc, setIconSrc] = useState(null)
     const [iconError, setIconError] = useState(false)
     const [isPreview, setIsPreview] = useState(false)
+    const [iconMakerOpen, setIconMakerOpen] = useState(false)
+
+    // Stage an icon (applied on Save), from a file or the icon maker
+    const stageIcon = (filePath, fileName) => {
+        onUpdate("stagedIconPath", filePath)
+        onUpdate("stagedIconName", fileName)
+        onUpdate("iconChanged", true, "basicInfo")
+    }
+
+    const makeIconButton = (
+        <Button
+            variant="outlined"
+            fullWidth
+            startIcon={<PhotoCamera />}
+            onClick={() => setIconMakerOpen(true)}
+            sx={{ py: 1.5 }}
+        >
+            Make Icon
+        </Button>
+    )
 
     useEffect(() => {
         // Load the icon when item changes or when staged icon changes
@@ -235,8 +257,10 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                         >
                             Preview
                         </Button>
+                        {makeIconButton}
                     </Box>
                 ) : (
+                    <Box sx={{ display: "flex", gap: 1 }}>
                     <Button
                         variant="contained"
                         fullWidth
@@ -266,7 +290,16 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                     >
                         Upload Icon
                     </Button>
+                    {makeIconButton}
+                    </Box>
                 )}
+                <IconMaker
+                    open={iconMakerOpen}
+                    item={item}
+                    currentIcon={iconSrc}
+                    onClose={() => setIconMakerOpen(false)}
+                    onIconMade={stageIcon}
+                />
 
                 {/* Description with preview toggle */}
                 <Box sx={{ flex: 1, display: "flex", flexDirection: "column" }}>

@@ -923,3 +923,17 @@ custom-content/        <-- SELECT THIS
 ### Tests
 
 `backend/__tests__/vmfConverter.test.js` covers parsing, brush geometry, entity angles, QC/SMD handling and posing, the VTF/PNG/VPK codecs, overlays, decals, displacement blends, editor VMTs and an end-to-end conversion.
+
+
+---
+
+## Icon Maker
+
+The item editor's Info tab has **Make Icon** (`src/components/items/IconMaker.jsx`). It generates one of the item's instances as a model (`icon-maker-generate-model` in `backend/handlers/iconHandlers.js`: VMF to OBJ with the cartoon style, into `.bpee/<item>/icon/model/`; the OBJ, MTL and textures are sent as text and data URLs, since the editor window can't load local files) and shows it in a square three.js view to line up the shot:
+
+- **Views**: 3/4 (the editor icons' angle, the default), Front, Side, Top. Each frames the model: its vertices fill 85% of the frame, centered. **Reset Camera** goes back to the 3/4 view and the 30° lens.
+- Left-drag rotates, right-drag moves, the wheel zooms; **Lens** (field of view) keeps the framing
+- **Shadow** (a soft contact shadow), **Background** (the editor icons' grayish white `#E5E8E9` by default, `ICON_BACKGROUND`), **Size** (64/128/256; the canvas renders at 1024 px and is scaled down in halves)
+- The preview shows the icon as it'll be, next to the current one
+
+**Use as Icon** saves the PNG (`icon-maker-save-icon`, `.bpee/<item>/icon/icon_<time>.png`) and stages it like a picked icon file: Save copies it to `resources/BEE2/items/` and makes the palette VTF.

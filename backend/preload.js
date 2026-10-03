@@ -64,6 +64,11 @@ contextBridge.exposeInMainWorld("package", {
     browseForIcon: (itemId) =>
         ipcRenderer.invoke("browse-for-icon", { itemId }),
     browseForIconFile: () => ipcRenderer.invoke("browse-for-icon-file"),
+    // Icon maker (src/components/items/IconMaker.jsx)
+    generateIconModel: (itemId, instanceKey) =>
+        ipcRenderer.invoke("icon-maker-generate-model", { itemId, instanceKey }),
+    saveMadeIcon: (itemId, png) =>
+        ipcRenderer.invoke("icon-maker-save-icon", { itemId, png }),
     saveItem: (itemData) => ipcRenderer.invoke("save-item", itemData),
     onItemUpdated: (callback) => {
         // Remove existing listeners to prevent stacking
