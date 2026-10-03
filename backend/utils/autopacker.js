@@ -1,8 +1,6 @@
 const fs = require("fs")
 const path = require("path")
-const { execFile } = require("child_process")
-const { promisify } = require("util")
-const execFileAsync = promisify(execFile)
+const { findMdlDependencies } = require("./mdlDependencies")
 const {
     extractAssetsFromVMF,
     getPortal2SearchDirs,
@@ -10,72 +8,34 @@ const {
     assetExistsInPortal2,
 } = require("./vmfAssetExtractor")
 const { findPortal2Resources } = require("../data")
-const { isDev } = require("./isDev.js")
 
 /**
- * Get MDL material dependencies using find_mdl_deps.exe (srctools)
- * @param {string} mdlPath - Path to the MDL file (e.g., "models/props/cube.mdl")
- * @param {string} portal2Dir - Path to Portal 2 directory
- * @param {string[]} searchDirs - Additional search directories (relative to portal2Dir)
- * @returns {Promise<string[]>} Array of material paths
+ * Get the materials (and their textures) a model needs (see mdlDependencies.js)
+ * @param {string} mdlPath - Model path, like "models/props/cube.mdl"
+ * @param {string} portal2Dir - Portal 2's install folder
+ * @param {string[]} searchDirs - Extra search folders, relative to portal2Dir
+ * @returns {Promise<string[]>} Paths under materials/, without extensions
  */
 async function getMdlMaterials(mdlPath, portal2Dir, searchDirs = []) {
-    try {
-        // Use isDev to pick the correct path - don't rely on fs.existsSync()
-        // because ASAR transparency makes files inside the archive appear to exist,
-        // but native executables can't run from inside ASAR
-        const exePath = isDev
-            ? path.join(__dirname, "..", "libs", "areng_mdlDepend", "find_mdl_deps.exe")
-            : path.join(process.resourcesPath || "", "extraResources", "areng_mdlDepend", "find_mdl_deps.exe")
-
-        if (!fs.existsSync(exePath)) {
-            console.log("find_mdl_deps.exe not found, skipping MDL material extraction")
-            return []
-        }
-
-        // Game directory is the portal2 subfolder
-        const gameDir = path.join(portal2Dir, "portal2")
-
-        // Build extra search paths (full paths to directories)
-        const extraPaths = searchDirs
-            .filter(dir => !dir.includes("|") && !dir.includes("bee2")) // Skip special paths
-            .map(dir => path.join(portal2Dir, dir))
-            .filter(dir => fs.existsSync(dir))
-            .join(";")
-
-        // Build arguments
-        const args = [mdlPath, gameDir]
-        if (extraPaths) {
-            args.push("--search-paths", extraPaths)
-        }
-
-        console.log(`Running find_mdl_deps.exe with args:`, args)
-
-        // Run the executable
-        const { stdout, stderr } = await execFileAsync(exePath, args, {
-            timeout: 30000,
-            maxBuffer: 10 * 1024 * 1024
-        })
-
-        if (stderr) {
-            console.warn("find_mdl_deps.exe stderr:", stderr)
-        }
-
-        // Parse JSON output
-        const result = JSON.parse(stdout)
-        console.log(`find_mdl_deps.exe result:`, result)
-        if (result.success && result.materials) {
-            // Return material paths (they include materials/ prefix)
-            // Strip extensions and deduplicate (srctools returns both .vmt and .vtf)
-            const materials = result.materials.map(m => m.replace(/\.(vmt|vtf)$/, ""))
-            return [...new Set(materials)]
-        }
-        return []
-    } catch (error) {
-        console.warn(`Failed to get MDL materials for ${mdlPath}:`, error.message)
+    // Extra folders are searched after the game's own (as before, special
+    // paths and BEE2's folder are skipped)
+    const searchPaths = searchDirs
+        .filter((dir) => !dir.includes("|") && !dir.includes("bee2"))
+        .map((dir) => path.join(portal2Dir, dir))
+        .filter((dir) => fs.existsSync(dir))
+    const result = await findMdlDependencies(mdlPath, {
+        portal2Root: portal2Dir,
+        searchPaths,
+    })
+    if (!result.success) {
+        console.warn(`Failed to get MDL materials for ${mdlPath}:`, result.error)
         return []
     }
+    // Both .vmt and .vtf files are listed: strip extensions and deduplicate
+    const materials = result.materials.map((m) => m.replace(/\.(vmt|vtf)$/, ""))
+    return [...new Set(materials)]
 }
+
 
 /**
  * Perform autopacking for an instance VMF file

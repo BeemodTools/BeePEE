@@ -6,58 +6,29 @@ const { app, dialog, BrowserWindow } = require("electron")
 const { spawn } = require("child_process")
 const fs = require("fs")
 const path = require("path")
+const { findMdlDependencies } = require("../utils/mdlDependencies")
 const { packages } = require("../packageManager")
 const { sendItemUpdateToEditor } = require("../items/itemEditor")
 const { Instance } = require("../items/Instance")
 const { vmfStatsCache } = require("../utils/vmfParser")
 const { getHammerPath, getHammerAvailability, findPortal2Dir } = require("../data")
 const { extractAssetsFromVMF, getPortal2SearchDirs, assetExistsInPortal2 } = require("../utils/vmfAssetExtractor")
-const { execFile } = require("child_process")
-const { promisify } = require("util")
-const execFileAsync = promisify(execFile)
 
 /**
- * Get MDL material dependencies using find_mdl_deps.exe
- * @param {string} mdlPath - Path to the MDL file (e.g., "models/props/cube.mdl")
- * @param {string} portal2Dir - Path to Portal 2 directory
- * @returns {Promise<Object>} Object with materials array or error
+ * Get the materials a model needs (see mdlDependencies.js)
+ * @param {string} mdlPath - Model path, like "models/props/cube.mdl"
+ * @param {string} portal2Dir - Portal 2's install folder
+ * @returns {Promise<{success: boolean, materials: string[], error?: string}>}
  */
 async function getMdlDependencies(mdlPath, portal2Dir) {
-    try {
-        // Use app.isPackaged to pick the correct path - don't rely on fs.existsSync
-        // because ASAR transparency makes files inside the archive appear to exist,
-        // but native executables can't run from inside ASAR
-        const isDev = !app.isPackaged
-        const exePath = isDev
-            ? path.join(__dirname, "..", "libs", "areng_mdlDepend", "find_mdl_deps.exe")
-            : path.join(process.resourcesPath || "", "extraResources", "areng_mdlDepend", "find_mdl_deps.exe")
-
-        if (!fs.existsSync(exePath)) {
-            console.log("find_mdl_deps.exe not found, skipping MDL dependency check")
-            return { success: false, error: "find_mdl_deps.exe not found", materials: [] }
-        }
-
-        // Game directory is the portal2 subfolder
-        const gameDir = path.join(portal2Dir, "portal2")
-
-        // Run the executable
-        const { stdout, stderr } = await execFileAsync(exePath, [mdlPath, gameDir], {
-            timeout: 30000, // 30 second timeout
-            maxBuffer: 10 * 1024 * 1024 // 10MB buffer
-        })
-
-        if (stderr) {
-            console.warn("find_mdl_deps.exe stderr:", stderr)
-        }
-
-        // Parse JSON output
-        const result = JSON.parse(stdout)
-        return result
-    } catch (error) {
-        console.warn(`Failed to get MDL dependencies for ${mdlPath}:`, error.message)
-        return { success: false, error: error.message, materials: [] }
+    const result = await findMdlDependencies(mdlPath, { portal2Root: portal2Dir })
+    if (!result.success) {
+        console.warn(`Failed to get MDL dependencies for ${mdlPath}:`, result.error)
+        return { ...result, materials: [] }
     }
+    return result
 }
+
 
 /**
  * Helper function to fix instance paths by removing BEE2/ prefix

@@ -128,20 +128,6 @@
                 ]
             },
             {
-                "from": "backend/libs/areng_obj23ds",
-                "to": "extraResources/areng_obj23ds",
-                "filter": [
-                    "**/*"
-                ]
-            },
-            {
-                "from": "backend/libs/areng_mdlDepend",
-                "to": "extraResources/areng_mdlDepend",
-                "filter": [
-                    "**/*"
-                ]
-            },
-            {
                 "from": "backend/prefabs",
                 "to": "prefabs"
             }

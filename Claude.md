@@ -671,34 +671,26 @@ Automatically generates 3DS collision models alongside MDL files for proper phys
     - Creates MDL, VVD, VTX files
     - Copies to: `{package}/resources/models/props_map_editor/bpee/{itemName}/`
 
-3. **OBJ → 3DS Conversion** (NEW!)
-    - Converts the same OBJ file to 3DS format for collision detection
-    - Uses PyAssimp with triangulation and normal generation
+3. **OBJ → 3DS Conversion**
+    - Converts the same OBJ file to 3DS format for collision detection (`backend/utils/objTo3ds.js`), scaled and rotated for the editor
     - Outputs to: `{package}/temp_models/{itemName}.3ds`
 
 4. **3DS Installation** (NEW!)
     - Copies 3DS file to: `{package}/resources/models/puzzlemaker/selection_bee2/bpee/{itemName}/{itemName}.3ds`
     - Updates `editoritems.json` with `CollisionModelName` field
 
-### Files Created
+### Files
 
-**New Utility: `backend/libs/areng_obj23ds/convert_obj_to_3ds.py`**
+**`backend/utils/objTo3ds.js`** (replaced the Python `convert_obj_to_3ds.exe`, writing the same bytes)
 
-- Python script using PyAssimp for OBJ to 3DS conversion
-- Handles triangulation (3DS requirement)
-- Generates normals if missing
-- Optimizes vertex data
+- Writes one triangle mesh object named "collision": vertices are scaled, then rotated by roll (X), pitch (Y) and yaw (Z); polygons become triangle fans
+- 3DS counts are 16-bit, so meshes with more than 65,535 vertices or faces are split into several objects ("collision", "collision2", ...)
 
-**New Functions in `backend/utils/mdlConverter.js`:**
+**Functions in `backend/utils/mdlConverter.js`:**
 
-- `convertObjTo3DS()` - Executes Python converter script
+- `convertObjTo3DS()` - Converts the OBJ with `objTo3ds.js`
 - `copy3DSToPackage()` - Copies 3DS to correct package directory
-
-**Updated Files:**
-
-- `backend/utils/mdlConverter.js` - Added 3DS conversion to `convertAndInstallMDL()`
-- `backend/events.js` - Updated all model conversion handlers to include 3DS paths
-- `package.json` - Added `areng_obj23ds` to extraResources
+- `convertAndInstallMDL()` - Runs the 3DS conversion after the MDL compile
 
 ### Directory Structure
 
@@ -744,19 +736,7 @@ Automatically generates 3DS collision models alongside MDL files for proper phys
 
 ### Requirements
 
-**Option A: Blender (Recommended)**
-
-1. **Blender** - Install from https://www.blender.org/
-2. No additional setup required
-3. Automatically detected in common installation paths
-
-**Option B: PyAssimp (Fallback)**
-
-1. **Python 3.x** - Must be available in system PATH
-2. **PyAssimp** - Install with: `pip install pyassimp`
-3. **Assimp Library DLL** - Must be in system PATH (not included with PyAssimp)
-
-**Automatic Fallback:** BeePEE tries Blender first, then falls back to PyAssimp if Blender is unavailable.
+None: the conversion runs inside BeePEE.
 
 ### User Experience
 
@@ -783,6 +763,19 @@ Graceful degradation:
 - This matches the standard BEE2 item format structure
 
 ---
+
+## Model Dependencies
+
+`backend/utils/mdlDependencies.js` lists the materials and textures a model needs, for the autopacker (`autopacker.js`) and the instance asset check (`instanceHandlers.js`). It replaced the Python `find_mdl_deps.exe` (srctools) and gives the same results (checked on all 270 models used by the packages), about 100x faster since the file index is built once and reused.
+
+It follows srctools' `PackList` rules:
+
+- The model's textures resolve to the first VMT found in its `$cdmaterials` folders (plus the textures' own folders and the root), for the skin table columns its meshes use
+- Each VMT adds its `patch` parents, every parameter srctools types as a texture (listed even if the file is missing; `env_cubemap` and `_rt_` buffers skipped) and material parameters (`$bottommaterial`, `$crackmaterial`, `$translucent_material`)
+- Included models (`$includemodel`) and gibs (`break` models in the `.phy`) are followed too
+- Files are looked up like the game does: the search paths in `gameinfo.txt`, plus the DLC, `update` and `platform` folders, VPKs before loose files
+
+No Python is needed anywhere in BeePEE.
 
 ## VMF to OBJ Conversion (VMF2OBJ port)
 

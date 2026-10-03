@@ -2,6 +2,7 @@
 const fs = require("fs")
 const path = require("path")
 const { exec } = require("child_process")
+const { convertObjFileTo3ds } = require("./objTo3ds")
 const { promisify } = require("util")
 const { app } = require("electron")
 const sharp = require("sharp")
@@ -1013,7 +1014,7 @@ function mapVariableValuesToInstances(blocksOrVbsp, targetVariable, item = null)
 }
 
 /**
- * Convert OBJ file to 3DS format using Trimesh
+ * Convert OBJ file to 3DS format (see objTo3ds.js)
  * @param {string} objPath - Path to the source OBJ file
  * @param {string} outputPath - Path where 3DS should be saved
  * @param {number} scale - Scale factor for collision model (default: 0.9 for smaller collision)
@@ -1034,45 +1035,16 @@ async function convertObjTo3DS(
         throw new Error(`OBJ file not found: ${objPath}`)
     }
 
-    const converterExe = isDev
-        ? path.join(
-              __dirname,
-              "..",
-              "libs",
-              "areng_obj23ds",
-              "convert_obj_to_3ds.exe",
-          )
-        : path.join(
-              process.resourcesPath,
-              "extraResources",
-              "areng_obj23ds",
-              "convert_obj_to_3ds.exe",
-          )
-
-    if (!fs.existsSync(converterExe)) {
-        throw new Error(`Trimesh converter not found at: ${converterExe}`)
-    }
-
     // Ensure output directory exists (with retry for EPERM errors)
-    const outputDir = path.dirname(outputPath)
-    await mkdirWithRetry(outputDir)
-
-    // Run the converter executable with scale and rotation parameters
-    const cmd = `"${converterExe}" "${objPath}" "${outputPath}" ${scale} ${roll} ${pitch} ${yaw}`
+    await mkdirWithRetry(path.dirname(outputPath))
 
     try {
-        const { stdout, stderr } = await execAsync(cmd, {
-            maxBuffer: 1024 * 1024 * 10, // 10MB buffer
-            timeout: 60000, // 1 minute timeout
+        await convertObjFileTo3ds(objPath, outputPath, {
+            scale,
+            roll,
+            pitch,
+            yaw,
         })
-
-        if (stderr) console.warn("3DS converter stderr:", stderr)
-
-        // Verify the file was created
-        if (!fs.existsSync(outputPath)) {
-            throw new Error(`3DS file was not created at: ${outputPath}`)
-        }
-
         return outputPath
     } catch (error) {
         console.error("3DS conversion failed:", error)

@@ -151,46 +151,12 @@ ipcMain.handle("api:loadImage", async (event, filePath) => {
     }
 })
 
-// Check if required Python bin folders exist for areng_ tools
-function checkArengBinFolders() {
-    const baseDir = app.isPackaged
-        ? path.join(process.resourcesPath, "extraResources")
-        : path.join(__dirname, "libs")
-
-    const requiredFolders = [path.join(baseDir, "areng_obj23ds", "_internal")]
-
-    const missingFolders = []
-    for (const folder of requiredFolders) {
-        if (!fs.existsSync(folder)) {
-            missingFolders.push(path.basename(path.dirname(folder)))
-        }
-    }
-
-    return missingFolders
-}
-
 app.whenReady().then(async () => {
     // Initialize logger
     initializeLogger()
 
     // Clean up any leftover renamed directories from previous sessions
     cleanupDeletedDirectories()
-
-    // Check for required Python bin folders
-    const missingBins = checkArengBinFolders()
-    if (missingBins.length > 0) {
-        const { dialog } = require("electron")
-        logger.error("Missing Python bin folders for:", missingBins.join(", "))
-
-        dialog.showErrorBox(
-            "Missing Python Runtime",
-            `BeePEE is missing required Python runtime files.\n\n` +
-            `Missing folders: ${missingBins.join(", ")}\n\n` +
-            `The following features will not work:\n` +
-            `• OBJ to 3DS conversion (model generation)\n\n` +
-            `Please download the full BeePEE release from GitHub or rebuild the Python executables.`
-        )
-    }
 
     // Ensure packages directory exists at startup
     try {
