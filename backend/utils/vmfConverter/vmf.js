@@ -60,6 +60,8 @@ function parseDisplacement(block) {
         startPosition: [start[0], start[1], start[2]],
         normals,
         distances,
+        // Per-vertex blend between $basetexture (0) and $basetexture2 (255)
+        alphas: readRows(getBlocks(children, "alphas")[0]),
     }
 }
 

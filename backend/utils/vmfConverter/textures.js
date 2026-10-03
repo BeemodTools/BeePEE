@@ -171,8 +171,9 @@ function unitParam(value, fallback) {
 /**
  * Pull the fields the converter needs out of parsed VMT params. The blend
  * fields ($additive, $alpha, $alphatestreference, DecalModulate) are used
- * when overlays are drawn onto faces.
- * @returns {{basetexture: string|null, bumpmap: string|null, translucent: boolean, alphatest: boolean, tint: number[]|null, tintMask: boolean, additive: boolean, alpha: number, alphaTestReference: number, modulate: boolean}}
+ * when overlays and decals are drawn onto faces, $decalscale sizes decals,
+ * and $basetexture2/$blendmodulatetexture are blended on displacements.
+ * @returns {{basetexture: string|null, bumpmap: string|null, translucent: boolean, alphatest: boolean, tint: number[]|null, tintMask: boolean, additive: boolean, alpha: number, alphaTestReference: number, modulate: boolean, decalScale: number, basetexture2: string|null, blendModulate: string|null}}
  */
 function describeMaterial(shader, params) {
     if (shader === "water") {
@@ -188,10 +189,14 @@ function describeMaterial(shader, params) {
             alpha: 1,
             alphaTestReference: 0.5,
             modulate: false,
+            decalScale: 1,
+            basetexture2: null,
+            blendModulate: null,
         }
     }
     // $color tints every shader; $color2 is the model shaders' tint
     const usesColor2 = !/lightmapped|worldvertextransition/.test(shader)
+    const decalScale = Number.parseFloat(params.get("decalscale"))
     return {
         basetexture: normalizeTexturePath(params.get("basetexture")),
         bumpmap: normalizeTexturePath(params.get("bumpmap")),
@@ -206,6 +211,10 @@ function describeMaterial(shader, params) {
         alpha: unitParam(params.get("alpha"), 1),
         alphaTestReference: unitParam(params.get("alphatestreference"), 0.5),
         modulate: shader === "decalmodulate",
+        decalScale:
+            Number.isFinite(decalScale) && decalScale > 0 ? decalScale : 1,
+        basetexture2: normalizeTexturePath(params.get("basetexture2")),
+        blendModulate: normalizeTexturePath(params.get("blendmodulatetexture")),
     }
 }
 

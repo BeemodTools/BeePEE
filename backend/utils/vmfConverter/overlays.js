@@ -1,8 +1,10 @@
 /**
- * info_overlay support. Source projects an overlay along its BasisNormal onto
- * the brush faces listed in its "sides" and clips it to them. Here overlays
- * are baked into a copy of each such face's texture instead, so they need no
- * transparency, can't overhang their faces and can't z-fight.
+ * info_overlay and infodecal support. Source projects an overlay along its
+ * BasisNormal onto the brush faces listed in its "sides" and clips it to
+ * them, and puts a static decal on every face whose plane is close to the
+ * decal. Here both are baked into a copy of each such face's texture
+ * instead, so they need no transparency, can't overhang their faces and
+ * can't z-fight.
  */
 
 const { parseNumbers } = require("./vmf")
@@ -90,8 +92,82 @@ function parseOverlay(entity, index) {
     }
 }
 
+/** Static decals go on faces whose plane is closer than this (as in the engine) */
+const DECAL_DISTANCE = 4
+
 /**
- * How an overlay material is drawn, from describeMaterial()
+ * Read an infodecal entity
+ * @param {Object} entity - Parsed VMF entity
+ * @param {number} index - Position among the VMF's decals
+ * @returns {Object|null} null without a texture or origin
+ */
+function parseDecal(entity, index) {
+    const material = (entity.get("texture") ?? "")
+        .replace(/\\/g, "/")
+        .trim()
+        .toLowerCase()
+    const origin = parseNumbers(entity.get("origin"))
+    if (!material || origin.length < 3) return null
+    return {
+        index,
+        id: entity.get("id") ?? String(index),
+        material,
+        origin: origin.slice(0, 3),
+    }
+}
+
+/** The decals close enough to a face's plane to be put on it */
+function decalsNearFace(decals, plane, normal) {
+    return decals.filter(
+        (decal) =>
+            Math.abs(dot(sub(decal.origin, plane[0]), normal)) < DECAL_DISTANCE,
+    )
+}
+
+/**
+ * A decal on a face, in the form overlays use: centered on the decal's
+ * origin in the face's plane, sized by its texture, and oriented like the
+ * engine does it (R_DecalComputeBasis): on floors and ceilings S runs along
+ * +X, on walls T runs down.
+ * @param {number[]} normal - The face's outward unit normal
+ * @param {number} width - Width in units (texture width × $decalscale)
+ * @param {number} height - Height in units (texture height × $decalscale)
+ */
+function decalProjection(decal, normal, width, height) {
+    let s
+    let t
+    if (Math.abs(normal[2]) > Math.SQRT1_2) {
+        t = cross([1, 0, 0], normal)
+        s = cross(normal, t)
+    } else {
+        s = cross(normal, [0, 0, -1])
+        t = cross(s, normal)
+    }
+    const w = width / 2
+    const h = height / 2
+    return {
+        source: decal,
+        origin: decal.origin,
+        normal,
+        dualU: normalize(s),
+        dualV: normalize(t),
+        corners: [
+            [-w, -h],
+            [-w, h],
+            [w, h],
+            [w, -h],
+        ],
+        texCoords: [
+            [0, 0],
+            [0, 1],
+            [1, 1],
+            [1, 0],
+        ],
+    }
+}
+
+/**
+ * How an overlay or decal material is drawn, from describeMaterial()
  * @returns {"modulate"|"additive"|"alphatest"|"translucent"|"opaque"}
  */
 function blendMode(info) {
@@ -463,6 +539,9 @@ function bakeOverlays(face, layers) {
 
 module.exports = {
     parseOverlay,
+    parseDecal,
+    decalsNearFace,
+    decalProjection,
     blendMode,
     textureMapping,
     bakeOverlays,

@@ -788,7 +788,7 @@ Graceful degradation:
 
 ### Overview
 
-`backend/utils/vmfConverter/` converts VMF instances into OBJ + MTL files with PNG textures, in-process (no Java). It is a JavaScript port of [VMF2OBJ](https://github.com/Dylancyclone/VMF2OBJ) by Dylancyclone (MIT, see `LICENSE-VMF2OBJ.txt` in that folder) and handles brushes, brush entities, displacements, model entities (props, NPCs, ...) and overlays.
+`backend/utils/vmfConverter/` converts VMF instances into OBJ + MTL files with PNG textures, in-process (no Java). It is a JavaScript port of [VMF2OBJ](https://github.com/Dylancyclone/VMF2OBJ) by Dylancyclone (MIT, see `LICENSE-VMF2OBJ.txt` in that folder) and handles brushes, brush entities, displacements, model entities (props, NPCs, ...), overlays and decals.
 
 `backend/utils/vmf2obj.js` wraps it for BeePEE: it builds the resource path list, rotates the OBJ into Three.js space and applies the cartoon texture style. `cartoon.exe` writes RGB-only PNGs, so `withAlphaPreserved` puts the original alpha back on textures that had one.
 
@@ -799,7 +799,8 @@ Graceful degradation:
 | `brushes.js` | Side planes → face polygons, displacement grids |
 | `models.js` | Crowbar decompile, QC/SMD parsing, posing props |
 | `textures.js` | VMT parsing, VTF decoding, PNG encoding |
-| `overlays.js` | Baking `info_overlay`s into the textures of their faces |
+| `overlays.js` | Baking `info_overlay`s and `infodecal`s into the textures of their faces |
+| `blends.js` | Baking displacement blend materials into a texture per displacement |
 | `vpk.js` / `resources.js` | VPK reading and the content lookup across VPKs/folders |
 
 ### Usage
@@ -841,13 +842,20 @@ custom-content/        <-- SELECT THIS
 - Placement: Crowbar's SMDs are rotated 90° about Z from model space, then Source's entity angles are applied (roll, then pitch, then yaw), then `uniformscale`/`modelscale` and `origin`.
 - The first option of each body group is used; `skin` selects a `$texturegroup` row.
 
-### Overlays
+### Overlays and Decals
 
-- `info_overlay`s are baked into the textures of the brush faces listed in their `sides` (`overlays.js`). Each such face gets its own texture, `materials/bpee_overlays/bpee_overlay_<output name>_<side id>.png`, covering the face's texture coordinates: the face's (tinted) texture copied texel for texel, with the overlays drawn over it. The face's UVs are remapped onto it.
-- As in Source, an overlay is projected along `BasisNormal` onto each face and clipped to it (corners `uv0`–`uv3` around `BasisOrigin`, texture coordinates from `StartU`/`EndU`/`StartV`/`EndV`). So overlays can't overhang their faces, z-fight or need transparency.
-- Overlays are drawn in `RenderOrder`, then VMF order, and blended like their shader: `$translucent` alpha blending, `$alphatest` cutouts, `$additive`, `DecalModulate` (2 × overlay × face) and `$alpha`. Opaque overlay materials cover the face.
-- A face's baked texture gets up to 8 pixels per face texel when an overlay is sharper than the face's texture, and is at most 2048 px wide/high.
-- Overlays that end up on no face (no `sides`, sides that aren't in the instance, displacements, skipped tool faces) are left out with a warning, as VBSP leaves them out.
+- `info_overlay`s and `infodecal`s are baked into the textures of the brush faces they're on (`overlays.js`). Each such face gets its own texture, `materials/bpee_overlays/bpee_overlay_<output name>_<side id>.png`, covering the face's texture coordinates: the face's (tinted) texture copied texel for texel, with the overlays and decals drawn over it. The face's UVs are remapped onto it.
+- As in Source, an overlay is projected along `BasisNormal` onto each face in its `sides` and clipped to it (corners `uv0`–`uv3` around `BasisOrigin`, texture coordinates from `StartU`/`EndU`/`StartV`/`EndV`). So overlays can't overhang their faces, z-fight or need transparency.
+- A decal goes on every face whose plane is within 4 units of its origin (the engine's `DECAL_DISTANCE`), centered on the origin and as big as its texture times `$decalscale`. Its orientation follows the engine's `R_DecalComputeBasis`: on floors and ceilings S runs along +X, on walls T points down.
+- Overlays are drawn in `RenderOrder`, then VMF order, followed by decals in VMF order. Both blend like their shader: `$translucent` alpha blending, `$alphatest` cutouts, `$additive`, `DecalModulate` (2 × overlay × face) and `$alpha`. Opaque materials cover the face.
+- A face's baked texture gets up to 8 pixels per face texel when an overlay or decal is sharper than the face's texture, and is at most 2048 px wide/high.
+- Overlays and decals that end up on no visible face (overlays without `sides` or with sides that aren't in the instance, decals with no face within 4 units, anything only on displacements or skipped tool faces) are left out with a warning. Many decals in item instances are meant for the chamber's walls and floors, which aren't part of the instance.
+
+### Displacement Blends
+
+- Displacements with a blend material (`WorldVertexTransition` with `$basetexture2`) get a texture with the blend baked in (`blends.js`): `materials/bpee_blends/bpee_blend_<output name>_<side id>.png`. It spans the displacement's vertex grid, and each vertex's texture coordinates become (column, row) / (size − 1) on it.
+- Each texel blends `$basetexture` and `$basetexture2` by the vertex alphas (`alphas` in the dispinfo, 0 = first texture, 255 = second), sampled at the grid's texture coordinates. A `$blendmodulatetexture` sharpens the blend like the shader does: `smoothstep(g − r, g + r, alpha)`.
+- Displacements whose alphas are all 0 keep their normal material and texture coordinates.
 
 ### Materials
 
@@ -861,12 +869,10 @@ custom-content/        <-- SELECT THIS
 
 ### Unsupported Features
 
-- ❌ Displacement blend materials (would require texture generation or per-vertex materials)
-- ❌ infodecal (projection logic unknown)
-- ❌ Overlays on displacements
+- ❌ Overlays and decals on displacements
 - ❌ Body group selection via the `body` keyvalue
 - ❌ Compressed (Strata) VTFs
 
 ### Tests
 
-`backend/__tests__/vmfConverter.test.js` covers parsing, brush geometry, entity angles, QC/SMD handling and posing, the VTF/PNG/VPK codecs, overlays, editor VMTs and an end-to-end conversion.
+`backend/__tests__/vmfConverter.test.js` covers parsing, brush geometry, entity angles, QC/SMD handling and posing, the VTF/PNG/VPK codecs, overlays, decals, displacement blends, editor VMTs and an end-to-end conversion.

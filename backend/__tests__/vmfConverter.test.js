@@ -312,6 +312,9 @@ $basetexture "concrete/dx8"
             alpha: 1,
             alphaTestReference: 0.5,
             modulate: false,
+            decalScale: 1,
+            basetexture2: null,
+            blendModulate: null,
         })
     })
 
@@ -857,11 +860,230 @@ describe("convertVmf: overlays", () => {
         ])
         expect(result.stats.overlays).toBe(0)
         expect(result.warnings).toContain(
-            "2 overlays (test/red) are not on any brush face in this instance, so they were left out",
+            "2 overlays (test/red) are not on any visible brush face in this instance, so they were left out",
         )
         expect(fs.readFileSync(result.mtlPath, "utf8")).not.toContain(
             "bpee_overlay",
         )
+    })
+})
+
+describe("convertVmf: decals and displacement blends", () => {
+    let root
+    const folder = () => path.join(root, "content", "materials", "test")
+    const vtf = (size, texels) =>
+        buildVtf(size, size, FORMAT.RGBA8888, Buffer.from(texels.flat()))
+    const convert = (name, vmfText) => {
+        const vmfPath = path.join(root, `${name}.vmf`)
+        fs.writeFileSync(vmfPath, vmfText)
+        return convertVmf(vmfPath, path.join(root, "out", name), {
+            resourcePaths: [path.join(root, "content")],
+            quiet: true,
+        })
+    }
+    const decal = (id, texture, origin) => `
+        entity
+        {
+            "id" "${id}"
+            "classname" "infodecal"
+            "texture" "${texture}"
+            "origin" "${origin.join(" ")}"
+        }`
+    const bakedFile = (folderName, file) =>
+        path.join(root, "out", "materials", folderName, file)
+    const RED = [255, 0, 0]
+    const GREEN = [0, 255, 0]
+    const BLUE = [0, 0, 255]
+    const WHITE = [255, 255, 255]
+    const GREY = [100, 100, 100]
+
+    beforeAll(() => {
+        root = fs.mkdtempSync(path.join(os.tmpdir(), "beepee-vmf2obj-decal-"))
+        fs.mkdirSync(folder(), { recursive: true })
+        fs.writeFileSync(
+            path.join(folder(), "base.vtf"),
+            vtf(4, Array(16).fill([...GREY, 255])),
+        )
+        fs.writeFileSync(
+            path.join(folder(), "base.vmt"),
+            `"LightmappedGeneric" { "$basetexture" "test/base" }`,
+        )
+        // 4x4 decal with a colored quadrant per corner (rows top to bottom)
+        const quadrants = []
+        for (let y = 0; y < 4; y++) {
+            for (let x = 0; x < 4; x++) {
+                const color =
+                    y < 2 ? (x < 2 ? RED : GREEN) : x < 2 ? BLUE : WHITE
+                quadrants.push([...color, 255])
+            }
+        }
+        fs.writeFileSync(path.join(folder(), "quad.vtf"), vtf(4, quadrants))
+        // $decalscale 2: 4 texels make an 8 unit decal
+        fs.writeFileSync(
+            path.join(folder(), "quad.vmt"),
+            `"LightmappedGeneric" { "$basetexture" "test/quad" "$decal" "1" "$translucent" "1" "$decalscale" "2" }`,
+        )
+        fs.writeFileSync(
+            path.join(folder(), "blue.vtf"),
+            vtf(4, Array(16).fill([...BLUE, 255])),
+        )
+        fs.writeFileSync(
+            path.join(folder(), "blend.vmt"),
+            `"WorldVertexTransition" { "$basetexture" "test/base" "$basetexture2" "test/blue" }`,
+        )
+    })
+
+    afterAll(() => {
+        fs.rmSync(root, { recursive: true, force: true })
+    })
+
+    test("puts decals on floors with S along +X, like the engine", async () => {
+        // 2 units above the top of a 16x16x8 box (side 1)
+        const result = await convert(
+            "floor",
+            `world { ${boxSolid(2, [0, 0, 0], [16, 16, 8], "test/base")} }
+            ${decal(7, "test/quad", [8, 8, 10])}`,
+        )
+        expect(result.stats.decals).toBe(1)
+        const file = bakedFile("bpee_overlays", "bpee_overlay_floor_1.png")
+        // The top face's texture is 4 texels per unit: u along x, v along -y
+        const at = (x, y) =>
+            readPngPixel(file, Math.floor(x * 4), Math.floor((16 - y) * 4))
+        // The image's top is towards +Y; the decal covers x and y 4-12
+        expect(at(5, 11)).toEqual(RED)
+        expect(at(11, 11)).toEqual(GREEN)
+        expect(at(5, 5)).toEqual(BLUE)
+        expect(at(11, 5)).toEqual(WHITE)
+        expect(at(1, 1)).toEqual(GREY)
+        expect(at(14, 14)).toEqual(GREY)
+    })
+
+    test("puts decals on walls with T pointing down", async () => {
+        // 1 unit out from the box's +X face (side 4)
+        const result = await convert(
+            "wall",
+            `world { ${boxSolid(2, [0, 0, 0], [16, 16, 8], "test/base")} }
+            ${decal(7, "test/quad", [17, 8, 4])}`,
+        )
+        expect(result.stats.decals).toBe(1)
+        const file = bakedFile("bpee_overlays", "bpee_overlay_wall_4.png")
+        // That face's texture: u along y, v along -z
+        const at = (y, z) =>
+            readPngPixel(file, Math.floor(y * 4), Math.floor((8 - z) * 4))
+        expect(at(5, 7)).toEqual(RED)
+        expect(at(11, 7)).toEqual(GREEN)
+        expect(at(5, 1)).toEqual(BLUE)
+        expect(at(11, 1)).toEqual(WHITE)
+        expect(at(1, 4)).toEqual(GREY)
+    })
+
+    test("leaves out decals further than 4 units from every face", async () => {
+        const result = await convert(
+            "far",
+            `world { ${boxSolid(2, [0, 0, 0], [16, 16, 8], "test/base")} }
+            ${decal(7, "test/quad", [8, 8, 13])}`,
+        )
+        expect(result.stats.decals).toBe(0)
+        expect(result.warnings).toContain(
+            "A decal (test/quad) is not close to any visible brush face in this instance, so it was left out",
+        )
+    })
+
+    const blendVmf = (alphaRow) => {
+        const rows = (row) =>
+            Array.from({ length: 5 }, (_, i) => `"row${i}" "${row}"`).join("\n")
+        const dispinfo = `
+            dispinfo
+            {
+                "power" "2"
+                "startposition" "[0 0 8]"
+                normals { ${rows(Array(5).fill("0 0 1").join(" "))} }
+                distances { ${rows("0 0 0 0 0")} }
+                alphas { ${rows(alphaRow)} }
+            }`
+        return `world { ${boxSolid(
+            2,
+            [0, 0, 0],
+            [16, 16, 8],
+            "test/blend",
+        ).replace('"id" "1"', `"id" "1" ${dispinfo}`)} }`
+    }
+
+    test("bakes displacement blends by vertex alpha", async () => {
+        const result = await convert("blend", blendVmf("0 0 128 255 255"))
+        expect(result.stats.blends).toBe(1)
+
+        const obj = fs.readFileSync(result.objPath, "utf8")
+        expect(obj).toContain("usemtl bpee_blend_blend_1")
+        // The displacement's texture coordinates span the baked texture
+        const coords = obj
+            .split("\n")
+            .filter((line) => line.startsWith("vt "))
+            .map((line) => line.split(" ").slice(1).map(Number))
+        expect(Math.min(...coords.flat())).toBe(0)
+        expect(Math.max(...coords.flat())).toBe(1)
+
+        // Columns of the vertex grid run along the image's width
+        const file = bakedFile("bpee_blends", "bpee_blend_blend_1.png")
+        const png = fs.readFileSync(file)
+        const width = png.readUInt32BE(16)
+        const height = png.readUInt32BE(20)
+        const middle = Math.floor(height / 2)
+        expect(readPngPixel(file, 0, middle)).toEqual(GREY)
+        expect(readPngPixel(file, width - 1, middle)).toEqual(BLUE)
+        const halfway = readPngPixel(file, Math.floor(width / 2), middle)
+        expect(halfway[0]).toBeGreaterThan(0)
+        expect(halfway[0]).toBeLessThan(100)
+        expect(halfway[2]).toBeGreaterThan(100)
+        expect(halfway[2]).toBeLessThan(255)
+    })
+
+    test("leaves displacements that only show $basetexture as they are", async () => {
+        const result = await convert("unblended", blendVmf("0 0 0 0 0"))
+        expect(result.stats.blends).toBe(0)
+        expect(fs.readFileSync(result.objPath, "utf8")).toContain(
+            "usemtl test/blend",
+        )
+    })
+})
+
+describe("bakeBlend", () => {
+    const { bakeBlend, smoothstep } = require("../utils/vmfConverter/blends")
+    const solid = (rgba) => ({
+        width: 2,
+        height: 2,
+        rgba: Buffer.from(Array(4).fill(rgba).flat()),
+    })
+
+    test("smoothstep matches HLSL", () => {
+        expect(smoothstep(0.2, 0.8, 0.1)).toBe(0)
+        expect(smoothstep(0.2, 0.8, 0.5)).toBeCloseTo(0.5, 6)
+        expect(smoothstep(0.2, 0.8, 0.9)).toBe(1)
+        expect(smoothstep(0.5, 0.5, 0.6)).toBe(1)
+    })
+
+    test("sharpens the blend with $blendmodulatetexture", () => {
+        // Alpha goes 0 -> 1 across the grid; green 128 and red 0 make the
+        // blend a hard step in the middle
+        const grid = {
+            rows: 2,
+            cols: 2,
+            uv: (i, j) => [j * 4, i * 4],
+            alpha: (i, j) => j,
+        }
+        const image = bakeBlend(
+            grid,
+            solid([0, 0, 0, 255]),
+            solid([255, 255, 255, 255]),
+            solid([0, 128, 0, 255]),
+            false,
+        )
+        expect(image.width).toBe(8)
+        const pixel = (x) => image.rgba[(x + image.width * 4) * 4]
+        expect(pixel(2)).toBe(0)
+        expect(pixel(3)).toBe(0)
+        expect(pixel(4)).toBe(255)
+        expect(pixel(5)).toBe(255)
     })
 })
 

@@ -15,7 +15,9 @@
  *  - entity "rendercolor" and material $color/$color2 tints are baked into
  *    tinted texture copies
  *  - any entity with a model is converted, not only prop_* entities
- *  - info_overlay entities are baked into the textures of their faces
+ *  - info_overlay and infodecal entities are baked into the textures of
+ *    their faces, and displacement blend materials into a texture for each
+ *    displacement
  */
 
 const fs = require("fs")
@@ -44,11 +46,16 @@ const {
 } = require("./models")
 const {
     parseOverlay,
+    parseDecal,
+    decalsNearFace,
+    decalProjection,
     blendMode,
     textureMapping,
     bakeOverlays,
 } = require("./overlays")
+const { bakeBlend } = require("./blends")
 const {
+    scale,
     vectorKey,
     entityMatrix,
     transformPoint,
@@ -96,8 +103,11 @@ const CUBE_TYPES = [
 const PLACEHOLDER_TEXTURE = "bpee_missing_texture"
 const PLACEHOLDER_SIZE = 128
 
-/** Folder (under materials/) for face textures with overlays baked in */
+/** Folder (under materials/) for face textures with overlays/decals baked in */
 const OVERLAY_FOLDER = "bpee_overlays"
+
+/** Folder (under materials/) for baked displacement blends */
+const BLEND_FOLDER = "bpee_blends"
 
 function placeholderPixels() {
     const pixels = Buffer.alloc(PLACEHOLDER_SIZE * PLACEHOLDER_SIZE * 4)
@@ -113,6 +123,15 @@ function placeholderPixels() {
         }
     }
     return pixels
+}
+
+/** The placeholder as a decoded texture */
+function placeholderTexture() {
+    return {
+        width: PLACEHOLDER_SIZE,
+        height: PLACEHOLDER_SIZE,
+        rgba: placeholderPixels(),
+    }
 }
 
 function parseVector(value) {
@@ -299,7 +318,7 @@ class VmfConverter {
         const mtlPath = `${outputBase}.mtl`
         const state = {
             outDir: path.dirname(outputBase),
-            // Names baked overlay textures, which must not clash between the
+            // Names baked textures, which must not clash between the
             // instances of one item
             outputKey: path
                 .basename(outputBase)
@@ -311,10 +330,12 @@ class VmfConverter {
             vt: 1,
             vn: 1,
             textures: new Map(),
-            // Decoded textures for overlay baking (this conversion only)
+            // Decoded textures for baking (this conversion only)
             pixels: new Map(),
             overlaysBySide: new Map(),
-            paintedOverlays: new Set(),
+            decals: [],
+            // Overlays and decals drawn on at least one face
+            painted: new Set(),
             stats: {
                 solids: 0,
                 props: 0,
@@ -326,15 +347,19 @@ class VmfConverter {
                 skippedModels: 0,
                 placeholderMaterials: 0,
                 overlays: 0,
+                decals: 0,
+                blends: 0,
             },
         }
 
         const overlays = this.collectOverlays(state, vmf)
+        state.decals = this.collectDecals(vmf)
         for (const solid of vmf.solids) {
             await this.writeSolid(state, solid)
             await this.yieldIfBusy()
         }
-        this.reportLeftOutOverlays(state, overlays)
+        state.stats.overlays = this.reportLeftOut(state, overlays, "overlay")
+        state.stats.decals = this.reportLeftOut(state, state.decals, "decal")
 
         const props = vmf.entities.filter((entity) =>
             this.isModelEntity(entity),
@@ -456,7 +481,8 @@ class VmfConverter {
             const textureCoords = mapping.coords
 
             if (!side.dispinfo) {
-                // Overlays on this face are drawn into its own texture copy
+                // Overlays and decals on this face are drawn into its own
+                // texture copy
                 const baked = await this.bakeSideOverlays(
                     state,
                     side,
@@ -480,6 +506,14 @@ class VmfConverter {
                 state.vt += side.points.length
             } else if (side.grid) {
                 const { rows, cols, point } = side.grid
+                // Blend materials get a texture with the blend baked in,
+                // spanning the vertex grid
+                const blend = await this.bakeDisplacementBlend(
+                    state,
+                    side,
+                    texture,
+                    textureCoords,
+                )
                 for (let i = 0; i < rows - 1; i++) {
                     for (let j = 0; j < cols - 1; j++) {
                         let text = ""
@@ -490,12 +524,18 @@ class VmfConverter {
                             [0, 1],
                         ]) {
                             const p = point(i + di, j + dj)
-                            const [u, v] = textureCoords(p)
-                            state.obj.push(`vt ${u} ${-v + height}`)
+                            if (blend) {
+                                state.obj.push(
+                                    `vt ${(j + dj) / (cols - 1)} ${1 - (i + di) / (rows - 1)}`,
+                                )
+                            } else {
+                                const [u, v] = textureCoords(p)
+                                state.obj.push(`vt ${u} ${-v + height}`)
+                            }
                             text += `${vertices.indexOf(p) + state.v}/${state.vt} `
                             state.vt++
                         }
-                        faces.push({ text, material })
+                        faces.push({ text, material: blend ?? material })
                     }
                 }
             }
@@ -570,8 +610,10 @@ class VmfConverter {
         state.textures.set(materialName, {
             width: texture.width,
             height: texture.height,
-            // How to get the pixels again, for overlay baking
+            // How to get the pixels again, for baking
             texture: info.basetexture,
+            texture2: info.basetexture2,
+            blendModulate: info.blendModulate,
             tint,
             tintMask: info.tintMask,
             alphaMode: info.translucent
@@ -971,7 +1013,7 @@ class VmfConverter {
     }
 
     // -----------------------------------------------------------------------
-    // Overlays
+    // Overlays, decals and displacement blends (baked into textures)
     // -----------------------------------------------------------------------
 
     /**
@@ -1007,48 +1049,123 @@ class VmfConverter {
     }
 
     /**
-     * Overlays that ended up on no face (no "sides", sides that aren't in this
-     * VMF, displacements, skipped tool faces) are left out, as VBSP does
+     * Parse the VMF's infodecal entities (drawn after overlays, in VMF order)
+     * @returns {Object[]}
      */
-    reportLeftOutOverlays(state, overlays) {
+    collectDecals(vmf) {
+        const decals = []
+        for (const entity of vmf.entities) {
+            if (entity.classname.toLowerCase() !== "infodecal") continue
+            const decal = parseDecal(entity, decals.length)
+            if (!decal) {
+                this.warn(
+                    `Skipping decal ${entity.get("id") ?? "?"}: no texture or origin`,
+                )
+                continue
+            }
+            decals.push(decal)
+        }
+        return decals
+    }
+
+    /**
+     * Warn about overlays or decals that ended up on no face: overlays without
+     * "sides" or with sides that aren't in this VMF, decals further than 4
+     * units from every face, and anything only on displacements or skipped
+     * tool faces. VBSP and the engine leave those out too.
+     * @param {"overlay"|"decal"} kind
+     * @returns {number} How many were drawn
+     */
+    reportLeftOut(state, items, kind) {
+        const [one, many, where] =
+            kind === "overlay"
+                ? ["An overlay", "overlays", "on any visible brush face"]
+                : ["A decal", "decals", "close to any visible brush face"]
         const leftOut = new Map()
-        for (const overlay of overlays) {
-            if (state.paintedOverlays.has(overlay)) continue
-            leftOut.set(
-                overlay.material,
-                (leftOut.get(overlay.material) ?? 0) + 1,
-            )
+        for (const item of items) {
+            // Decals without a usable material were already warned about
+            if (state.painted.has(item) || item.missing) continue
+            leftOut.set(item.material, (leftOut.get(item.material) ?? 0) + 1)
         }
         for (const [material, count] of leftOut) {
             this.warn(
                 count === 1
-                    ? `An overlay (${material}) is not on any brush face in this instance, so it was left out`
-                    : `${count} overlays (${material}) are not on any brush face in this instance, so they were left out`,
+                    ? `${one} (${material}) is not ${where} in this instance, so it was left out`
+                    : `${count} ${many} (${material}) are not ${where} in this instance, so they were left out`,
             )
         }
-        state.stats.overlays = state.paintedOverlays.size
+        return items.filter((item) => state.painted.has(item)).length
     }
 
     /**
-     * Draw the overlays on a brush face into a copy of the face's texture
-     * (see overlays.js). The copy gets its own material, and the face's
-     * texture coordinates are mapped onto it.
+     * An overlay or decal material, ready to draw: its (tinted) texture and
+     * how it blends. Without a usable texture, overlays use the placeholder
+     * texture, while decals (which are sized by their texture) get null.
+     */
+    async decorationMaterial(state, material, placeholderIfMissing) {
+        const info = await this.resolveMaterial([`materials/${material}.vmt`])
+        const fallback = placeholderIfMissing
+            ? " (using a placeholder texture)"
+            : " (decal left out)"
+        let texture = null
+        if (info.error) {
+            this.warnOnce(
+                `material:${material}`,
+                `${info.error}: ${material}${fallback}`,
+            )
+        } else {
+            texture = await this.texturePixels(
+                state,
+                info.basetexture,
+                info.tint,
+                info.tintMask,
+            )
+            if (!texture) {
+                this.warnOnce(
+                    `texture:${info.basetexture}`,
+                    `Missing texture: ${info.basetexture}${fallback}`,
+                )
+            }
+        }
+        if (texture) {
+            return {
+                texture,
+                blend: blendMode(info),
+                translucent: info.translucent,
+                alpha: info.alpha,
+                alphaTestReference: info.alphaTestReference,
+                decalScale: info.decalScale,
+            }
+        }
+        if (!placeholderIfMissing) return null
+        return {
+            texture: placeholderTexture(),
+            blend: "opaque",
+            translucent: false,
+            alpha: 1,
+            alphaTestReference: 0.5,
+            decalScale: 1,
+        }
+    }
+
+    /**
+     * Draw the overlays and decals on a brush face into a copy of the face's
+     * texture (see overlays.js). The copy gets its own material, and the
+     * face's texture coordinates are mapped onto it.
      * @param {Object} texture - The face material's state.textures entry
      * @param {Object} mapping - textureMapping() of the face for that texture
      * @returns {Promise<{material: string, u: (u: number) => number, v: (v: number) => number}|null>}
-     *   null when no overlay is drawn on the face
+     *   null when nothing is drawn on the face
      */
     async bakeSideOverlays(state, side, texture, mapping) {
-        const overlays = state.overlaysBySide.get(String(side.id))
-        if (!overlays) return null
+        const overlays = state.overlaysBySide.get(String(side.id)) ?? []
+        // The face's outward normal (its plane points wind the other way)
+        const normal = scale(mapping.normal, -1)
+        const decals = decalsNearFace(state.decals, side.plane, normal)
+        if (!overlays.length && !decals.length) return null
 
-        const placeholder = () => ({
-            width: PLACEHOLDER_SIZE,
-            height: PLACEHOLDER_SIZE,
-            rgba: placeholderPixels(),
-        })
         const base = texture.placeholder
-            ? placeholder()
+            ? placeholderTexture()
             : await this.texturePixels(
                   state,
                   texture.texture,
@@ -1059,48 +1176,36 @@ class VmfConverter {
 
         const layers = []
         for (const overlay of overlays) {
-            const info = await this.resolveMaterial([
-                `materials/${overlay.material}.vmt`,
-            ])
-            let pixels = null
-            if (info.error) {
-                this.warnOnce(
-                    `material:${overlay.material}`,
-                    `${info.error}: ${overlay.material} (using a placeholder texture)`,
-                )
-            } else {
-                pixels = await this.texturePixels(
+            layers.push({
+                overlay,
+                ...(await this.decorationMaterial(
                     state,
-                    info.basetexture,
-                    info.tint,
-                    info.tintMask,
-                )
-                if (!pixels) {
-                    this.warnOnce(
-                        `texture:${info.basetexture}`,
-                        `Missing texture: ${info.basetexture} (using a placeholder texture)`,
-                    )
-                }
-            }
-            layers.push(
-                pixels
-                    ? {
-                          overlay,
-                          texture: pixels,
-                          blend: blendMode(info),
-                          translucent: info.translucent,
-                          alpha: info.alpha,
-                          alphaTestReference: info.alphaTestReference,
-                      }
-                    : {
-                          overlay,
-                          texture: placeholder(),
-                          blend: "opaque",
-                          translucent: false,
-                          alpha: 1,
-                          alphaTestReference: 0.5,
-                      },
+                    overlay.material,
+                    true,
+                )),
+            })
+        }
+        for (const decal of decals) {
+            const material = await this.decorationMaterial(
+                state,
+                decal.material,
+                false,
             )
+            if (!material) {
+                decal.missing = true
+                continue
+            }
+            // Decals are as big as their texture (times $decalscale)
+            const { width, height } = material.texture
+            layers.push({
+                overlay: decalProjection(
+                    decal,
+                    normal,
+                    width * material.decalScale,
+                    height * material.decalScale,
+                ),
+                ...material,
+            })
         }
 
         const baked = bakeOverlays(
@@ -1113,30 +1218,109 @@ class VmfConverter {
             layers,
         )
         if (!baked) return null
-        for (const overlay of baked.painted) state.paintedOverlays.add(overlay)
+        for (const drawn of baked.painted)
+            state.painted.add(drawn.source ?? drawn)
 
-        const baseName = `bpee_overlay_${state.outputKey}_${side.id}`
+        const material = await this.writeBakedTexture(
+            state,
+            OVERLAY_FOLDER,
+            `bpee_overlay_${state.outputKey}_${side.id}`,
+            baked,
+            texture.alphaMode,
+        )
+        const { uMin, uMax, vMin, vMax } = baked.bounds
+        return {
+            material,
+            u: (u) => (u - uMin) / (uMax - uMin),
+            // Source's t runs down the image while OBJ's v runs up
+            v: (v) => 1 - (v - vMin) / (vMax - vMin),
+        }
+    }
+
+    /**
+     * Bake a displacement's blend material ($basetexture2, blended in by the
+     * vertex alphas) into a texture for the displacement (see blends.js)
+     * @param {Object} texture - The material's state.textures entry
+     * @returns {Promise<string|null>} The baked material; null when the
+     *   material doesn't blend or the displacement only shows $basetexture
+     */
+    async bakeDisplacementBlend(state, side, texture, textureCoords) {
+        const { alphas } = side.dispinfo
+        if (
+            !texture.texture2 ||
+            !alphas.some((row) => row.some((alpha) => alpha > 0))
+        ) {
+            return null
+        }
+
+        const base = await this.texturePixels(
+            state,
+            texture.texture,
+            texture.tint,
+            texture.tintMask,
+        )
+        const base2 = await this.texturePixels(
+            state,
+            texture.texture2,
+            texture.tint,
+            texture.tintMask,
+        )
+        if (!base2) {
+            this.warnOnce(
+                `texture:${texture.texture2}`,
+                `Missing texture: ${texture.texture2} (displacements show only their first texture)`,
+            )
+        }
+        if (!base || !base2) return null
+        const modulate = texture.blendModulate
+            ? await this.texturePixels(state, texture.blendModulate)
+            : null
+
+        const { rows, cols, point } = side.grid
+        const image = bakeBlend(
+            {
+                rows,
+                cols,
+                uv: (i, j) => textureCoords(point(i, j)),
+                alpha: (i, j) => (alphas[i]?.[j] ?? 0) / 255,
+            },
+            base,
+            base2,
+            modulate,
+            !!texture.alphaMode,
+        )
+        state.stats.blends++
+        return this.writeBakedTexture(
+            state,
+            BLEND_FOLDER,
+            `bpee_blend_${state.outputKey}_${side.id}`,
+            image,
+            texture.alphaMode,
+        )
+    }
+
+    /**
+     * Write a baked texture to materials/<folder>/ and give it a material of
+     * its own (named like the texture, which must be unique in an item)
+     * @returns {Promise<string>} The material name
+     */
+    async writeBakedTexture(state, folder, baseName, image, alphaMode) {
         let name = baseName
         for (let n = 2; state.textures.has(name); n++) name = `${baseName}_${n}`
         const target = safeJoin(
             path.join(state.outDir, "materials"),
-            `${OVERLAY_FOLDER}/${name}.png`,
+            `${folder}/${name}.png`,
         )
         await fs.promises.mkdir(path.dirname(target), { recursive: true })
         await fs.promises.writeFile(
             target,
-            encodePng(
-                baked.width,
-                baked.height,
-                baked.rgba,
-                !!texture.alphaMode,
-            ),
+            encodePng(image.width, image.height, image.rgba, !!alphaMode),
         )
 
         state.textures.set(name, {
-            width: baked.width,
-            height: baked.height,
-            alphaMode: texture.alphaMode,
+            width: image.width,
+            height: image.height,
+            alphaMode,
         })
         state.mtl.push(
             "",
@@ -1144,22 +1328,13 @@ class VmfConverter {
             "Ka 1.000 1.000 1.000",
             "Kd 1.000 1.000 1.000",
             "Ks 0.000 0.000 0.000",
-            `map_Ka materials/${OVERLAY_FOLDER}/${name}.png`,
-            `map_Kd materials/${OVERLAY_FOLDER}/${name}.png`,
+            `map_Ka materials/${folder}/${name}.png`,
+            `map_Kd materials/${folder}/${name}.png`,
         )
-        if (texture.alphaMode) {
-            state.mtl.push("illum 4", `# beepee:${texture.alphaMode}`)
-        }
+        if (alphaMode) state.mtl.push("illum 4", `# beepee:${alphaMode}`)
         state.mtl.push("")
         state.stats.materials++
-
-        const { uMin, uMax, vMin, vMax } = baked.bounds
-        return {
-            material: name,
-            u: (u) => (u - uMin) / (uMax - uMin),
-            // Source's t runs down the image while OBJ's v runs up
-            v: (v) => 1 - (v - vMin) / (vMax - vMin),
-        }
+        return name
     }
 
     /**
