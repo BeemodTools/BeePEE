@@ -20,11 +20,13 @@ const MAX_LENGTH = 2000
 const MAX_OBJECT_LENGTH = 300
 
 /**
- * Development chatter left out of the log: the Vite client's messages
- * ("[vite] connected.", "[vite] hot updated: ...") and React's DevTools tip.
- * Only info and debug lines: Vite's errors and warnings still go in.
+ * Chatter left out of the log: the Vite client's messages ("[vite]
+ * connected.", "[vite] hot updated: ..."), React's DevTools tip, and
+ * three.js saying a closed 3D view let go of its graphics context. Only info
+ * and debug lines: Vite's errors and warnings still go in.
  */
-const DEV_NOISE = /^\[vite\] |^Download the React DevTools/
+const DEV_NOISE =
+    /^\[vite\] |^Download the React DevTools|^THREE\.WebGLRenderer: Context Lost\.$/
 
 function shorten(text, max) {
     if (text.length <= max) return text

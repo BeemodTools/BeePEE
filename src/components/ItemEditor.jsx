@@ -1334,6 +1334,8 @@ function ItemEditor() {
 
                             return `Save changes to: ${modifiedSections.join(", ")}`
                         })()}>
+                        {/* span: the tooltip still works while it's disabled */}
+                        <span style={{ flex: 1, display: "flex" }}>
                         <Button
                             variant="contained"
                             startIcon={
@@ -1366,6 +1368,7 @@ function ItemEditor() {
                                   ? "Saved!"
                                   : "Save"}
                         </Button>
+                        </span>
                     </Tooltip>
                     <Tooltip
                         title={(() => {
@@ -1402,6 +1405,7 @@ function ItemEditor() {
                                 ? "Delete this item permanently (confirmation skipped)"
                                 : "Delete this item permanently"
                         }>
+                        <span>
                         <Button
                             variant="outlined"
                             startIcon={<Delete />}
@@ -1414,6 +1418,7 @@ function ItemEditor() {
                             disabled={isDeleting}>
                             Delete
                         </Button>
+                        </span>
                     </Tooltip>
                 </Stack>
                 {saveError && (

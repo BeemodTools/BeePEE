@@ -315,8 +315,11 @@ class Logger {
      */
     emit({ line, consoleMethod, time }) {
         if (consoleMethod) {
+            // All through stdout (the line says when it's a warning or
+            // error): warnings on stderr could show up after the lines logged
+            // after them, like a step's "Done" before its warnings
             const target = this.originalConsole ?? console
-            target[consoleMethod](line)
+            target.log(line)
         }
         if (!this.isInitialized || !this.stream) return
         if (line === this.lastLine) {
