@@ -1188,3 +1188,81 @@ $model 1
         expect(alphatest).not.toContain("$selfillum")
     })
 })
+
+describe("convertVmf: glass and entities hidden at the start", () => {
+    let root
+
+    beforeAll(() => {
+        root = fs.mkdtempSync(path.join(os.tmpdir(), "beepee-vmf2obj-glass-"))
+        const materials = path.join(root, "content", "materials", "test")
+        fs.mkdirSync(materials, { recursive: true })
+        // Glass like Portal 2's: the Refract shader has no base texture
+        fs.writeFileSync(
+            path.join(materials, "glass.vmt"),
+            `"Refract" { "$refracttint" "{255 255 255}" "$normalmap" "test/glass_normal" "$translucent" "1" }`,
+        )
+    })
+
+    afterAll(() => {
+        fs.rmSync(root, { recursive: true, force: true })
+    })
+
+    const convert = (name, vmfText) => {
+        const vmfPath = path.join(root, `${name}.vmf`)
+        fs.writeFileSync(vmfPath, vmfText)
+        return convertVmf(vmfPath, path.join(root, "out", name), {
+            resourcePaths: [path.join(root, "content")],
+            skipTools: true,
+            quiet: true,
+        })
+    }
+
+    test("draws Refract glass see-through in its tint", () => {
+        expect(
+            describeMaterial("refract", new Map([["refracttint", "{235 247 247}"]])),
+        ).toMatchObject({
+            basetexture: null,
+            translucent: true,
+            glass: [235 / 255, 247 / 255, 247 / 255],
+        })
+    })
+
+    test("gives glass a translucent texture instead of the placeholder", async () => {
+        const result = await convert(
+            "glass",
+            `world { "id" "1" ${boxSolid(2, [0, 0, 0], [16, 16, 16], "test/glass")} }`,
+        )
+        expect(result.stats.placeholderMaterials).toBe(0)
+        const mtl = fs.readFileSync(result.mtlPath, "utf8")
+        const texture = mtl.match(/map_Kd (materials\/bpee_glass\/\S+\.png)/)
+        expect(texture).not.toBeNull()
+        expect(mtl).toContain("# beepee:translucent")
+
+        const png = fs.readFileSync(path.join(root, "out", texture[1]))
+        // RGBA, partly see-through (the alpha is the 4th byte of the pixel)
+        expect(png[25]).toBe(6)
+        const raw = zlib.inflateSync(png.subarray(41, 41 + png.readUInt32BE(33)))
+        expect(raw[1 + 3]).toBeGreaterThan(0)
+        expect(raw[1 + 3]).toBeLessThan(255)
+    })
+
+    test("leaves out entities that can't be seen at the start", async () => {
+        const glassBox = (id, x) =>
+            boxSolid(id, [x, 0, 0], [x + 16, 16, 16], "test/glass")
+        const result = await convert(
+            "hidden",
+            `world { "id" "1" }
+            entity { "id" "2" "classname" "func_brush" ${glassBox(3, 0)} }
+            entity { "id" "4" "classname" "func_brush" "rendermode" "2" "renderamt" "0" ${glassBox(5, 32)} }
+            entity { "id" "6" "classname" "func_brush" "StartDisabled" "1" ${glassBox(7, 64)} }
+            entity { "id" "8" "classname" "func_brush" "rendermode" "10" ${glassBox(9, 96)} }
+            entity { "id" "10" "classname" "func_brush" "rendermode" "0" "renderamt" "0" ${glassBox(11, 128)} }
+            entity { "id" "12" "classname" "prop_dynamic" "model" "models/missing.mdl" "renderamt" "0" "rendermode" "2" "origin" "0 0 0" }`,
+        )
+        // Shown: the plain brush, and the one whose renderamt doesn't apply
+        // (rendermode 0)
+        expect(result.stats.faces).toBe(12)
+        expect(result.stats.hiddenEntities).toBe(4)
+        expect(result.stats.modelEntities).toBe(0)
+    })
+})

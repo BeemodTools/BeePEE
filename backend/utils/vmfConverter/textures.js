@@ -173,7 +173,8 @@ function unitParam(value, fallback) {
  * fields ($additive, $alpha, $alphatestreference, DecalModulate) are used
  * when overlays and decals are drawn onto faces, $decalscale sizes decals,
  * and $basetexture2/$blendmodulatetexture are blended on displacements.
- * @returns {{basetexture: string|null, bumpmap: string|null, translucent: boolean, alphatest: boolean, tint: number[]|null, tintMask: boolean, additive: boolean, alpha: number, alphaTestReference: number, modulate: boolean, decalScale: number, basetexture2: string|null, blendModulate: string|null}}
+ * @returns {{basetexture: string|null, bumpmap: string|null, translucent: boolean, alphatest: boolean, tint: number[]|null, tintMask: boolean, additive: boolean, alpha: number, alphaTestReference: number, modulate: boolean, decalScale: number, basetexture2: string|null, blendModulate: string|null, glass?: number[]}}
+ *   glass: the tint (0-1 RGB) of Refract glass, which has no base texture
  */
 function describeMaterial(shader, params) {
     if (shader === "water") {
@@ -192,6 +193,26 @@ function describeMaterial(shader, params) {
             decalScale: 1,
             basetexture2: null,
             blendModulate: null,
+        }
+    }
+    if (shader === "refract") {
+        // Glass that shows what's behind it, tinted by $refracttint. It has
+        // no base texture: it's drawn see-through in its tint (glass)
+        return {
+            basetexture: null,
+            bumpmap: null,
+            translucent: true,
+            alphatest: false,
+            tint: null,
+            tintMask: false,
+            additive: false,
+            alpha: 1,
+            alphaTestReference: 0.5,
+            modulate: false,
+            decalScale: 1,
+            basetexture2: null,
+            blendModulate: null,
+            glass: parseMaterialColor(params.get("refracttint")) ?? [1, 1, 1],
         }
     }
     // $color tints every shader; $color2 is the model shaders' tint

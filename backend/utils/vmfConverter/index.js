@@ -134,9 +134,54 @@ function placeholderTexture() {
     }
 }
 
+/** Folder (under materials/) for the see-through textures of glass */
+const GLASS_FOLDER = "bpee_glass"
+const GLASS_SIZE = 16
+
+/** How opaque glass (the Refract shader) is drawn */
+const GLASS_ALPHA = 0.35
+
+/**
+ * Glass's color: its tint ($refracttint, 0-1 RGB) a little darker and
+ * bluer, so clear glass still shows, and see-through
+ * @returns {number[]} RGBA, 0-255
+ */
+function glassColor(tint) {
+    const rgb = [0.78, 0.88, 0.93].map((shade, i) =>
+        Math.round(255 * Math.min(Math.max(tint[i] * shade, 0), 1)),
+    )
+    return [...rgb, Math.round(255 * GLASS_ALPHA)]
+}
+
+/** A glass texture: one color (glassColor) all over */
+function glassTexture(color) {
+    const rgba = Buffer.alloc(GLASS_SIZE * GLASS_SIZE * 4)
+    for (let i = 0; i < GLASS_SIZE * GLASS_SIZE; i++) rgba.set(color, i * 4)
+    return { width: GLASS_SIZE, height: GLASS_SIZE, rgba }
+}
+
 function parseVector(value) {
     const n = parseNumbers(value)
     return n.length >= 3 ? n.slice(0, 3) : [0, 0, 0]
+}
+
+/**
+ * Whether an entity can't be seen when the map starts, so its model or
+ * brushes aren't drawn: "Don't render" (rendermode 10), faded out completely
+ * (renderamt 0, with a render mode that uses it), or a prop_dynamic or
+ * func_brush that starts disabled. Items keep things like a breakable
+ * glass's cracked panes this way until they're shown.
+ */
+function hiddenAtStart(entity) {
+    if (!entity) return false
+    const mode = Number.parseInt(entity.get("rendermode") ?? "0", 10)
+    if (mode === 10) return true
+    const amount = Number.parseInt(entity.get("renderamt") ?? "255", 10)
+    if (mode !== 0 && amount === 0) return true
+    return (
+        /^(prop_dynamic|func_brush$)/i.test(entity.classname) &&
+        entity.get("startdisabled") === "1"
+    )
 }
 
 /** An entity's "rendercolor" ("R G B", 0-255) as a tint; null when white */
@@ -345,6 +390,8 @@ class VmfConverter {
                 modelEntities: 0,
                 toolFaces: 0,
                 skippedModels: 0,
+                // Entities not drawn because they can't be seen at the start
+                hiddenEntities: 0,
                 placeholderMaterials: 0,
                 overlays: 0,
                 decals: 0,
@@ -354,16 +401,25 @@ class VmfConverter {
 
         const overlays = this.collectOverlays(state, vmf)
         state.decals = this.collectDecals(vmf)
+        const hidden = new Set()
         for (const solid of vmf.solids) {
+            if (hiddenAtStart(solid.owner)) {
+                hidden.add(solid.owner)
+                continue
+            }
             await this.writeSolid(state, solid)
             await this.yieldIfBusy()
         }
         state.stats.overlays = this.reportLeftOut(state, overlays, "overlay")
         state.stats.decals = this.reportLeftOut(state, state.decals, "decal")
 
-        const props = vmf.entities.filter((entity) =>
-            this.isModelEntity(entity),
-        )
+        const props = vmf.entities.filter((entity) => {
+            if (!this.isModelEntity(entity)) return false
+            if (!hiddenAtStart(entity)) return true
+            hidden.add(entity)
+            return false
+        })
+        state.stats.hiddenEntities = hidden.size
         state.stats.modelEntities = props.length
         await this.preloadModels(props)
         for (const entity of props) {
@@ -581,6 +637,13 @@ class VmfConverter {
             )
             return this.registerPlaceholder(state, name)
         }
+        if (info.glass) {
+            return this.registerGlass(
+                state,
+                name,
+                combineTints(info.glass, entityTint) ?? [1, 1, 1],
+            )
+        }
 
         const tint = combineTints(info.tint, entityTint)
         const suffix = tint ? `_tint_${tintKey(tint, info.tintMask)}` : ""
@@ -679,6 +742,67 @@ class VmfConverter {
         return materialName
     }
 
+    /**
+     * Give glass (the Refract shader, which has no base texture) a
+     * see-through texture in its tint
+     * @param {number[]} tint - 0-1 RGB
+     */
+    async registerGlass(state, name, tint) {
+        const color = glassColor(tint)
+        const hex = color
+            .slice(0, 3)
+            .map((value) => value.toString(16).padStart(2, "0"))
+            .join("")
+        const materialName = `${name}_glass_${hex}`
+        if (state.textures.has(materialName)) return materialName
+
+        const textureName = `${GLASS_FOLDER}/glass_${hex}`
+        const key = `${state.outDir}|${textureName}`
+        if (!this.textures.has(key)) {
+            this.textures.set(
+                key,
+                (async () => {
+                    const target = path.join(
+                        state.outDir,
+                        "materials",
+                        `${textureName}.png`,
+                    )
+                    await fs.promises.mkdir(path.dirname(target), {
+                        recursive: true,
+                    })
+                    const { rgba } = glassTexture(color)
+                    await fs.promises.writeFile(
+                        target,
+                        encodePng(GLASS_SIZE, GLASS_SIZE, rgba, true),
+                    )
+                })(),
+            )
+        }
+        await this.textures.get(key)
+
+        state.textures.set(materialName, {
+            width: GLASS_SIZE,
+            height: GLASS_SIZE,
+            glass: color,
+            alphaMode: "translucent",
+        })
+        state.mtl.push(
+            "",
+            `newmtl ${materialName}`,
+            "Ka 1.000 1.000 1.000",
+            "Kd 1.000 1.000 1.000",
+            "Ks 0.000 0.000 0.000",
+            `map_Ka materials/${textureName}.png`,
+            `map_Kd materials/${textureName}.png`,
+            // The marker tells BeePEE's VMT generation how to use the alpha
+            "illum 4",
+            "# beepee:translucent",
+            "",
+        )
+        state.stats.materials++
+        return materialName
+    }
+
     exportPlaceholder(outDir) {
         const key = `${outDir}|${PLACEHOLDER_TEXTURE}`
         if (!this.textures.has(key)) {
@@ -723,7 +847,7 @@ class VmfConverter {
             try {
                 const vmt = await this.readVmt(contentPath, 0)
                 const info = describeMaterial(vmt.shader, vmt.params)
-                return info.basetexture
+                return info.basetexture || info.glass
                     ? info
                     : { error: "Material has no texture" }
             } catch {
@@ -1183,7 +1307,9 @@ class VmfConverter {
 
         const base = texture.placeholder
             ? placeholderTexture()
-            : await this.texturePixels(
+            : texture.glass
+              ? glassTexture(texture.glass)
+              : await this.texturePixels(
                   state,
                   texture.texture,
                   texture.tint,

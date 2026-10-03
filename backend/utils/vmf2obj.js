@@ -344,6 +344,11 @@ function logConversion({ warnings, stats }) {
     if (stats.overlays) parts.push(plural(stats.overlays, "overlay"))
     if (stats.decals) parts.push(plural(stats.decals, "decal"))
     if (stats.blends) parts.push(plural(stats.blends, "blended displacement"))
+    if (stats.hiddenEntities) {
+        parts.push(
+            `${plural(stats.hiddenEntities, "entity", "entities")} hidden at the start left out`,
+        )
+    }
     if (stats.placeholderMaterials) {
         parts.push(
             `${plural(stats.placeholderMaterials, "missing texture")} (checkerboard)`,

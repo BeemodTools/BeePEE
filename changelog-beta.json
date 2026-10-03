@@ -43,7 +43,9 @@
                     "Signage designer: typing text past the edge of the canvas shifting every glyph to the left, and dragging glyphs afterwards not putting them back where they were",
                     "Uploading a PNG for a signage doing nothing (Select existing, clicking a style's tile, Upload image..., and dropping a PNG on a tile) - failures now show an error",
                     "A signage's uploaded icon disappearing from its editor right after saving, and saving again failing if the picked file was moved",
-                    "The model preview showing invisible and see-through brushes (like an item's invisible collision) as black surfaces, which could hide most of the model"
+                    "The model preview showing invisible and see-through brushes (like an item's invisible collision) as black surfaces, which could hide most of the model",
+                    "Glass using Portal 2's refracting glass material showing up as a purple/black checkerboard in generated models: it's now see-through and tinted like in game",
+                    "Generated models showing things that are invisible when the map starts, like a breakable glass's cracked and shattered panes covering the intact glass (props and brushes set to not render, faded out completely, or starting disabled are now left out)"
                 ],
                 "changed": [
                     "Items with multiple models convert each instance on its own instead of merging them into one map",
