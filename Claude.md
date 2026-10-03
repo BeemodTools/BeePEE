@@ -790,7 +790,9 @@ Graceful degradation:
 
 `backend/utils/vmfConverter/` converts VMF instances into OBJ + MTL files with PNG textures, in-process (no Java). It is a JavaScript port of [VMF2OBJ](https://github.com/Dylancyclone/VMF2OBJ) by Dylancyclone (MIT, see `LICENSE-VMF2OBJ.txt` in that folder) and handles brushes, brush entities, displacements, model entities (props, NPCs, ...), overlays and decals.
 
-`backend/utils/vmf2obj.js` wraps it for BeePEE: it builds the resource path list, rotates the OBJ into Three.js space and applies the cartoon texture style. `cartoon.exe` writes RGB-only PNGs, so `withAlphaPreserved` puts the original alpha back on textures that had one.
+`backend/utils/vmf2obj.js` wraps it for BeePEE: it builds the resource path list, rotates the OBJ into Three.js space and applies the cartoon texture style.
+
+The cartoon style (`backend/utils/cartoonFilter.js`, in JS; it replaced the Python `cartoon.exe`) aims for the look of the puzzle editor's own models: flat clean colors, light neutral greys and vivid accents. Each texture is shrunk to at most 256 px (power-of-two sizes; texture coordinates are relative, so the stretch doesn't matter), flattened with a Kuwahara filter, graded (lifted darks, neutral near-greys, livelier real colors) and smoothed with a surface blur that melts faint detail like logos but keeps strong edges. All steps wrap around the texture's edges, so tiling textures stay seamless, and alpha is kept.
 
 | Module | Purpose |
 | --- | --- |

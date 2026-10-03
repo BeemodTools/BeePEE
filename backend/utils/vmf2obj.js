@@ -3,6 +3,7 @@ const path = require("path")
 const { app } = require("electron")
 const { findPortal2Resources } = require("../data")
 const { VmfConverter, assertHasGeometry } = require("./vmfConverter")
+const { cartoonify } = require("./cartoonFilter")
 
 /**
  * Helper to create directory with retry logic for EPERM errors
@@ -17,8 +18,12 @@ async function mkdirWithRetry(dirPath, maxAttempts = 5) {
         } catch (error) {
             if (error.code === "EPERM" || error.code === "EBUSY") {
                 if (attempt < maxAttempts - 1) {
-                    console.warn(`mkdir attempt ${attempt + 1} failed (${error.code}), retrying in ${(attempt + 1) * 200}ms...`)
-                    await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 200))
+                    console.warn(
+                        `mkdir attempt ${attempt + 1} failed (${error.code}), retrying in ${(attempt + 1) * 200}ms...`,
+                    )
+                    await new Promise((resolve) =>
+                        setTimeout(resolve, (attempt + 1) * 200),
+                    )
                 } else {
                     throw error
                 }
@@ -66,10 +71,6 @@ function getCrowbarPath() {
     return getLibPath("crowbar", "CrowbarCommandLineDecomp.exe")
 }
 
-function getCartoonExePath() {
-    return getLibPath("areng_cartoonify", "cartoon.exe")
-}
-
 function findPngFilesRecursively(dirPath) {
     const result = []
     try {
@@ -87,67 +88,10 @@ function findPngFilesRecursively(dirPath) {
 }
 
 /**
- * cartoon.exe writes RGB-only PNGs. Run `step` and then give PNGs that had an
- * alpha channel (translucent textures like overlays and glass) their original
- * alpha back.
+ * Give the textures the cartoon style (cartoonFilter.js), in place. PNGs with
+ * an alpha channel (translucent textures like glass) keep it.
  */
-async function withAlphaPreserved(pngFiles, step) {
-    const sharp = require("sharp")
-    const alphas = new Map()
-    for (const file of pngFiles) {
-        try {
-            // Buffers, not paths: sharp caches decoded files by path
-            const image = sharp(fs.readFileSync(file))
-            if (!(await image.metadata()).hasAlpha) continue
-            alphas.set(
-                file,
-                await image
-                    .extractChannel("alpha")
-                    .raw()
-                    .toBuffer({ resolveWithObject: true }),
-            )
-        } catch (error) {
-            console.warn(
-                `Could not read alpha of ${path.basename(file)}:`,
-                error.message,
-            )
-        }
-    }
-
-    try {
-        return await step()
-    } finally {
-        for (const [file, alpha] of alphas) {
-            try {
-                // Two passes: sharp runs removeAlpha after joinChannel within
-                // one pipeline, which would drop the channel being restored
-                const { data, info } = await sharp(fs.readFileSync(file))
-                    .removeAlpha()
-                    .raw()
-                    .toBuffer({ resolveWithObject: true })
-                const { width, height, channels } = info
-                if (width !== alpha.info.width || height !== alpha.info.height)
-                    continue
-                const output = await sharp(data, {
-                    raw: { width, height, channels },
-                })
-                    .joinChannel(alpha.data, {
-                        raw: { width, height, channels: 1 },
-                    })
-                    .png()
-                    .toBuffer()
-                fs.writeFileSync(file, output)
-            } catch (error) {
-                console.warn(
-                    `Could not restore alpha of ${path.basename(file)}:`,
-                    error.message,
-                )
-            }
-        }
-    }
-}
-
-async function applyCartoonishToTextures(outputDir, { debug } = {}) {
+async function applyCartoonishToTextures(outputDir) {
     const materialsDir = path.join(outputDir, "materials")
     if (!fs.existsSync(materialsDir)) {
         console.log("No materials directory for cartoonify, skipping")
@@ -160,70 +104,38 @@ async function applyCartoonishToTextures(outputDir, { debug } = {}) {
         return { success: true, processed: 0 }
     }
 
-    const exePath = getCartoonExePath()
-    if (!fs.existsSync(exePath)) {
-        console.warn(
-            "cartoon.exe not found, skipping cartoonish processing:",
-            exePath,
-        )
-        return { success: false, processed: 0, error: "cartoon.exe missing" }
-    }
-
-    const { spawn } = require("child_process")
-
-    // Run in chunks to avoid excessively long command lines
-    const chunkSize = 50
+    const sharp = require("sharp")
     let processed = 0
-
-    await withAlphaPreserved(pngFiles, async () => {
-        for (let i = 0; i < pngFiles.length; i += chunkSize) {
-            const chunk = pngFiles.slice(i, i + chunkSize)
-            const cmd = [
-                // cartoon.exe expects image paths as arguments
-                ...chunk,
-            ]
-
-            if (debug) {
-                console.log("Running cartoon.exe on", chunk.length, "textures")
-            }
-
-            await new Promise((resolve, reject) => {
-                const child = spawn(exePath, cmd, {
-                    cwd: path.dirname(exePath),
-                    stdio: debug ? "inherit" : "pipe",
-                    windowsHide: !debug,
-                })
-
-                let stdout = ""
-                let stderr = ""
-
-                if (!debug) {
-                    child.stdout?.on("data", (d) => (stdout += d.toString()))
-                    child.stderr?.on("data", (d) => (stderr += d.toString()))
-                }
-
-                child.on("close", (code) => {
-                    if (code === 0) {
-                        processed += chunk.length
-                        resolve()
-                    } else {
-                        console.warn(
-                            "cartoon.exe failed with code",
-                            code,
-                            stderr,
-                        )
-                        reject(
-                            new Error(`cartoon.exe exited with code ${code}`),
-                        )
-                    }
-                })
-
-                child.on("error", (err) => {
-                    reject(err)
-                })
+    for (const file of pngFiles) {
+        try {
+            // Buffers, not paths: sharp caches decoded files by path
+            const input = fs.readFileSync(file)
+            const { hasAlpha } = await sharp(input).metadata()
+            const { data, info } = await sharp(input)
+                .ensureAlpha()
+                .raw()
+                .toBuffer({ resolveWithObject: true })
+            // Textures usually come out smaller (see cartoonFilter.js)
+            const cartoon = cartoonify(data, info.width, info.height)
+            let output = sharp(cartoon.rgba, {
+                raw: {
+                    width: cartoon.width,
+                    height: cartoon.height,
+                    channels: 4,
+                },
             })
+            if (!hasAlpha) output = output.removeAlpha()
+            fs.writeFileSync(file, await output.png().toBuffer())
+            processed++
+        } catch (error) {
+            console.warn(
+                `Could not cartoonify ${path.basename(file)}:`,
+                error.message,
+            )
         }
-    })
+        // Keep the (Electron main) event loop responsive between textures
+        await new Promise((resolve) => setImmediate(resolve))
+    }
 
     return { success: true, processed }
 }
@@ -400,17 +312,8 @@ async function postProcessOutputs(objPaths, outputDir, options) {
     if ((options.textureStyle || "cartoon") === "cartoon") {
         try {
             console.log("Applying cartoonish effect to textures...")
-            const cartoonResult = await applyCartoonishToTextures(outputDir, {
-                debug: !!options.debug,
-            })
-            if (cartoonResult.success) {
-                console.log(`Cartoonified ${cartoonResult.processed} textures`)
-            } else {
-                console.warn(
-                    "Cartoonify step reported failure:",
-                    cartoonResult.error || "unknown",
-                )
-            }
+            const cartoonResult = await applyCartoonishToTextures(outputDir)
+            console.log(`Cartoonified ${cartoonResult.processed} textures`)
         } catch (cartoonError) {
             console.warn(
                 "Cartoonify step failed:",

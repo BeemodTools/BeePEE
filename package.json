@@ -128,13 +128,6 @@
                 ]
             },
             {
-                "from": "backend/libs/areng_cartoonify",
-                "to": "extraResources/areng_cartoonify",
-                "filter": [
-                    "**/*"
-                ]
-            },
-            {
                 "from": "backend/libs/areng_obj23ds",
                 "to": "extraResources/areng_obj23ds",
                 "filter": [

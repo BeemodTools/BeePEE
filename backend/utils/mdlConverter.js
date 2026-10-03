@@ -1,7 +1,7 @@
 // MDL conversion using STUDIOMDL from Source SDK
 const fs = require("fs")
 const path = require("path")
-const { exec, spawn } = require("child_process")
+const { exec } = require("child_process")
 const { promisify } = require("util")
 const { app } = require("electron")
 const sharp = require("sharp")
@@ -87,82 +87,6 @@ $sequence idle "${objFileName}" fps 30
     fs.writeFileSync(outputPath, qcContent, "utf-8")
 
     return outputPath
-}
-
-/**
- * Apply cartoonification to an image using the cartoon.exe tool
- * @param {string} inputPath - Path to the input image
- * @param {string} outputPath - Path for the cartoonified output
- */
-async function applyCartoonification(inputPath, outputPath) {
-    const cartoonExePath = isDev
-        ? path.join(__dirname, "..", "libs", "areng_cartoonify", "cartoon.exe")
-        : path.join(
-              process.resourcesPath,
-              "extraResources",
-              "areng_cartoonify",
-              "cartoon.exe",
-          )
-
-    if (!fs.existsSync(cartoonExePath)) {
-        console.warn(`⚠️ cartoon.exe not found, using original textures`)
-        fs.copyFileSync(inputPath, outputPath)
-        return
-    }
-
-    // Copy original file to output path FIRST
-    // Cartoon.exe modifies files IN-PLACE!
-    fs.copyFileSync(inputPath, outputPath)
-
-    return new Promise((resolve, reject) => {
-        // Get file size and modified time BEFORE cartoonification for validation
-        const statsBefore = fs.statSync(outputPath)
-        const sizeBefore = statsBefore.size
-        const mtimeBefore = statsBefore.mtime.getTime()
-
-        // Run cartoon.exe on the OUTPUT file (not the original)
-        const child = spawn(cartoonExePath, [outputPath], {
-            cwd: path.dirname(cartoonExePath),
-            stdio: "pipe",
-            windowsHide: true,
-        })
-
-        let stdout = ""
-        let stderr = ""
-
-        child.stdout?.on("data", (data) => {
-            stdout += data.toString()
-        })
-
-        child.stderr?.on("data", (data) => {
-            stderr += data.toString()
-        })
-
-        child.on("close", (code) => {
-            if (code === 0) {
-                // Verify the file was actually modified
-                const statsAfter = fs.statSync(outputPath)
-                const sizeAfter = statsAfter.size
-                const mtimeAfter = statsAfter.mtime.getTime()
-
-                // Check if file was actually modified (size or mtime changed)
-                if (sizeAfter === sizeBefore && mtimeAfter === mtimeBefore) {
-                    console.warn(`⚠️ Cartoon: ${path.basename(outputPath)} not modified, using original`)
-                }
-                resolve()
-            } else {
-                console.warn(`⚠️ Cartoon failed (code ${code}) for ${path.basename(outputPath)}, using original`)
-                // File was already copied, just use the original
-                resolve()
-            }
-        })
-
-        child.on("error", (error) => {
-            console.warn(`⚠️ Cartoon spawn error: ${error.message}, using original`)
-            // File was already copied, just use the original
-            resolve()
-        })
-    })
 }
 
 /**
