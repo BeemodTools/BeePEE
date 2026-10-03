@@ -109,12 +109,13 @@ function SignageDesignerPage() {
         setError(null)
         try {
             const prefs = await loadSignagePrefs()
-            const iconData = await rasterizeLayers(layers)
-            const tex = await rasterizeSignageTextures(
-                layers,
-                prefs.signageTextureSize || 512,
-                { glowMode: prefs.signageGlowMode },
-            )
+            // The icon and the in-game texture both use the texture size
+            // setting
+            const size = prefs.signageTextureSize || 512
+            const iconData = await rasterizeLayers(layers, size)
+            const tex = await rasterizeSignageTextures(layers, size, {
+                glowMode: prefs.signageGlowMode,
+            })
             const materialData = tex.base
             const maskData = tex.mask
             const hasGlow = tex.hasGlow

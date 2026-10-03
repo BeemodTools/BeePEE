@@ -33,8 +33,9 @@ export const SIGNAGE_PREF_DEFAULTS = {
     // The 50% stock plate mask is baked into the texture alpha, so 100%
     // here = stock signage brightness (tint written only when lower)
     signageGlowIntensity: 100,
-    // In-game texture size in px (the VTF). Stock signs are 128; higher is
-    // crisper up close but a bigger file.
+    // Size in px of a designed signage: its in-game texture (the VTF), its
+    // icon and exported PNGs. Stock signs are 128; higher is crisper up
+    // close but a bigger file.
     signageTextureSize: 512,
     // Workflow
     signageIconClickAction: "ask", // ask | upload | designer

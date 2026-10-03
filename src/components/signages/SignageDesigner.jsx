@@ -613,7 +613,13 @@ function SignageDesigner({
     const exportPng = async () => {
         if (!layers.length) return
         try {
-            const dataUrl = await rasterizeLayers(layers)
+            // At the texture size setting, like the saved signage (read now:
+            // it may have just been changed in the settings window)
+            const { signageTextureSize } = await loadSignagePrefs()
+            const dataUrl = await rasterizeLayers(
+                layers,
+                signageTextureSize || SIGNAGE_PREF_DEFAULTS.signageTextureSize,
+            )
             const result = await window.package?.saveFileDialog({
                 defaultName: exportBaseName("png"),
                 filters: [{ name: "PNG Image", extensions: ["png"] }],

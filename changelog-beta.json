@@ -35,7 +35,8 @@
                     "Autopacking reporting an instance's materials and scripts as not packed when they were",
                     "Autopacking leaving out an instance's sounds, VScripts, model animations (.ani) and the textures of its materials when they're named differently than the material",
                     "Autopacking leaving out custom files put straight into Portal 2/portal2",
-                    "Replacing an instance not packing the custom files the new one uses"
+                    "Replacing an instance not packing the custom files the new one uses",
+                    "Signage designer: Export as PNG and the signage's icon ignoring the texture resolution setting (they were always 512x512)"
                 ],
                 "changed": [
                     "Items with multiple models convert each instance on its own instead of merging them into one map",

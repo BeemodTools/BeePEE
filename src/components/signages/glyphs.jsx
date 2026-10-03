@@ -897,9 +897,9 @@ export function LayersThumb({ layers, size }) {
     )
 }
 
-// Rasterize a layer stack to a PNG data URL at the locked 512x512 output
-// size - the signage backplate first, then the layers (WYSIWYG with the
-// designer canvas).
+// Rasterize a layer stack to a size x size PNG data URL (the texture size
+// setting; 512 by default) - the signage backplate first, then the layers
+// (WYSIWYG with the designer canvas).
 export function rasterizeLayers(layers, size = CANVAS_SIZE) {
     const inner = layersSvgMarkup(layers, "r")
     const svg =
