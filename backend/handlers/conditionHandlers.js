@@ -8,6 +8,8 @@ const path = require("path")
 const { packages } = require("../packageManager")
 const { sendItemUpdateToEditor } = require("../items/itemEditor")
 
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
+
 function register(ipcMain, mainWindow) {
     // Conditions management handlers
     ipcMain.handle("get-conditions", async (event, { itemId }) => {
@@ -30,24 +32,14 @@ function register(ipcMain, mainWindow) {
                 .find((i) => i.id === itemId)
             if (!item) throw new Error("Item not found")
 
-            // Print blocks to main console on save (JSON only)
-            if (conditions?.blocks) {
-                console.log(JSON.stringify(conditions.blocks, null, 2))
-            }
-
             // Convert blocks to VBSP format and save
             const success = item.saveConditions(conditions)
             if (!success) {
                 throw new Error("Failed to save conditions to VBSP config")
             }
-
-            // Print resulting VBSP JSON to main console
-            try {
-                const vbsp = item.getConditions()
-                console.log(JSON.stringify(vbsp, null, 2))
-            } catch (e) {
-                // ignore
-            }
+            console.log(
+                `Saved ${plural(conditions?.blocks?.length ?? 0, "condition block")} of "${item.name}"`,
+            )
 
             // Send updated item data to frontend
             const updatedItem = item.toJSONWithExistence()
@@ -56,6 +48,10 @@ function register(ipcMain, mainWindow) {
 
             return { success: true }
         } catch (error) {
+            console.error(
+                `Failed to save the conditions of item ${itemId}:`,
+                error,
+            )
             dialog.showErrorBox("Failed to Save Conditions", error.message)
             return { success: false, error: error.message }
         }
@@ -90,11 +86,6 @@ function register(ipcMain, mainWindow) {
     // VBSP conversion handler (standalone testing)
     ipcMain.handle("convert-blocks-to-vbsp", async (event, { blocks }) => {
         try {
-            // Print blocks JSON only (for conversion calls too)
-            if (blocks) {
-                console.log(JSON.stringify(blocks, null, 2))
-            }
-
             // Create a temporary item instance to use the conversion method
             const vbspConfig = convertBlocksToVbsp(blocks)
             return { success: true, vbspConfig }

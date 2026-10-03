@@ -36,7 +36,10 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
             window.package.loadFile(iconToLoad)
                 .then(setIconSrc)
                 .catch((error) => {
-                    console.warn(`Failed to load icon for item ${item?.name}:`, error)
+                    console.warn(
+                        `Failed to load the icon of item "${item?.name}":`,
+                        error,
+                    )
                     setIconError(true)
                     setIconSrc(null)
                 })
@@ -195,10 +198,16 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                                         onUpdate("stagedIconName", result.fileName)
                                         onUpdate("iconChanged", true, "basicInfo")
                                     } else if (!result.canceled) {
-                                        console.error("Failed to browse for icon:", result.error)
+                                        console.error(
+                                            `Failed to select an icon file for item "${item?.name}":`,
+                                            result.error,
+                                        )
                                     }
                                 } catch (error) {
-                                    console.error("Failed to browse for icon:", error)
+                                    console.error(
+                                        `Failed to select an icon file for item "${item?.name}":`,
+                                        error,
+                                    )
                                 }
                             }}
                             sx={{ py: 1.5 }}
@@ -215,7 +224,10 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                                     try {
                                         await window.package.showIconPreview(iconToShow, item.name)
                                     } catch (error) {
-                                        console.error("Failed to show icon preview:", error)
+                                        console.error(
+                                            `Failed to show the icon preview for item "${item?.name}":`,
+                                            error,
+                                        )
                                     }
                                 }
                             }}
@@ -238,10 +250,16 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                                     onUpdate("stagedIconName", result.fileName)
                                     onUpdate("iconChanged", true, "basicInfo")
                                 } else if (!result.canceled) {
-                                    console.error("Failed to browse for icon:", result.error)
+                                    console.error(
+                                        `Failed to select an icon file for item "${item?.name}":`,
+                                        result.error,
+                                    )
                                 }
                             } catch (error) {
-                                console.error("Failed to browse for icon:", error)
+                                console.error(
+                                    `Failed to select an icon file for item "${item?.name}":`,
+                                    error,
+                                )
                             }
                         }}
                         sx={{ py: 1.5 }}

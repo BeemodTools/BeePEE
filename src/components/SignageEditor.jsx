@@ -90,7 +90,7 @@ function SignageEditor() {
                     setShowIds(result.value)
                 }
             } catch (error) {
-                console.log("Failed to load showItemIds setting:", error)
+                console.warn("Failed to load showItemIds setting:", error)
             }
         }
         loadShowIdsSetting()
@@ -223,7 +223,7 @@ function SignageEditor() {
                 setIsDeleting(false)
             }
         } catch (error) {
-            console.error("Failed to delete signage:", error)
+            console.error(`Failed to delete signage "${signage.name}":`, error)
             setSaveError(error.message || "Failed to delete signage")
             setIsDeleting(false)
         }
@@ -269,11 +269,16 @@ function SignageEditor() {
                 setStagedDesign(null)
             }
 
+            console.log(
+                stagedDesign
+                    ? `Saved signage "${formData.name}" with the designed icon`
+                    : `Saved signage "${formData.name}"`,
+            )
             setShowSaveSuccess(true)
             setHasChanges(false)
             setTimeout(() => setShowSaveSuccess(false), 2000)
         } catch (error) {
-            console.error("Failed to save signage:", error)
+            console.error(`Failed to save signage "${formData.name}":`, error)
             setSaveError(error.message || "Failed to save signage")
         } finally {
             setIsSaving(false)

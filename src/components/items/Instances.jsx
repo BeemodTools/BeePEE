@@ -37,7 +37,7 @@ import ImageIcon from "@mui/icons-material/Image"
 import ViewInArIcon from "@mui/icons-material/ViewInAr"
 import MusicNoteIcon from "@mui/icons-material/MusicNote"
 import DescriptionIcon from "@mui/icons-material/Description"
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import ViewInAr from "@mui/icons-material/ViewInAr"
 
 function Instances({
@@ -68,19 +68,6 @@ function Instances({
               }))
         : []
 
-    // Debug effect to log when instances change
-    useEffect(() => {
-        console.log("Instances component: Item or instances changed:", {
-            itemId: item?.id,
-            instanceCount: instances.length,
-            instanceNames: instances.map((i) => i.Name),
-            instanceExists: instances.map((i) => ({
-                name: i.Name,
-                exists: i._metadata?.exists ?? true,
-            })),
-        })
-    }, [item, instances])
-
     const toggleStatsExpansion = (instanceIndex) => {
         setExpandedStats((prev) => {
             const newSet = new Set(prev)
@@ -101,15 +88,16 @@ function Instances({
                 itemId: item.id,
             })
         } catch (error) {
-            console.error("Failed to edit instance:", error)
+            console.error(
+                `Failed to open instance "${instancePath}" in Hammer:`,
+                error,
+            )
         }
     }
 
     const handleAddInstanceWithFileDialog = async () => {
-        console.log("Instances: Selecting instance file(s) for item:", item.id)
         try {
             const result = await window.package.selectInstanceFile(item.id)
-            console.log("Instances: File dialog result:", result)
             if (result.success && result.files && result.files.length > 0) {
                 // Check each file for external assets
                 setIsCheckingAssets(true)
@@ -139,12 +127,15 @@ function Instances({
                 addPendingInstances(successfulFiles)
             } else if (!result.canceled) {
                 console.error(
-                    "Instances: Failed to select instance:",
+                    `Failed to select instance files for item "${item.name}":`,
                     result.error,
                 )
             }
         } catch (error) {
-            console.error("Instances: Failed to select instance:", error)
+            console.error(
+                `Failed to select instance files for item "${item?.name}":`,
+                error,
+            )
             setIsCheckingAssets(false)
         }
     }
@@ -167,16 +158,14 @@ function Instances({
 
                 updatedInstances[newIndex] = newInstance
 
-                console.log(
-                    `Instances: Added pending instance: ${newInstance.Name} (will be saved on Save button)`,
-                )
-
                 await new Promise((resolve) => setTimeout(resolve, 10))
             }
         }
 
         onUpdateInstances(updatedInstances)
-        console.log(`Instances: Added ${files.length} pending instance(s)`)
+        console.log(
+            `Added ${files.length} instance(s) to item "${item?.name}", pending save`,
+        )
     }
 
     // Handle user acknowledging external assets warning
@@ -202,12 +191,6 @@ function Instances({
     }
 
     const handleReplaceInstance = async (instanceIndex) => {
-        console.log(
-            "Instances: Replacing instance at index:",
-            instanceIndex,
-            "for item:",
-            item.id,
-        )
         try {
             const result = await window.package.replaceInstanceFileDialog(
                 item.id,
@@ -228,27 +211,24 @@ function Instances({
 
                 onUpdateInstances(updatedInstances)
                 console.log(
-                    `Instances: Replaced instance: ${updatedInstance.Name}`,
+                    `Replaced instance "${updatedInstance.Name}" in item "${item.name}"`,
                 )
             } else if (!result.canceled) {
                 console.error(
-                    "Instances: Failed to replace instance:",
+                    `Failed to replace instance ${instanceIndex} of item "${item.name}":`,
                     result.error,
                 )
             }
         } catch (error) {
-            console.error("Instances: Failed to replace instance:", error)
+            console.error(
+                `Failed to replace instance ${instanceIndex} of item "${item?.name}":`,
+                error,
+            )
         }
     }
 
     const handleRemoveInstance = () => {
         if (instanceToDelete === null) return
-        console.log(
-            "Instances: Marking instance for removal at index:",
-            instanceToDelete,
-            "for item:",
-            item.id,
-        )
         try {
             const updatedInstances = { ...formData.instances }
             const instanceData = updatedInstances[instanceToDelete]
@@ -257,7 +237,7 @@ function Instances({
                 // If it's a pending instance (not yet saved), just remove it completely
                 delete updatedInstances[instanceToDelete]
                 console.log(
-                    "Instances: Removed pending instance (not saved yet)",
+                    `Removed pending instance "${instanceData.Name}" from item "${item?.name}"`,
                 )
             } else {
                 // Mark existing instance for removal
@@ -266,7 +246,7 @@ function Instances({
                     _toRemove: true,
                 }
                 console.log(
-                    "Instances: Marked instance for removal (will be deleted on Save)",
+                    `Marked instance "${instanceData?.Name}" of item "${item?.name}" for removal on save`,
                 )
             }
 
@@ -275,7 +255,7 @@ function Instances({
             setInstanceToDelete(null)
         } catch (error) {
             console.error(
-                "Instances: Failed to mark instance for removal:",
+                `Failed to mark instance ${instanceToDelete} of item "${item?.name}" for removal:`,
                 error,
             )
         }
@@ -292,12 +272,6 @@ function Instances({
         if (missingInstances.length === 0) return
 
         setIsRemovingMissing(true)
-        console.log(
-            "Instances: Marking all missing instances for removal (excluding VBSP):",
-            missingInstances.length,
-            "for item:",
-            item.id,
-        )
 
         try {
             const updatedInstances = { ...formData.instances }
@@ -318,11 +292,11 @@ function Instances({
 
             onUpdateInstances(updatedInstances)
             console.log(
-                "Instances: All missing instances marked for removal (will be deleted on Save)",
+                `Marked ${missingInstances.length} missing instance(s) of item "${item?.name}" for removal on save`,
             )
         } catch (error) {
             console.error(
-                "Instances: Failed to mark missing instances for removal:",
+                `Failed to mark the missing instances of item "${item?.name}" for removal:`,
                 error,
             )
         } finally {

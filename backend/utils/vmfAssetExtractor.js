@@ -1,6 +1,7 @@
 const fs = require("fs")
 const path = require("path")
 const vdf = require("vdf-parser")
+const { logger } = require("./logger")
 
 /**
  * Extract assets (models, materials, sounds, scripts) from a VMF file
@@ -99,10 +100,7 @@ function extractAssetsFromVMF(vmfPath) {
 
         return assets
     } catch (error) {
-        console.error(
-            `Error extracting assets from VMF file ${vmfPath}:`,
-            error.message,
-        )
+        console.error(`Failed to extract the assets of ${vmfPath}:`, error)
         throw error
     }
 }
@@ -137,10 +135,7 @@ function findDependentMaterials(modelPath, portal2Dir) {
             }
         }
     } catch (error) {
-        console.error(
-            `Error finding dependent materials for ${modelPath}:`,
-            error.message,
-        )
+        console.error(`Failed to find the materials of ${modelPath}:`, error)
     }
 
     return dependentMaterials
@@ -176,35 +171,29 @@ function assetExistsInPortal2(assetPath, portal2Dir, searchDirs) {
         
         // Check if asset exists in Portal 2 search paths
         // If it exists here, Portal 2 can find it, so we should pack it
-        console.log(`Checking asset: ${assetPath}`)
-        console.log(`Portal 2 dir: ${portal2Dir}`)
-        console.log(`Search directories: ${JSON.stringify(searchDirs)}`)
-        
         for (const searchDir of searchDirs) {
             // Skip gameinfo_path and bee2 paths as they're not actual asset locations
             if (searchDir === "|gameinfo_path|." || searchDir.includes("bee2")) {
-                console.log(`Skipping search dir: ${searchDir}`)
                 continue
             }
-            
-            console.log(`Checking search dir: ${searchDir}`)
-            
+
             for (const ext of extensions) {
                 const fullPath = path.join(portal2Dir, searchDir, baseAssetPath + ext)
-                console.log(`  Checking path: ${fullPath}`)
-                console.log(`  Path exists: ${fs.existsSync(fullPath)}`)
-                
+
                 if (fs.existsSync(fullPath)) {
-                    console.log(`✅ Asset found in Portal 2 search path: ${searchDir}/${baseAssetPath}`)
+                    logger.debug(`Found ${baseAssetPath + ext} in ${searchDir}`)
                     return true // Asset exists in Portal 2 search paths - PACK IT!
                 }
             }
         }
-        
-        console.log(`❌ Asset not found in Portal 2 search paths: ${assetPath}`)
+
+        logger.debug(`Did not find ${assetPath} in Portal 2's search paths`)
         return false // Asset doesn't exist in Portal 2 search paths - DON'T PACK IT!
     } catch (error) {
-        console.error(`Error checking asset existence for ${assetPath}:`, error.message)
+        console.error(
+            `Failed to check whether ${assetPath} is in Portal 2's search paths:`,
+            error,
+        )
         return false // Assume it doesn't exist if we can't check
     }
 }
@@ -214,7 +203,6 @@ function assetExistsInPortal2(assetPath, portal2Dir, searchDirs) {
  * @returns {Promise<Array>} Empty array since we now check dynamically
  */
 async function getBaseAssets() {
-    console.log(`Using dynamic VPK checking instead of hardcoded base assets list`)
     return [] // Return empty array since we check dynamically now
 }
 
@@ -255,8 +243,8 @@ function getPortal2SearchDirs(portal2Dir) {
         }
     } catch (error) {
         console.error(
-            "Error reading Portal 2 search directories:",
-            error.message,
+            "Failed to read Portal 2's search paths from gameinfo.txt:",
+            error,
         )
     }
 
@@ -326,15 +314,19 @@ function copyAssetToPackage(assetPath, portal2Dir, packageDir, searchDirs) {
                     if (!fs.existsSync(targetPath)) {
                         fs.copyFileSync(sourcePath, targetPath)
                         copiedFiles.push(targetPath)
-                        console.log(`Copied: ${sourcePath} → ${targetPath}`)
+                        logger.debug(
+                            `Copied ${baseAssetPath + ext} from ${searchDir}`,
+                        )
                     } else {
-                        console.log(`Already exists: ${targetPath}`)
+                        logger.debug(
+                            `Skipped ${baseAssetPath + ext}, the package already has it`,
+                        )
                     }
                 }
             }
         }
     } catch (error) {
-        console.error(`Error copying asset ${assetPath}:`, error.message)
+        console.error(`Failed to copy ${assetPath} into the package:`, error)
     }
 
     return copiedFiles

@@ -116,99 +116,106 @@ async function submitCrashReport({ userDescription, errorDetails, contact }) {
         return { success: false, reason: "No endpoint configured" }
     }
 
-    let tempBpeePath = null
+    return logger.section("Sending a crash report", async () => {
+        let tempBpeePath = null
 
-    try {
-        // Collect all report data
-        const logs = collectLogs()
-        const packageJson = require("../../package.json")
+        try {
+            // Collect all report data
+            const logs = collectLogs()
+            const packageJson = require("../../package.json")
 
-        const packageResult = await createTempPackageZip()
-        tempBpeePath = packageResult.filePath
+            const packageResult = await createTempPackageZip()
+            tempBpeePath = packageResult.filePath
 
-        // Build FormData
-        const formData = new FormData()
-        formData.append("logs", logs)
-        formData.append("userDescription", userDescription || "")
-        formData.append("contact", (contact || "").trim())
-        formData.append(
-            "errorDetails",
-            JSON.stringify(errorDetails || null),
-        )
-        formData.append("appVersion", packageJson.version)
-        formData.append("channel", isBeta() ? "beta" : "stable")
-        formData.append("timestamp", new Date().toISOString())
-        formData.append("platform", process.platform)
-        formData.append("osVersion", os.release())
-        formData.append("electronVersion", process.versions.electron)
+            // Build FormData
+            const formData = new FormData()
+            formData.append("logs", logs)
+            formData.append("userDescription", userDescription || "")
+            formData.append("contact", (contact || "").trim())
+            formData.append(
+                "errorDetails",
+                JSON.stringify(errorDetails || null),
+            )
+            formData.append("appVersion", packageJson.version)
+            formData.append("channel", isBeta() ? "beta" : "stable")
+            formData.append("timestamp", new Date().toISOString())
+            formData.append("platform", process.platform)
+            formData.append("osVersion", os.release())
+            formData.append("electronVersion", process.versions.electron)
 
-        if (packageResult.skipped) {
-            formData.append("packageSkipped", packageResult.reason)
-        }
+            if (packageResult.skipped) {
+                console.log(
+                    `Skipped attaching the package: ${packageResult.reason}`,
+                )
+                formData.append("packageSkipped", packageResult.reason)
+            }
 
-        // Attach .bpee file if available
-        if (tempBpeePath && fs.existsSync(tempBpeePath)) {
-            const fileBuffer = fs.readFileSync(tempBpeePath)
-            const blob = new Blob([fileBuffer], {
-                type: "application/octet-stream",
+            // Attach .bpee file if available
+            if (tempBpeePath && fs.existsSync(tempBpeePath)) {
+                const fileBuffer = fs.readFileSync(tempBpeePath)
+                const blob = new Blob([fileBuffer], {
+                    type: "application/octet-stream",
+                })
+                formData.append("package", blob, "crash-report-package.bpee")
+            }
+
+            // Send the report
+            const controller = new AbortController()
+            const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT)
+
+            const response = await fetch(endpoint, {
+                method: "POST",
+                body: formData,
+                signal: controller.signal,
             })
-            formData.append("package", blob, "crash-report-package.bpee")
-        }
 
-        // Send the report
-        const controller = new AbortController()
-        const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT)
+            clearTimeout(timeout)
 
-        const response = await fetch(endpoint, {
-            method: "POST",
-            body: formData,
-            signal: controller.signal,
-        })
-
-        clearTimeout(timeout)
-
-        if (!response.ok) {
-            return {
-                success: false,
-                error: `Server responded with ${response.status}: ${response.statusText}`,
-            }
-        }
-
-        console.log("Crash report submitted successfully")
-        return { success: true }
-    } catch (err) {
-        if (err.name === "AbortError") {
-            return { success: false, error: "Request timed out after 30 seconds" }
-        }
-        // Node's native fetch wraps the real error in err.cause
-        const cause = err.cause
-        let message = err.message
-        if (cause) {
-            if (cause.code === "ECONNREFUSED") {
-                message = `Connection refused - is the server running at ${endpoint}?`
-            } else if (cause.code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE" || cause.code === "SELF_SIGNED_CERT_IN_CHAIN" || cause.code === "DEPTH_ZERO_SELF_SIGNED_CERT") {
-                message = "SSL certificate error - the server has an invalid or self-signed certificate"
-            } else if (cause.code === "ENOTFOUND") {
-                message = `Server not found - could not resolve ${endpoint}`
-            } else if (cause.message && cause.message.includes("WRONG_VERSION_NUMBER")) {
-                message = "SSL mismatch - you're using https:// but the server expects http:// (or vice versa)"
-            } else if (cause.message) {
-                message = cause.message
-            }
-        }
-        return { success: false, error: message }
-    } finally {
-        // Clean up temp .bpee file
-        if (tempBpeePath) {
-            try {
-                if (fs.existsSync(tempBpeePath)) {
-                    fs.unlinkSync(tempBpeePath)
+            if (!response.ok) {
+                return {
+                    success: false,
+                    error: `Server responded with ${response.status}: ${response.statusText}`,
                 }
-            } catch (cleanupErr) {
-                console.warn("Failed to clean up temp crash report file:", cleanupErr.message)
+            }
+
+            return { success: true }
+        } catch (err) {
+            if (err.name === "AbortError") {
+                return { success: false, error: "Request timed out after 30 seconds" }
+            }
+            // Node's native fetch wraps the real error in err.cause
+            const cause = err.cause
+            let message = err.message
+            if (cause) {
+                if (cause.code === "ECONNREFUSED") {
+                    message = `Connection refused - is the server running at ${endpoint}?`
+                } else if (cause.code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE" || cause.code === "SELF_SIGNED_CERT_IN_CHAIN" || cause.code === "DEPTH_ZERO_SELF_SIGNED_CERT") {
+                    message = "SSL certificate error - the server has an invalid or self-signed certificate"
+                } else if (cause.code === "ENOTFOUND") {
+                    message = `Server not found - could not resolve ${endpoint}`
+                } else if (cause.message && cause.message.includes("WRONG_VERSION_NUMBER")) {
+                    message = "SSL mismatch - you're using https:// but the server expects http:// (or vice versa)"
+                } else if (cause.message) {
+                    message = cause.message
+                }
+            }
+            return { success: false, error: message }
+        } finally {
+            // Clean up temp .bpee file
+            if (tempBpeePath) {
+                try {
+                    if (fs.existsSync(tempBpeePath)) {
+                        fs.unlinkSync(tempBpeePath)
+                    }
+                } catch (cleanupErr) {
+                    console.warn(
+                        `Failed to delete the temporary package ${tempBpeePath}:`,
+                        cleanupErr,
+                    )
+                }
             }
         }
-    }
+    })
 }
 
 module.exports = { submitCrashReport, collectLogs }

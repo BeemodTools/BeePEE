@@ -21,7 +21,7 @@ function SignageIconCell({ signage, onEdit }) {
                 .then(setImageSrc)
                 .catch((error) => {
                     console.warn(
-                        `Failed to load icon for signage ${signage.name}:`,
+                        `Failed to load icon for signage "${signage.name}":`,
                         error,
                     )
                     setImageSrc(null)
@@ -94,52 +94,37 @@ function SignageBrowser() {
     const [addDialogOpen, setAddDialogOpen] = useState(false)
 
     useEffect(() => {
-        console.log("SignageBrowser mounted, setting up package listener")
-
         // Fetch current signages on mount (in case package was already loaded)
         const fetchCurrentSignages = async () => {
             try {
                 const currentSignages =
                     await window.package.getCurrentSignages?.()
                 if (currentSignages && currentSignages.length > 0) {
-                    console.log(
-                        "SignageBrowser: Fetched current signages on mount:",
-                        currentSignages.length,
-                    )
                     setSignages(currentSignages)
                 }
             } catch (error) {
-                console.log(
-                    "SignageBrowser: No current signages available (this is normal for packages without signages)",
-                )
+                console.warn("Failed to fetch current signages:", error)
             }
         }
         fetchCurrentSignages()
 
         // Handle package load and updates
         const handlePackageLoaded = (data) => {
-            console.log("SignageBrowser: Package loaded callback fired")
             // Handle both old format (items array) and new format ({ items, signages })
             const loadedSignages = Array.isArray(data)
                 ? []
                 : data?.signages || []
-            console.log("SignageBrowser: Loaded signages:", loadedSignages.length)
             setSignages(loadedSignages)
         }
 
         // Handle package close
         const handlePackageClosed = () => {
-            console.log("SignageBrowser: Package closed, clearing signages")
             setSignages([])
         }
 
         // Register listeners
         window.package.onPackageLoaded(handlePackageLoaded)
         window.package.onPackageClosed(handlePackageClosed)
-
-        return () => {
-            console.log("Cleaning up SignageBrowser listeners")
-        }
     }, [])
 
     useEffect(() => {
@@ -159,12 +144,13 @@ function SignageBrowser() {
     }, [])
 
     const handleEditSignage = (signageId) => {
-        console.log("Attempting to open editor for signage:", signageId)
-
         // Find the signage in current state
         const signage = signages.find((s) => s.id === signageId)
         if (!signage) {
-            console.warn("Signage not found:", signageId)
+            console.warn(
+                "Failed to open signage editor, signage not found:",
+                signageId,
+            )
             return
         }
 

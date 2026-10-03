@@ -991,8 +991,6 @@ function DroppableZone({
         id: id,
     })
 
-    console.log(`DroppableZone ${id}:`, { isOver, isEmpty })
-
     return (
         <Box
             ref={setNodeRef}
@@ -3532,7 +3530,7 @@ function Conditions({
                 console.error("Failed to load prefabs:", result.error)
             }
         } catch (error) {
-            console.error("Error loading prefabs:", error)
+            console.error("Failed to load prefabs:", error)
         }
         setLoadingPrefabs(false)
     }
@@ -3696,10 +3694,6 @@ function Conditions({
 
         const updatedBlocks = addDuplicateToSameLevel(blocks)
         setBlocks(updatedBlocks)
-        console.log(
-            "🔧 Conditions JSON:",
-            JSON.stringify(updatedBlocks, null, 2),
-        )
         onUpdateConditions(updatedBlocks)
     }
 
@@ -4028,21 +4022,8 @@ function Conditions({
     const availableVariables = [...userVariables, ...bee2SystemVariables]
 
     useEffect(() => {
-        console.log("Conditions useEffect triggered:", {
-            hasBlocks: !!(formData.blocks && Array.isArray(formData.blocks)),
-            blocksLength: formData.blocks?.length || 0,
-            hasConditions: !!(
-                formData.conditions &&
-                Object.keys(formData.conditions).length > 0
-            ),
-            conditionsKeys: Object.keys(formData.conditions || {}),
-            vbspConditionsImported:
-                formData.conditions?._vbsp_conditions_imported,
-        })
-
         // Initialize blocks from formData if available
         if (formData.blocks && Array.isArray(formData.blocks)) {
-            console.log("Setting blocks from formData.blocks:", formData.blocks)
             setBlocks(formData.blocks)
         } else if (
             formData.conditions &&
@@ -4053,33 +4034,25 @@ function Conditions({
                 formData.conditions._vbsp_conditions_imported === true
 
             if (vbspAlreadyImported) {
-                console.log(
-                    "VBSP conditions already imported previously - skipping conversion to prevent unsaved changes",
+                console.warn(
+                    `Skipped importing VBSP conditions for "${item?.name}": marked as imported, but meta.json has no saved blocks`,
                 )
                 // Do NOT convert or set blocks - they should already be in formData.blocks
                 // If we reach here, it means blocks were imported but not saved to meta.json properly
                 return
             }
 
-            console.log(
-                "Converting VBSP conditions to blocks (first time):",
-                formData.conditions,
-            )
-
             const result = convertVbspToBlocks(formData.conditions)
             if (result.success) {
-                console.log(
-                    "Conversion successful, setting blocks:",
-                    result.blocks,
-                )
                 setBlocks(result.blocks)
                 // Auto-import and save to meta.json on first conversion
                 onImportConditions(result.blocks)
             } else {
-                console.error("Conversion failed:", result.error)
+                console.error(
+                    `Failed to import VBSP conditions for "${item?.name}":`,
+                    result.error,
+                )
             }
-        } else {
-            console.log("No blocks or conditions to load")
         }
     }, [formData.blocks, formData.conditions])
 
@@ -4100,10 +4073,6 @@ function Conditions({
 
         const updatedBlocks = [...blocks, newBlock]
         setBlocks(updatedBlocks)
-        console.log(
-            "🔧 Conditions JSON:",
-            JSON.stringify(updatedBlocks, null, 2),
-        )
         onUpdateConditions(updatedBlocks)
         setAddDialogOpen(false)
     }
@@ -4131,10 +4100,6 @@ function Conditions({
 
         const updatedBlocks = deleteBlockRecursive(blocks)
         setBlocks(updatedBlocks)
-        console.log(
-            "🔧 Conditions JSON:",
-            JSON.stringify(updatedBlocks, null, 2),
-        )
         onUpdateConditions(updatedBlocks)
     }
 
@@ -4163,17 +4128,12 @@ function Conditions({
 
         const updatedBlocks = updateBlockRecursive(blocks)
         setBlocks(updatedBlocks)
-        console.log(
-            "🔧 Conditions JSON:",
-            JSON.stringify(updatedBlocks, null, 2),
-        )
         onUpdateConditions(updatedBlocks)
     }
 
     const handleAddChildBlock = (parentBlockId, containerKey) => {
         // This function is kept for compatibility but won't be used
         // since we're using drag-and-drop instead of "Add Action" buttons
-        console.log("Child block addition via drag-and-drop only")
     }
 
     const handleDragStart = (event) => {
@@ -4185,8 +4145,6 @@ function Conditions({
         setActiveId(null)
 
         if (!over) return
-
-        console.log("Drag end:", { active: active?.id, over: over?.id })
 
         // Check if we're dropping into a droppable zone (IF block, If-Else block, or Switch case container)
         if (
@@ -4206,12 +4164,6 @@ function Conditions({
             } else if (over.id.includes("-cases")) {
                 containerType = "cases"
             }
-
-            console.log("Dropping into block:", {
-                parentBlockId,
-                draggedBlockId,
-                containerType,
-            })
 
             // Find and remove the dragged block from wherever it currently is
             const findAndRemoveBlock = (blockList) => {
@@ -4294,18 +4246,12 @@ function Conditions({
             const draggedBlock = findAndRemoveBlock(blocksCopy)
 
             if (draggedBlock) {
-                console.log("Found dragged block:", draggedBlock)
-
                 // Then add it to the target block
                 const updatedBlocks = addBlockToContainer(
                     blocksCopy,
                     draggedBlock,
                 )
                 setBlocks(updatedBlocks)
-                console.log(
-                    "🔧 Conditions JSON:",
-                    JSON.stringify(updatedBlocks, null, 2),
-                )
                 onUpdateConditions(updatedBlocks)
             }
         }
@@ -4317,10 +4263,6 @@ function Conditions({
             if (oldIndex !== -1 && newIndex !== -1) {
                 const updatedBlocks = arrayMove(blocks, oldIndex, newIndex)
                 setBlocks(updatedBlocks)
-                console.log(
-                    "🔧 Conditions JSON:",
-                    JSON.stringify(updatedBlocks, null, 2),
-                )
                 onUpdateConditions(updatedBlocks)
             }
         }
@@ -4489,17 +4431,9 @@ function Conditions({
 
         try {
             // Check if we have the expected VBSP structure
-            console.log("Full VBSP conditions structure:", vbspConditions)
-
             if (!vbspConditions.Conditions) {
                 throw new Error("Invalid VBSP structure: Missing Conditions")
             }
-
-            console.log("vbspConditions.Conditions:", vbspConditions.Conditions)
-            console.log(
-                "Available keys in Conditions:",
-                Object.keys(vbspConditions.Conditions),
-            )
 
             // Handle different VBSP structure patterns
             let conditions = []
@@ -4512,7 +4446,6 @@ function Conditions({
             } else {
                 // Check for UUID-prefixed Condition keys or other condition patterns
                 const allKeys = Object.keys(vbspConditions.Conditions)
-                console.log("Checking for condition patterns in keys:", allKeys)
 
                 // Look for UUID-prefixed Condition keys (like Condition_uuid)
                 const conditionKeys = allKeys.filter(
@@ -4521,7 +4454,6 @@ function Conditions({
                 )
 
                 if (conditionKeys.length > 0) {
-                    console.log("Found condition keys:", conditionKeys)
                     conditions = conditionKeys.map(
                         (key) => vbspConditions.Conditions[key],
                     )
@@ -4541,40 +4473,31 @@ function Conditions({
                     })
 
                     if (structureKeys.length > 0) {
-                        console.log("Found structure keys:", structureKeys)
                         conditions = structureKeys.map(
                             (key) => vbspConditions.Conditions[key],
                         )
                     } else {
                         // Treat the entire Conditions object as a single condition
-                        console.log(
-                            "Using entire Conditions object as single condition",
-                        )
                         conditions = [vbspConditions.Conditions]
                     }
                 }
             }
 
-            console.log("Parsed conditions array:", conditions)
-
             if (conditions.length === 0) {
-                console.warn("No conditions found to process!")
+                console.warn(
+                    `Found no VBSP conditions to convert for "${item?.name}"`,
+                )
                 return { success: true, blocks: [] }
             }
 
             // Process each top-level condition
             conditions.forEach((condition, index) => {
-                console.log(`Processing condition ${index}:`, condition)
                 if (condition) {
                     const processedBlocks = processCondition(condition)
-                    console.log(
-                        `Condition ${index} produced ${processedBlocks.length} blocks:`,
-                        processedBlocks,
-                    )
                     convertedBlocks.push(...processedBlocks)
                 } else {
                     console.warn(
-                        `Condition ${index} is null or undefined, skipping`,
+                        `Skipped empty VBSP condition at index ${index}`,
                     )
                 }
             })
@@ -4586,8 +4509,7 @@ function Conditions({
                 // Check if condition is valid
                 if (!condition || typeof condition !== "object") {
                     console.warn(
-                        "processCondition called with invalid condition:",
-                        condition,
+                        `Skipped VBSP condition with invalid value "${condition}" (expected an object)`,
                     )
                     return blocks
                 }
@@ -4632,8 +4554,7 @@ function Conditions({
                         typeof nestedCondition !== "object"
                     ) {
                         console.warn(
-                            "Invalid nested condition:",
-                            nestedCondition,
+                            `Skipped nested VBSP condition "${key}" (expected an object)`,
                         )
                         return
                     }
@@ -4660,7 +4581,6 @@ function Conditions({
 
                 // Process "random" blocks - randomly selects one option
                 if (condition.random && Array.isArray(condition.random)) {
-                    console.log("Found random array:", condition.random)
                     // Create a random selection group block
                     const randomBlock = {
                         id: `random_${generateUniqueId()}`,
@@ -4826,8 +4746,7 @@ function Conditions({
             function createSwitchBlock(switchData) {
                 if (!switchData || typeof switchData !== "object") {
                     console.warn(
-                        "createSwitchBlock called with invalid data:",
-                        switchData,
+                        `Skipped VBSP Switch with invalid value "${switchData}" (expected an object)`,
                     )
                     return null
                 }
@@ -4947,14 +4866,14 @@ function Conditions({
                 return switchBlock
             }
 
-            console.log("VBSP conversion successful:", {
-                totalBlocks: convertedBlocks.length,
-                blocks: convertedBlocks,
-            })
+            const count = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`
+            console.log(
+                `Converted ${count(conditions.length, "VBSP condition")} to ${count(convertedBlocks.length, "block")} for "${item?.name}"`,
+            )
 
             return { success: true, blocks: convertedBlocks }
         } catch (error) {
-            console.error("VBSP conversion failed:", error)
+            console.error("Failed to convert VBSP conditions to blocks:", error)
             return { success: false, error: error.message }
         }
     }

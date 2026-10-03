@@ -7,6 +7,8 @@ contextBridge.exposeInMainWorld("electron", {
         ipcRenderer.invoke("show-open-dialog", options),
     showMessageBox: (options) =>
         ipcRenderer.invoke("show-message-box", options),
+    // Console output for the log file (src/utils/logForwarding.js)
+    log: (level, text) => ipcRenderer.send("renderer:log", level, text),
 })
 
 // Expose general event API for progress updates, etc.
@@ -33,31 +35,14 @@ contextBridge.exposeInMainWorld("package", {
         // Note: We DON'T remove all listeners here because multiple components need to listen
         // (App.jsx for navigation, ItemBrowser for loading items, SignageBrowser for signages)
         ipcRenderer.on("package:loaded", (event, data) => {
-            // Handle both old format (items array) and new format ({ items, signages })
-            if (Array.isArray(data)) {
-                // Old format - just items array (backwards compat)
-                console.log(
-                    "preload.js: Received package:loaded event with items (old format):",
-                    data?.length,
-                )
-                callback(data)
-            } else {
-                // New format - object with items and signages
-                console.log(
-                    "preload.js: Received package:loaded event with items:",
-                    data?.items?.length,
-                    "signages:",
-                    data?.signages?.length,
-                )
-                callback(data)
-            }
+            // Old format: just the items array; new format: { items, signages }
+            callback(data)
         })
     },
     onPackageClosed: (callback) => {
         // Note: We DON'T remove all listeners here because multiple components need to listen
         // (App.jsx for navigation, ItemBrowser for clearing items)
         ipcRenderer.on("package:closed", () => {
-            console.log("preload.js: Received package:closed event")
             callback()
         })
     },

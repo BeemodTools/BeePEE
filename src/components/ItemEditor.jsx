@@ -79,7 +79,7 @@ function ItemEditor() {
                     setShowItemIds(showIdResult.value)
                 }
             } catch (error) {
-                console.log("Failed to load editor preferences:", error)
+                console.warn("Failed to load editor preferences:", error)
             }
         }
         loadPreferences()
@@ -294,7 +294,10 @@ function ItemEditor() {
                         },
                     }))
                 } catch (error) {
-                    console.error("Failed to load data:", error)
+                    console.error(
+                        `Failed to load editor data for item "${item.name}":`,
+                        error,
+                    )
                     setFormData((prev) => ({
                         ...prev,
                         name: item.name || "",
@@ -504,15 +507,14 @@ function ItemEditor() {
         // Auto-save the converted blocks immediately to meta.json
         // This prevents "unsaved changes" from appearing on first open
         if (item?.id && blocks) {
-            console.log("Auto-saving converted VBSP blocks to meta.json...")
+            console.log(
+                `Auto-saving the converted VBSP conditions of item "${item.name}"`,
+            )
             window.package
                 .saveConditions(item.id, { blocks })
-                .then(() => {
-                    console.log("✅ Auto-saved converted VBSP blocks")
-                })
                 .catch((error) => {
                     console.error(
-                        "Failed to auto-save converted blocks:",
+                        `Failed to auto-save the converted VBSP conditions of item "${item.name}":`,
                         error,
                     )
                 })
@@ -571,7 +573,10 @@ function ItemEditor() {
 
                 savePromises.push(
                     window.package?.saveItem?.(saveData).catch((error) => {
-                        console.error("Failed to save basic info:", error)
+                        console.error(
+                            `Failed to save basic info of item "${item.name}":`,
+                            error,
+                        )
                         hasErrors = true
                         throw new Error(`Basic info: ${error.message}`)
                     }),
@@ -620,7 +625,10 @@ function ItemEditor() {
                         }
                     }
                 } catch (error) {
-                    console.error("Failed to save inputs:", error)
+                    console.error(
+                        `Failed to save inputs of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Inputs: ${error.message}`)
                 }
@@ -670,7 +678,10 @@ function ItemEditor() {
                         }
                     }
                 } catch (error) {
-                    console.error("Failed to save outputs:", error)
+                    console.error(
+                        `Failed to save outputs of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Outputs: ${error.message}`)
                 }
@@ -693,7 +704,9 @@ function ItemEditor() {
                             instanceData._toRemove &&
                             originalInstances[index]
                         ) {
-                            console.log(`Removing instance at index ${index}`)
+                            console.log(
+                                `Removing instance "${instanceData.Name}" from item "${item.name}"`,
+                            )
                             await window.package.removeInstance(item.id, index)
                         }
                     }
@@ -704,7 +717,7 @@ function ItemEditor() {
                     )) {
                         if (instanceData._pending && instanceData._filePath) {
                             console.log(
-                                `Adding pending instance: ${instanceData.Name}`,
+                                `Adding instance "${instanceData.Name}" to item "${item.name}"`,
                             )
                             // Use a new backend function to add instance from file path
                             const addResult =
@@ -722,7 +735,10 @@ function ItemEditor() {
                         }
                     }
                 } catch (error) {
-                    console.error("Failed to save instances:", error)
+                    console.error(
+                        `Failed to save instances of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Instances: ${error.message}`)
                 }
@@ -745,7 +761,7 @@ function ItemEditor() {
                             numericIndex < 0
                         ) {
                             console.warn(
-                                `Skipping instance name for unresolved index: ${instanceIndex}`,
+                                `Skipped saving the name of instance ${instanceIndex}, its index could not be resolved`,
                             )
                             continue
                         }
@@ -772,7 +788,10 @@ function ItemEditor() {
                     // Clear editing names after saving
                     setEditingNames({})
                 } catch (error) {
-                    console.error("Failed to save instance names:", error)
+                    console.error(
+                        `Failed to save instance names of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Instance names: ${error.message}`)
                 }
@@ -786,7 +805,10 @@ function ItemEditor() {
                         formData.variables,
                     )
                 } catch (error) {
-                    console.error("Failed to save Variables data:", error)
+                    console.error(
+                        `Failed to save variables of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Variables: ${error.message}`)
                 }
@@ -800,7 +822,10 @@ function ItemEditor() {
                         blocks: formData.blocks,
                     })
                 } catch (error) {
-                    console.error("Failed to save Conditions data:", error)
+                    console.error(
+                        `Failed to save conditions of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Conditions: ${error.message}`)
                 }
@@ -812,12 +837,18 @@ function ItemEditor() {
                     await window.package.saveOther?.(item.id, formData.other)
                     // Save model name
                     await window.package?.saveModelName?.(item.id, formData.modelName).catch((error) => {
-                        console.error("Failed to save model name:", error)
+                        console.error(
+                            `Failed to save model name of item "${item.name}":`,
+                            error,
+                        )
                         hasErrors = true
                         throw new Error(`Model name: ${error.message}`)
                     })
                 } catch (error) {
-                    console.error("Failed to save other data:", error)
+                    console.error(
+                        `Failed to save other data of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Other: ${error.message}`)
                 }
@@ -828,27 +859,23 @@ function ItemEditor() {
             // (e.g., if MDL conversion failed but VTF conversion succeeded)
             try {
                 // Step 1: Copy staged model/material files from .bpee/ to resources/
-                console.log("Checking for staged model/material files...")
                 const copyResult = await window.electron.invoke("copy-staged-model-files", {
                     itemId: item.id,
                 })
 
-                if (copyResult.success && copyResult.copied) {
-                    console.log("✅ Staged model/material files copied successfully")
-                }
-
                 // Step 2: Save staged editoritems.json changes (only if we have them)
                 if (stagedEditorItems) {
-                    console.log("Saving staged editoritems from model generation...")
                     await window.electron.invoke("save-staged-editoritems", {
                         itemId: item.id,
                         stagedEditorItems: stagedEditorItems,
                         hasObjFiles: copyResult.hasObjFiles || false,
                     })
-                    console.log("✅ Staged editoritems saved successfully")
                 }
             } catch (error) {
-                console.error("Failed to save staged model changes:", error)
+                console.error(
+                    `Failed to save staged model changes of item "${item.name}":`,
+                    error,
+                )
                 hasErrors = true
                 throw new Error(`Staged model changes: ${error.message}`)
             }
@@ -892,7 +919,7 @@ function ItemEditor() {
                 reloadItem(item.id)
             }
         } catch (error) {
-            console.error("Failed to save:", error)
+            console.error(`Failed to save item "${item.name}":`, error)
             setSaveError(error.message)
         } finally {
             setIsSaving(false)
@@ -935,7 +962,7 @@ function ItemEditor() {
                 window.close()
             }
         } catch (error) {
-            console.error("Failed to delete item:", error)
+            console.error(`Failed to delete item "${item.name}":`, error)
             setSaveError(error.message || "Failed to delete item")
             setDeleteDialogOpen(false)
         } finally {
@@ -944,8 +971,6 @@ function ItemEditor() {
     }
 
     if (!item) return null
-
-    console.log(item)
 
     return (
         <Box

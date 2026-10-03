@@ -614,26 +614,36 @@ function SignageDesigner({
         if (!layers.length) return
         try {
             const dataUrl = await rasterizeLayers(layers)
-            await window.package?.saveFileDialog({
+            const result = await window.package?.saveFileDialog({
                 defaultName: exportBaseName("png"),
                 filters: [{ name: "PNG Image", extensions: ["png"] }],
                 base64: dataUrl.split(",")[1],
             })
+            if (result?.success) {
+                console.log(
+                    `Exported signage design as PNG to ${result.filePath}`,
+                )
+            }
         } catch (err) {
-            console.error("Export PNG failed:", err)
+            console.error("Failed to export signage design as PNG:", err)
         }
     }
 
     const exportBpsign = async () => {
         if (!layers.length) return
         try {
-            await window.package?.saveFileDialog({
+            const result = await window.package?.saveFileDialog({
                 defaultName: exportBaseName("bpsign"),
                 filters: [{ name: "BeePEE Signage", extensions: ["bpsign"] }],
                 text: JSON.stringify(serializeDesign(layers), null, 2),
             })
+            if (result?.success) {
+                console.log(
+                    `Exported signage design as .bpsign to ${result.filePath}`,
+                )
+            }
         } catch (err) {
-            console.error("Export .bpsign failed:", err)
+            console.error("Failed to export signage design as .bpsign:", err)
         }
     }
 
@@ -646,8 +656,9 @@ function SignageDesigner({
             pushHistory()
             setLayers(loaded)
             setSelIds([])
+            console.log(`Loaded .bpsign design with ${loaded.length} layers`)
         } catch (err) {
-            console.error("Load .bpsign failed:", err)
+            console.error("Failed to load .bpsign design:", err)
         }
     }
 
@@ -3556,7 +3567,7 @@ function SignageDesigner({
                         const parsed = parseSvgToGlyph(await file.text(), { importHeuristics: true })
                         if (!parsed) {
                             console.warn(
-                                "No usable paths found in SVG:",
+                                "Skipped SVG import, no usable paths found:",
                                 file.name,
                             )
                             return
@@ -3570,8 +3581,14 @@ function SignageDesigner({
                         )
                         setCustomIds((ids) => [...new Set([...ids, id])])
                         setOpenSections((s) => ({ ...s, custom: true }))
+                        console.log(
+                            `Imported SVG "${file.name}" as a custom shape`,
+                        )
                     } catch (err) {
-                        console.error("Failed to import SVG:", err)
+                        console.error(
+                            `Failed to import SVG "${file.name}":`,
+                            err,
+                        )
                     }
                 }}
             />

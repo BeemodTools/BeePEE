@@ -2,6 +2,10 @@ const fs = require("fs")
 const path = require("path")
 const { Item } = require("./items")
 const { getPackagesDir } = require("../utils/packagesDir")
+const { logger } = require("../utils/logger")
+
+/** "1 item", "3 items" */
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
 class Package {
     constructor(packagePath) {
@@ -143,29 +147,35 @@ class Package {
                     }
                 }
             } catch (error) {
-                console.warn("Failed to set importedVersion:", error.message)
+                console.warn(
+                    "Failed to set the items' imported version:",
+                    error,
+                )
             }
 
             // Auto-import VBSP instances for all items (runs once per item)
-            console.log(`\n🔍 Checking for VBSP instances to auto-import...`)
-            let totalImported = 0
-            for (const item of this.items) {
-                if (item.autoImportVBSPInstances()) {
-                    totalImported++
+            await logger.section("Auto-importing VBSP instances", () => {
+                let totalImported = 0
+                for (const item of this.items) {
+                    if (item.autoImportVBSPInstances()) {
+                        totalImported++
+                    }
                 }
-            }
-            if (totalImported > 0) {
                 console.log(
-                    `✅ Auto-imported VBSP instances for ${totalImported} item(s) in ${this.name}\n`,
+                    totalImported > 0
+                        ? `Imported the VBSP instances of ${plural(totalImported, "item")}`
+                        : "No new VBSP instances to import",
                 )
-            } else {
-                console.log(`⏭️ No VBSP instances to import in ${this.name}\n`)
-            }
+            })
 
+            console.log(
+                `Loaded "${this.name}": ${plural(this.items.length, "item")} and ${plural(this.signages.length, "signage")}`,
+            )
             return { items: this.items, signages: this.signages }
         } catch (error) {
+            // The caller logs the error with its stack
             console.error(
-                `[package : ${this.name}]: Failed to load - ${error.message}`,
+                `Failed to load package "${this.name}": ${error.message}`,
             )
             this.items = []
             this.signages = []

@@ -175,21 +175,29 @@ function InputOutputConfigDialog({
             if (entitiesResult.success) {
                 setEntities(entitiesResult.entities)
             } else {
-                console.error("Failed to get entities:", entitiesResult.error)
+                console.error(
+                    `Failed to load the instance entities of item "${item?.name}":`,
+                    entitiesResult.error,
+                )
             }
 
             if (fgdResult.success && Object.keys(fgdResult.entities || {}).length > 0) {
                 setFgdData(fgdResult.entities)
                 setUseFallbackMode(false)
             } else {
-                console.warn("FGD data not available - using fallback text mode")
+                console.warn(
+                    "FGD data is not available, using fallback text mode for I/O commands",
+                )
                 setFgdData({})
                 setUseFallbackMode(true)
             }
 
             // Parse existing commands will be handled by the useEffect below
         } catch (error) {
-            console.error("Failed to load entity data:", error)
+            console.error(
+                `Failed to load entity data for item "${item?.name}":`,
+                error,
+            )
             setUseFallbackMode(true)
         } finally {
             setLoading(false)
@@ -2444,7 +2452,10 @@ function Inputs({ item, formData, onUpdateInputs, onUpdateOutputs }) {
                 setValidationIssues(result.validationIssues)
             }
         } catch (error) {
-            console.error("Failed to load validation issues:", error)
+            console.error(
+                `Failed to load entity validation issues for item "${item?.name}":`,
+                error,
+            )
         } finally {
             setLoadingValidation(false)
         }
@@ -2526,7 +2537,10 @@ function Inputs({ item, formData, onUpdateInputs, onUpdateOutputs }) {
             setEditDialogOpen(false)
             setEditingConfig({ name: "", config: {}, type: "" })
         } catch (error) {
-            console.error("Failed to edit config:", error)
+            console.error(
+                `Failed to update ${editingConfig.type} "${editingConfig.name}" of item "${item?.name}":`,
+                error,
+            )
         }
     }
 
@@ -2547,7 +2561,10 @@ function Inputs({ item, formData, onUpdateInputs, onUpdateOutputs }) {
             setDeleteDialogOpen(false)
             setDeleteItem({ name: "", type: "" })
         } catch (error) {
-            console.error("Failed to delete config:", error)
+            console.error(
+                `Failed to delete ${deleteItem.type} "${deleteItem.name}" of item "${item?.name}":`,
+                error,
+            )
         }
     }
 

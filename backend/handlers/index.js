@@ -29,7 +29,6 @@ function registerSettingsHandlersEarly(ipcMain) {
     if (!settingsHandlersRegistered) {
         settingsHandlers.register(ipcMain, null)
         settingsHandlersRegistered = true
-        console.log("✅ Settings handlers registered early")
     }
 }
 
@@ -59,8 +58,6 @@ function registerAll(ipcMain, mainWindow) {
         settingsHandlers.register(ipcMain, mainWindow)
         settingsHandlersRegistered = true
     }
-
-    console.log("✅ All IPC handlers registered")
 }
 
 module.exports = { registerAll, registerSettingsHandlersEarly }

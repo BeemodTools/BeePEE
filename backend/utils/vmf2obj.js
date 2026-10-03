@@ -4,6 +4,14 @@ const { app } = require("electron")
 const { findPortal2Resources } = require("../data")
 const { VmfConverter, assertHasGeometry } = require("./vmfConverter")
 const { cartoonify } = require("./cartoonFilter")
+const { logger } = require("./logger")
+
+/** Warnings shown per converted VMF (the rest are counted) */
+const MAX_WARNINGS = 15
+
+/** "1 face", "3 faces" */
+const plural = (count, noun, nouns = `${noun}s`) =>
+    `${count} ${count === 1 ? noun : nouns}`
 
 /**
  * Helper to create directory with retry logic for EPERM errors
@@ -19,7 +27,7 @@ async function mkdirWithRetry(dirPath, maxAttempts = 5) {
             if (error.code === "EPERM" || error.code === "EBUSY") {
                 if (attempt < maxAttempts - 1) {
                     console.warn(
-                        `mkdir attempt ${attempt + 1} failed (${error.code}), retrying in ${(attempt + 1) * 200}ms...`,
+                        `Could not create ${dirPath} (${error.code}), retrying in ${(attempt + 1) * 200} ms`,
                     )
                     await new Promise((resolve) =>
                         setTimeout(resolve, (attempt + 1) * 200),
@@ -94,13 +102,11 @@ function findPngFilesRecursively(dirPath) {
 async function applyCartoonishToTextures(outputDir) {
     const materialsDir = path.join(outputDir, "materials")
     if (!fs.existsSync(materialsDir)) {
-        console.log("No materials directory for cartoonify, skipping")
         return { success: true, processed: 0 }
     }
 
     const pngFiles = findPngFilesRecursively(materialsDir)
     if (pngFiles.length === 0) {
-        console.log("No PNG textures found to cartoonify, skipping")
         return { success: true, processed: 0 }
     }
 
@@ -129,7 +135,7 @@ async function applyCartoonishToTextures(outputDir) {
             processed++
         } catch (error) {
             console.warn(
-                `Could not cartoonify ${path.basename(file)}:`,
+                `Could not apply the cartoon style to ${path.basename(file)}:`,
                 error.message,
             )
         }
@@ -147,8 +153,6 @@ async function applyCartoonishToTextures(outputDir) {
  */
 async function applySourceEngineRotation(objPath) {
     try {
-        console.log(`🔄 Starting Source engine rotation on: ${objPath}`)
-
         // Read the OBJ file
         const objContent = fs.readFileSync(objPath, "utf-8")
         const lines = objContent.split("\n")
@@ -211,15 +215,9 @@ async function applySourceEngineRotation(objPath) {
             }
         }
 
-        console.log(
-            `✅ Rotation complete! Modified ${vertexCount} vertices and ${normalCount} normals`,
-        )
-
         // Write the rotated OBJ back to file
         fs.writeFileSync(objPath, rotatedLines.join("\n"), "utf-8")
-        console.log(`💾 Rotated OBJ saved to: ${objPath}`)
     } catch (error) {
-        console.error(`❌ Rotation failed: ${error.message}`)
         throw new Error(
             `Failed to apply Source engine rotation: ${error.message}`,
         )
@@ -270,7 +268,13 @@ async function resolveResourcePaths(vmfPaths, explicitPaths) {
 
     const unique = uniquePaths([...resourcePaths, ...getExtraResourcePaths()])
     if (unique.length > 0) {
-        console.log(`🔍 VMF2OBJ resource paths:`, unique)
+        console.log(
+            `Resource paths, in priority order:\n${unique
+                .map((p, i) => `  ${i + 1}. ${p}`)
+                .join("\n")}`,
+        )
+    } else {
+        console.warn("No resource paths, so textures and props will be missing")
     }
     return unique
 }
@@ -301,7 +305,7 @@ async function postProcessOutputs(objPaths, outputDir, options) {
                 await applySourceEngineRotation(objPath)
             } catch (rotationError) {
                 console.warn(
-                    "Failed to apply Source engine rotation:",
+                    `Could not rotate ${path.basename(objPath)} for the model preview:`,
                     rotationError.message,
                 )
             }
@@ -311,24 +315,58 @@ async function postProcessOutputs(objPaths, outputDir, options) {
     // Textures are written as PNG directly, so only the cartoon pass remains
     if ((options.textureStyle || "cartoon") === "cartoon") {
         try {
-            console.log("Applying cartoonish effect to textures...")
+            const start = Date.now()
             const cartoonResult = await applyCartoonishToTextures(outputDir)
-            console.log(`Cartoonified ${cartoonResult.processed} textures`)
+            if (cartoonResult.processed > 0) {
+                console.log(
+                    `Applied the cartoon style to ${plural(cartoonResult.processed, "texture")} in ${Date.now() - start} ms`,
+                )
+            }
         } catch (cartoonError) {
             console.warn(
-                "Cartoonify step failed:",
+                "Could not apply the cartoon style:",
                 cartoonError?.message || cartoonError,
             )
         }
     }
 }
 
-function logWarnings(name, warnings) {
-    if (warnings.length > 0) {
-        console.warn(
-            `⚠️ VMF2OBJ warnings for ${name}:\n  ${warnings.join("\n  ")}`,
+/**
+ * Log what a VMF was converted to, and its warnings (up to MAX_WARNINGS)
+ * @param {{warnings: string[], stats: Object}} result - VmfConverter.convert's
+ */
+function logConversion({ warnings, stats }) {
+    const parts = [
+        `${plural(stats.solids, "brush", "brushes")} (${plural(stats.faces, "face")})`,
+        plural(stats.props, "prop"),
+        plural(stats.materials, "material"),
+    ]
+    if (stats.overlays) parts.push(plural(stats.overlays, "overlay"))
+    if (stats.decals) parts.push(plural(stats.decals, "decal"))
+    if (stats.blends) parts.push(plural(stats.blends, "blended displacement"))
+    if (stats.placeholderMaterials) {
+        parts.push(
+            `${plural(stats.placeholderMaterials, "missing texture")} (checkerboard)`,
         )
     }
+    console.log(parts.join(", "))
+
+    for (const warning of warnings.slice(0, MAX_WARNINGS)) {
+        console.warn(warning)
+    }
+    if (warnings.length > MAX_WARNINGS) {
+        console.warn(
+            `...and ${plural(warnings.length - MAX_WARNINGS, "more warning")}`,
+        )
+    }
+}
+
+/** A VMF's path for the log: from the package's resources folder if it's in one */
+function describeVmf(vmfPath) {
+    const resourcesDir = findResourcesDir(vmfPath)
+    return resourcesDir
+        ? path.relative(resourcesDir, vmfPath).split(path.sep).join("/")
+        : vmfPath
 }
 
 /**
@@ -341,7 +379,12 @@ async function convertVmfToObj(vmfPath, options = {}) {
     if (!vmfPath || !fs.existsSync(vmfPath)) {
         throw new Error(`VMF file not found: ${vmfPath}`)
     }
+    return logger.section(`Converting ${describeVmf(vmfPath)} to OBJ`, () =>
+        convertOneVmf(vmfPath, options),
+    )
+}
 
+async function convertOneVmf(vmfPath, options) {
     const baseName = path.basename(vmfPath, path.extname(vmfPath))
     const outputDir = options.outputDir || path.dirname(vmfPath)
     await mkdirWithRetry(outputDir)
@@ -364,7 +407,6 @@ async function convertVmfToObj(vmfPath, options = {}) {
 
     let result
     try {
-        console.log(`Converting VMF to OBJ: ${vmfPath}`)
         result = await converter.convert(
             vmfPath,
             path.join(outputDir, baseName),
@@ -372,7 +414,7 @@ async function convertVmfToObj(vmfPath, options = {}) {
     } finally {
         await converter.dispose()
     }
-    logWarnings(baseName, result.warnings)
+    logConversion(result)
     assertHasGeometry(result, vmfPath)
 
     await postProcessOutputs([result.objPath], outputDir, options)
@@ -394,6 +436,13 @@ async function convertVmfToObj(vmfPath, options = {}) {
  * @returns {Promise<Array<{vmfPath: string, outputName: string, objPath?: string, mtlPath?: string, warnings?: string[], error?: string}>>}
  */
 async function convertVmfsToObj(jobs, options) {
+    return logger.section(
+        `Converting ${plural(jobs.length, "instance")} to OBJ`,
+        () => convertVmfs(jobs, options),
+    )
+}
+
+async function convertVmfs(jobs, options) {
     const outputDir = options.outputDir
     await mkdirWithRetry(outputDir)
 
@@ -407,21 +456,25 @@ async function convertVmfsToObj(jobs, options) {
     try {
         for (const job of jobs) {
             try {
-                if (fs.readFileSync(job.vmfPath, "utf8").includes("NaN")) {
-                    throw new Error("VMF contains NaN values")
-                }
-                const result = await converter.convert(
-                    job.vmfPath,
-                    path.join(outputDir, job.outputName),
+                const result = await logger.section(
+                    `${job.outputName}: ${describeVmf(job.vmfPath)}`,
+                    async () => {
+                        const vmf = fs.readFileSync(job.vmfPath, "utf8")
+                        if (vmf.includes("NaN")) {
+                            throw new Error("VMF contains NaN values")
+                        }
+                        const result = await converter.convert(
+                            job.vmfPath,
+                            path.join(outputDir, job.outputName),
+                        )
+                        logConversion(result)
+                        assertHasGeometry(result, job.vmfPath)
+                        return result
+                    },
                 )
-                logWarnings(job.outputName, result.warnings)
-                assertHasGeometry(result, job.vmfPath)
                 results.push({ ...job, ...result })
             } catch (error) {
-                console.error(
-                    `❌ VMF2OBJ failed for ${job.vmfPath}:`,
-                    error.message,
-                )
+                // Logged as the instance's failed step
                 results.push({ ...job, error: error.message })
             }
         }

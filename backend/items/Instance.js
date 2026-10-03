@@ -107,18 +107,12 @@ class Instance {
 
             return entities
         } catch (error) {
-            console.error(
-                `Failed to parse VMF file ${this.path}:`,
-                error.message,
-            )
+            console.error(`Failed to parse VMF file ${this.path}:`, error)
 
             // Try to provide more context about the error
             if (error.message && error.message.includes("line")) {
                 console.error(
-                    `VMF parsing failed. The file may contain malformed syntax.`,
-                )
-                console.error(
-                    `Consider checking the VMF file for syntax errors or corrupted content.`,
+                    "The VMF file may have malformed syntax or be corrupted",
                 )
             }
 
@@ -179,8 +173,8 @@ class Instance {
             return issues
         } catch (error) {
             console.error(
-                `Failed to get validation issues for ${this.path}:`,
-                error.message,
+                `Failed to check the entity names in ${this.path}:`,
+                error,
             )
             return { unnamedEntities: [], invalidNames: [] }
         }
@@ -191,6 +185,7 @@ class Instance {
         try {
             let vmfContent = fs.readFileSync(this.path, "utf-8")
             let modified = false
+            const renamed = [] // For the log: "old" -> "new"
 
             // Find and fix targetnames with spaces using regex
             // Match "targetname" "value with spaces"
@@ -201,9 +196,7 @@ class Instance {
                     const fixedName = name.replace(/ /g, "_")
                     if (fixedName !== name) {
                         modified = true
-                        console.log(
-                            `Fixed entity name: "${name}" -> "${fixedName}"`,
-                        )
+                        renamed.push(`"${name}" -> "${fixedName}"`)
                     }
                     return prefix + fixedName + suffix
                 },
@@ -211,14 +204,17 @@ class Instance {
 
             if (modified) {
                 fs.writeFileSync(this.path, vmfContent, "utf-8")
+                console.log(
+                    `Replaced spaces with underscores in the entity names of ${this.path}: ${renamed.join(", ")}`,
+                )
                 return { success: true, modified: true }
             }
 
             return { success: true, modified: false }
         } catch (error) {
             console.error(
-                `Failed to fix entity names in ${this.path}:`,
-                error.message,
+                `Failed to fix the entity names in ${this.path}:`,
+                error,
             )
             return { success: false, error: error.message }
         }

@@ -90,7 +90,10 @@ function Model({ objUrl, mtlUrl, onLoad, onError }) {
                             objLoader.setMaterials(materials)
                         }
                     } catch (mtlError) {
-                        console.warn("Failed to load MTL, continuing without materials:", mtlError)
+                        console.warn(
+                            `Failed to load MTL ${mtlUrl}, continuing without materials:`,
+                            mtlError,
+                        )
                     }
                 }
 
@@ -151,7 +154,7 @@ function Model({ objUrl, mtlUrl, onLoad, onError }) {
                 setModel(object)
                 if (onLoad) onLoad()
             } catch (error) {
-                console.error("Failed to load model:", error)
+                console.error(`Failed to load model ${objUrl}:`, error)
                 if (onError) onError(error)
             }
         }
@@ -254,7 +257,7 @@ export default function ModelPreviewPage() {
     useEffect(() => {
         if (window.package?.onModelPreviewData) {
             window.package.onModelPreviewData((data) => {
-                console.log("Received model preview data:", data)
+                console.log(`Received model preview data for "${data?.title}"`)
                 setModelData(data)
                 setLoading(true)
                 setError(null)

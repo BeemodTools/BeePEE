@@ -23,7 +23,9 @@ const { extractAssetsFromVMF, getPortal2SearchDirs, assetExistsInPortal2 } = req
 async function getMdlDependencies(mdlPath, portal2Dir) {
     const result = await findMdlDependencies(mdlPath, { portal2Root: portal2Dir })
     if (!result.success) {
-        console.warn(`Failed to get MDL dependencies for ${mdlPath}:`, result.error)
+        console.warn(
+            `Failed to find the materials of ${mdlPath}: ${result.error}`,
+        )
         return { ...result, materials: [] }
     }
     return result
@@ -56,7 +58,9 @@ function fixItemInstances(item) {
         const newPath = fixInstancePath(oldPath)
 
         if (oldPath !== newPath) {
-            console.log(`Fixing instance path: ${oldPath} -> ${newPath}`)
+            console.log(
+                `Fixed an instance path of "${item.name}": ${oldPath} -> ${newPath}`,
+            )
             instanceData.Name = newPath
             hasChanges = true
         }
@@ -94,17 +98,17 @@ function register(ipcMain, mainWindow) {
             }
 
             const newIndex = item.addInstance(instanceName)
+            console.log(
+                `Added instance ${newIndex} (${instanceName}) to "${item.name}"`,
+            )
 
             const updatedItem = item.toJSONWithExistence()
-            console.log("Sending updated item after add instance:", {
-                id: updatedItem.id,
-                instances: updatedItem.instances,
-            })
             mainWindow.webContents.send("item-updated", updatedItem)
             sendItemUpdateToEditor(itemId, updatedItem)
 
             return { success: true, index: newIndex }
         } catch (error) {
+            console.error(`Failed to add instance ${instanceName}:`, error)
             dialog.showErrorBox(
                 "Failed to Add Instance",
                 `Could not add instance: ${error.message}`,
@@ -154,17 +158,13 @@ function register(ipcMain, mainWindow) {
 
                     if (!autopackResult.success) {
                         console.warn(
-                            `Autopacking failed for instance ${instanceName}: ${autopackResult.error}`,
-                        )
-                    } else {
-                        console.log(
-                            `Autopacking completed for instance ${instanceName}: ${autopackResult.packedAssets}/${autopackResult.totalAssets} assets packed`,
+                            `Adding ${instanceName} without all of its assets, as autopacking failed`,
                         )
                     }
                 } catch (autopackError) {
                     console.warn(
-                        `Autopacking error for instance ${instanceName}:`,
-                        autopackError.message,
+                        `Failed to autopack ${instanceName}, adding it anyway:`,
+                        autopackError,
                     )
                 }
 
@@ -172,6 +172,9 @@ function register(ipcMain, mainWindow) {
 
                 const fileName = path.basename(instanceName, ".vmf")
                 item.setInstanceName(newIndex, fileName)
+                console.log(
+                    `Added instance ${newIndex} (${instanceName}) to "${item.name}"`,
+                )
 
                 const updatedItem = item.toJSONWithExistence()
                 mainWindow.webContents.send("item-updated", updatedItem)
@@ -179,6 +182,7 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true, index: newIndex }
             } catch (error) {
+                console.error(`Failed to add instance ${instanceName}:`, error)
                 dialog.showErrorBox(
                     "Failed to Add Instance",
                     `Could not add instance: ${error.message}`,
@@ -262,6 +266,7 @@ function register(ipcMain, mainWindow) {
                 files: results,
             }
         } catch (error) {
+            console.error("Failed to select instance files:", error)
             dialog.showErrorBox(
                 "Failed to Select Instance File",
                 `Could not select instance file: ${error.message}`,
@@ -345,6 +350,9 @@ function register(ipcMain, mainWindow) {
 
             const displayName = path.basename(instanceName, ".vmf")
             item.setInstanceName(newIndex, displayName)
+            console.log(
+                `Added instance ${newIndex} (${instanceName}) to "${item.name}"`,
+            )
 
             const updatedItem = item.toJSONWithExistence()
             mainWindow.webContents.send("item-updated", updatedItem)
@@ -356,6 +364,7 @@ function register(ipcMain, mainWindow) {
                 instanceName: instanceName,
             }
         } catch (error) {
+            console.error("Failed to add an instance:", error)
             dialog.showErrorBox(
                 "Failed to Add Instance",
                 `Could not add instance: ${error.message}`,
@@ -436,10 +445,13 @@ function register(ipcMain, mainWindow) {
                     }
                 } catch (error) {
                     console.warn(
-                        "Failed to update VMF stats in editoritems:",
-                        error.message,
+                        `Failed to update the VMF stats of instance ${instanceIndex} in the editoritems:`,
+                        error,
                     )
                 }
+                console.log(
+                    `Replaced instance ${instanceIndex} of "${item.name}" with ${selectedFilePath}`,
+                )
 
                 const updatedItem = item.toJSONWithExistence()
                 mainWindow.webContents.send("item-updated", updatedItem)
@@ -447,6 +459,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true, instanceName: instanceData.Name }
             } catch (error) {
+                console.error(
+                    `Failed to replace instance ${instanceIndex}:`,
+                    error,
+                )
                 dialog.showErrorBox(
                     "Failed to Replace Instance",
                     `Could not replace instance: ${error.message}`,
@@ -479,13 +495,16 @@ function register(ipcMain, mainWindow) {
                         vmfStatsCache.clearCache(fullInstancePath)
                     } catch (error) {
                         console.warn(
-                            "Could not clear VMF cache for removed instance:",
-                            error.message,
+                            `Failed to clear the cached VMF stats of instance ${instanceIndex}:`,
+                            error,
                         )
                     }
                 }
 
                 item.removeInstance(instanceIndex)
+                console.log(
+                    `Removed instance ${instanceIndex} (${instanceData?.Name}) from "${item.name}"`,
+                )
 
                 const updatedItem = item.toJSONWithExistence()
                 mainWindow.webContents.send("item-updated", updatedItem)
@@ -493,6 +512,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true }
             } catch (error) {
+                console.error(
+                    `Failed to remove instance ${instanceIndex}:`,
+                    error,
+                )
                 dialog.showErrorBox(
                     "Failed to Remove Instance",
                     `Could not remove instance: ${error.message}`,
@@ -560,9 +583,14 @@ function register(ipcMain, mainWindow) {
                 })
 
                 hammer.unref()
+                console.log(`Opened ${instancePath} in ${hammerStatus.type}`)
 
                 return { success: true, editorType: hammerStatus.type }
             } catch (error) {
+                console.error(
+                    `Failed to open ${instanceName} in Hammer:`,
+                    error,
+                )
                 const errorMessage = `Could not open instance in Hammer: ${error.message}`
                 dialog.showErrorBox("Failed to Launch Hammer", errorMessage)
                 return { success: false, error: errorMessage }
@@ -586,7 +614,10 @@ function register(ipcMain, mainWindow) {
                 const name = item.getInstanceName(instanceIndex)
                 return { success: true, name }
             } catch (error) {
-                console.error("Error getting instance name:", error)
+                console.error(
+                    `Failed to get the name of instance ${instanceIndex}:`,
+                    error,
+                )
                 return { success: false, error: error.message }
             }
         },
@@ -618,7 +649,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true }
             } catch (error) {
-                console.error("Error setting instance name:", error)
+                console.error(
+                    `Failed to rename instance ${instanceIndex}:`,
+                    error,
+                )
                 return { success: false, error: error.message }
             }
         },
@@ -650,7 +684,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true }
             } catch (error) {
-                console.error("Error removing instance name:", error)
+                console.error(
+                    `Failed to remove the name of instance ${instanceIndex}:`,
+                    error,
+                )
                 return { success: false, error: error.message }
             }
         },
@@ -768,7 +805,10 @@ function register(ipcMain, mainWindow) {
                 }
             }
         } catch (error) {
-            console.error("Error checking VMF external assets:", error)
+            console.error(
+                `Failed to check the external assets of ${vmfPath}:`,
+                error,
+            )
             return { success: false, error: error.message }
         }
     })

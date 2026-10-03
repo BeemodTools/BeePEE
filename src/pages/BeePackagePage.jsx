@@ -40,7 +40,7 @@ function BeePackagePage() {
                     setError(result.error || "Failed to load bee-package info")
                 }
             } catch (err) {
-                console.error("Error loading bee-package info:", err)
+                console.error("Failed to load bee-package info:", err)
                 setError(err.message || "Failed to load bee-package info")
             } finally {
                 setLoading(false)
@@ -76,7 +76,7 @@ function BeePackagePage() {
                 setError(result.error || "Failed to save bee-package.json")
             }
         } catch (err) {
-            console.error("Error saving bee-package info:", err)
+            console.error("Failed to save bee-package info:", err)
             setError(err.message || "Failed to save bee-package.json")
         } finally {
             setSaving(false)

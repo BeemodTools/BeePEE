@@ -20,7 +20,7 @@ function applySettingSideEffects(key, value) {
             require("../menu").rebuildMenu()
         }
     } catch (err) {
-        console.warn(`Failed to apply side effect for setting ${key}:`, err.message)
+        console.warn(`Failed to apply the ${key} setting:`, err)
     }
 }
 

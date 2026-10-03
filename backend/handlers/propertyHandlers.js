@@ -277,7 +277,10 @@ function register(ipcMain, mainWindow) {
             const names = item.getInstanceNames()
             return { success: true, names }
         } catch (error) {
-            console.error("Error getting instance names:", error)
+            console.error(
+                `Failed to get the instance names of item ${itemId}:`,
+                error,
+            )
             return { success: false, error: error.message }
         }
     })

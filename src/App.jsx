@@ -183,19 +183,11 @@ function App() {
                             <Route
                                 path="/"
                                 element={
-                                    packageLoaded
-                                        ? (() => {
-                                              console.log(
-                                                  "Rendering MainTabs (packageLoaded=true)",
-                                              )
-                                              return <MainTabs />
-                                          })()
-                                        : (() => {
-                                              console.log(
-                                                  "Rendering WelcomePage (packageLoaded=false)",
-                                              )
-                                              return <WelcomePage />
-                                          })()
+                                    packageLoaded ? (
+                                        <MainTabs />
+                                    ) : (
+                                        <WelcomePage />
+                                    )
                                 }
                             />
                             <Route path="/editor" element={<ItemEditor />} />

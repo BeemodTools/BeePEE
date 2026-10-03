@@ -563,7 +563,7 @@ function SignageStyles({ formData, onUpdate, onEditDesign, stagedDesign }) {
                 })
             }
         } catch (error) {
-            console.error("Failed to select icon:", error)
+            console.error(`Failed to select icon for style ${styleId}:`, error)
         }
     }
 

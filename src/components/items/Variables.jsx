@@ -376,14 +376,6 @@ function Variables({ item, formData, onUpdateVariables }) {
     const [variables, setVariables] = useState(() => {
         // Ensure initial state is always an array
         const initialVariables = formData.variables
-        console.log(
-            "Variables component: Initial formData.variables =",
-            initialVariables,
-            "type:",
-            typeof initialVariables,
-            "isArray:",
-            Array.isArray(initialVariables),
-        )
         return Array.isArray(initialVariables) ? initialVariables : []
     })
 
@@ -398,14 +390,6 @@ function Variables({ item, formData, onUpdateVariables }) {
     useEffect(() => {
         // Ensure variables is always an array
         const variablesData = formData.variables
-        console.log(
-            "Variables component: formData.variables =",
-            variablesData,
-            "type:",
-            typeof variablesData,
-            "isArray:",
-            Array.isArray(variablesData),
-        )
         if (Array.isArray(variablesData)) {
             setVariables(variablesData)
         } else {
@@ -419,7 +403,9 @@ function Variables({ item, formData, onUpdateVariables }) {
             (v) => v.presetKey === presetKey,
         )
         if (existingVariable) {
-            console.warn(`Variable ${presetKey} is already added`)
+            console.warn(
+                `Skipped adding variable ${presetKey} to item "${item?.name}", it is already added`,
+            )
             return
         }
 

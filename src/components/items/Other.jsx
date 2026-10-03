@@ -145,16 +145,6 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
         }
     }, [])
 
-    // Auto-detect custom models: if modelName starts with "bpee/", check if OBJ exists
-    useEffect(() => {
-        if (formData?.modelName && typeof formData.modelName === 'string') {
-            if (formData.modelName.startsWith('bpee/')) {
-                // Model is a BeePEE model - check if OBJ exists to determine if it's custom
-                console.log(`Detected BeePEE model: ${formData.modelName} (OBJ exists: ${objFileExists})`)
-            }
-        }
-    }, [formData?.modelName, objFileExists])
-
     // Check if OBJ files exist for preview using listModelSegments
     useEffect(() => {
         const checkObjExists = async () => {
@@ -168,7 +158,10 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
                 const result = await window.package?.listModelSegments?.(item.id)
                 setObjFileExists(result?.success && result.segments?.length > 0)
             } catch (error) {
-                console.error('Failed to check model segments:', error)
+                console.error(
+                    `Failed to list model segments for item ${item.id}:`,
+                    error,
+                )
                 setObjFileExists(false)
             }
         }
@@ -221,8 +214,6 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
                 { textureStyle: skipCartoonify ? "raw" : "cartoon", isVariable: true },
             )
             if (result?.success) {
-                console.log("VMF2OBJ conversion completed successfully")
-
                 // Extract staged editoritems from result
                 const stagedEditorItems = result.mdlResult?.stagedEditorItems || result.stagedEditorItems
 
@@ -231,9 +222,8 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
 
                 // Check MDL conversion result
                 if (result.mdlResult?.success) {
-                    console.log("✅ MDL conversion successful!")
                     console.log(
-                        `   Model path: ${result.mdlResult.relativeModelPath}`,
+                        `Generated model "${result.mdlResult.relativeModelPath}" for item "${item.name}"`,
                     )
                     await window.electron.showMessageBox({
                         type: 'info',
@@ -244,7 +234,7 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
                     })
                 } else if (result.mdlResult?.error) {
                     console.warn(
-                        "⚠️ OBJ created but MDL conversion failed:",
+                        `Generated the OBJ for item "${item.name}" but failed to convert it to MDL:`,
                         result.mdlResult.error,
                     )
                     await window.electron.showMessageBox({
@@ -255,15 +245,23 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
                         buttons: ['OK']
                     })
                 } else {
-                    console.log("OBJ created (MDL conversion skipped)")
+                    console.log(
+                        `Generated the OBJ for item "${item.name}", MDL conversion was skipped`,
+                    )
                 }
             } else {
-                console.error("VMF2OBJ failed:", result?.error)
+                console.error(
+                    `Failed to generate a model for item "${item.name}":`,
+                    result?.error,
+                )
                 // Notify parent that generation is complete (no staged data)
                 onModelGenerationComplete?.(null)
             }
         } catch (error) {
-            console.error("Failed to make model:", error)
+            console.error(
+                `Failed to generate a model for item "${item?.name}":`,
+                error,
+            )
             // Notify parent that generation is complete (no staged data)
             onModelGenerationComplete?.(null)
         } finally {
@@ -301,7 +299,10 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
                 segments
             )
         } catch (e) {
-            console.error("Failed to open model preview:", e)
+            console.error(
+                `Failed to open the model preview for item "${item?.name}":`,
+                e,
+            )
         }
     }
 

@@ -150,7 +150,7 @@ export function AddSignageFlow({ onClose, onCreated }) {
                 setError(result.error || "Failed to create signage")
             }
         } catch (err) {
-            console.error("Failed to create signage:", err)
+            console.error(`Failed to create signage "${ready?.name}":`, err)
             setError(err.message || "Failed to create signage")
         } finally {
             setIsCreating(false)

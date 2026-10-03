@@ -40,7 +40,9 @@ function CreateItemPage() {
                 // Automatically open the item editor
                 await window.electron.invoke("open-item-editor", result.item)
                 // Window will be closed by the backend
-                console.log("Item created successfully:", result.itemId)
+                console.log(
+                    `Created item "${itemName.trim()}" (${result.itemId})`,
+                )
             }
         } catch (err) {
             setError(err.message || "Failed to create item")

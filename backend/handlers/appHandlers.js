@@ -20,7 +20,7 @@ function register(ipcMain, mainWindow) {
             const filePath = typeof arg === 'string' ? arg : arg?.filePath
             return fs.existsSync(filePath)
         } catch (error) {
-            console.error("Error checking file existence:", error)
+            console.error("Failed to check whether a file exists:", error)
             return false
         }
     })

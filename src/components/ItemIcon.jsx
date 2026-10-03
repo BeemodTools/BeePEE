@@ -61,7 +61,10 @@ function ItemIcon({ item, onEdit }) {
             window.package.loadFile(item.icon)
                 .then(setImageSrc)
                 .catch((error) => {
-                    console.warn(`Failed to load icon for item ${item.name}:`, error)
+                    console.warn(
+                        `Failed to load icon for item "${item.name}":`,
+                        error,
+                    )
                     setImageError(true)
                     setImageSrc(null)
                 })

@@ -19,13 +19,13 @@ function CreatePackagePage() {
             })
 
             if (result.success) {
-                console.log("Package created successfully:", result.packageId)
+                console.log(`Created package "${name}" (${result.packageId})`)
                 // Window will close automatically from backend
             } else {
                 setError(result.error || "Failed to create package")
             }
         } catch (err) {
-            console.error("Error creating package:", err)
+            console.error(`Failed to create package "${name}":`, err)
             setError(err.message || "Failed to create package")
         } finally {
             setLoading(false)

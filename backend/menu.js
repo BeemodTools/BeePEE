@@ -20,9 +20,12 @@ function killBeemod() {
         exec('taskkill /F /IM BEE2.exe', (err) => {
             // Ignore errors (process might not be running)
             if (err) {
-                console.log("BEE2.exe not running or could not be killed:", err.message)
+                console.log(
+                    "BEE2.exe isn't running or couldn't be closed:",
+                    err.message,
+                )
             } else {
-                console.log("BEE2.exe process killed")
+                console.log("Closed BEE2.exe before exporting")
             }
             // Small delay to ensure file locks are released
             setTimeout(resolve, 500)
@@ -190,6 +193,10 @@ function createMainMenu(mainWindow) {
                                         lastSavedBpeePath,
                                     )
                                 } catch (err) {
+                                    console.error(
+                                        "Failed to save the package:",
+                                        err,
+                                    )
                                     dialog.showErrorBox(
                                         "Save Failed",
                                         err.message,
@@ -204,6 +211,10 @@ function createMainMenu(mainWindow) {
                                 lastSavedBpeePath = null
                                 mainWindow.webContents.send("package:closed")
                             } catch (error) {
+                                console.error(
+                                    "Failed to close the package:",
+                                    error,
+                                )
                                 dialog.showErrorBox(
                                     "Close Failed",
                                     `Failed to close package: ${error.message}`,
@@ -240,6 +251,10 @@ function createMainMenu(mainWindow) {
                                 signages: pkg.signages,
                             })
                         } catch (error) {
+                            console.error(
+                                `Failed to open ${result.filePaths[0]}:`,
+                                error,
+                            )
                             dialog.showErrorBox(
                                 "Open Failed",
                                 `Failed to open package: ${error.message}`,
@@ -354,6 +369,7 @@ function createMainMenu(mainWindow) {
                                 signages: pkg.signages,
                             })
                         } catch (error) {
+                            console.error(`Failed to restore ${backupPath}:`, error)
                             dialog.showErrorBox(
                                 "Restore Failed",
                                 `Failed to restore backup: ${error.message}`,
@@ -394,6 +410,10 @@ function createMainMenu(mainWindow) {
                                         await saveCurrentPackage(mainWindow)
                                     if (!saved) return // Save As cancelled
                                 } catch (err) {
+                                    console.error(
+                                        "Failed to save the package:",
+                                        err,
+                                    )
                                     dialog.showErrorBox(
                                         "Save Failed",
                                         err.message,
@@ -408,6 +428,7 @@ function createMainMenu(mainWindow) {
                             lastSavedBpeePath = null
                             mainWindow.webContents.send("package:closed")
                         } catch (error) {
+                            console.error("Failed to close the package:", error)
                             dialog.showErrorBox(
                                 "Close Failed",
                                 `Failed to close package: ${error.message}`,
@@ -430,6 +451,7 @@ function createMainMenu(mainWindow) {
                                 })
                             }
                         } catch (err) {
+                            console.error("Failed to save the package:", err)
                             dialog.showErrorBox("Save Failed", err.message)
                         }
                     },
@@ -465,6 +487,7 @@ function createMainMenu(mainWindow) {
                                 type: "info",
                             })
                         } catch (err) {
+                            console.error("Failed to save the package:", err)
                             dialog.showErrorBox("Save As Failed", err.message)
                         }
                     },
@@ -489,7 +512,7 @@ function createMainMenu(mainWindow) {
 
                             if (launchBeemod && !beemodPath) {
                                 console.warn(
-                                    "Launch BEEMod after export is on, but no BEEMod path is set - falling back to a save dialog.",
+                                    "Launch BEEMod after export is on, but no BEEMod path is set, so asking where to export instead",
                                 )
                             }
 
@@ -521,7 +544,10 @@ function createMainMenu(mainWindow) {
                                         }
                                     }
                                 } catch (err) {
-                                    console.warn("Could not read BEEMod config, using default packages path:", err.message)
+                                    console.warn(
+                                        `Failed to read BEEMod's config.cfg, using the default packages folder ${packagesDir}:`,
+                                        err,
+                                    )
                                 }
 
                                 // Export to packages/BeePEE subfolder
@@ -578,7 +604,9 @@ function createMainMenu(mainWindow) {
                                         currentPackageDir,
                                         backupPath,
                                     )
-                                    console.log("Pre-export backup saved:", backupPath)
+                                    console.log(
+                                        `Saved a backup before exporting: ${backupPath}`,
+                                    )
 
                                     // Keep only the 10 most recent backups
                                     const backups = fs
@@ -597,15 +625,15 @@ function createMainMenu(mainWindow) {
                                             fs.unlinkSync(old.path)
                                         } catch (err) {
                                             console.warn(
-                                                "Failed to prune old backup:",
-                                                old.name,
+                                                `Failed to delete old backup ${old.name}:`,
+                                                err,
                                             )
                                         }
                                     }
                                 } catch (err) {
                                     console.warn(
-                                        "Pre-export backup failed (continuing with export):",
-                                        err.message,
+                                        "Failed to back up the package, exporting anyway:",
+                                        err,
                                     )
                                 }
                             }
@@ -618,15 +646,16 @@ function createMainMenu(mainWindow) {
                             if (exportToBeemod) {
                                 // Launch BEE2.exe
                                 const bee2Exe = path.join(beemodPath, "BEE2.exe")
-                                console.log("Looking for BEE2.exe at:", bee2Exe)
                                 if (fs.existsSync(bee2Exe)) {
-                                    console.log("Launching BEE2.exe...")
+                                    console.log(`Launching ${bee2Exe}`)
                                     // Use exec with start command for Windows
                                     exec(`start "" "${bee2Exe}"`, { cwd: beemodPath }, (err) => {
-                                        if (err) console.error("Failed to launch BEE2:", err)
+                                        if (err) console.error(`Failed to launch ${bee2Exe}:`, err)
                                     })
                                 } else {
-                                    console.warn("BEE2.exe not found at:", bee2Exe)
+                                    console.warn(
+                                        `Failed to launch BEEMod: ${bee2Exe} doesn't exist`,
+                                    )
                                 }
                                 dialog.showMessageBox(mainWindow, {
                                     message: `Package exported to BEEMod packages folder!`,
@@ -644,7 +673,7 @@ function createMainMenu(mainWindow) {
                             // The in-app export progress dialog already
                             // reported this failure - a native error box on
                             // top of it is just noise
-                            console.error("Export failed:", err.message)
+                            console.error("Failed to export the package:", err)
                         }
                     },
                 },
@@ -838,6 +867,10 @@ function createMainMenu(mainWindow) {
                                     type: "info",
                                 })
                             } catch (err) {
+                                console.error(
+                                    "Failed to clear the packages folder:",
+                                    err,
+                                )
                                 dialog.showErrorBox("Clear Failed", err.message)
                             }
                         }

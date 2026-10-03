@@ -3,6 +3,9 @@ const path = require("path")
 const { Instance } = require("../items/Instance")
 const { vmfStatsCache } = require("../utils/vmfParser")
 
+/** "1 case", "3 cases" */
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
+
 class Item {
     constructor({ packagePath, itemJSON }) {
         this.packagePath = packagePath
@@ -118,7 +121,7 @@ class Item {
             // propagate back into editoritems.json or the exported package
             if (key === "NaN" || key.startsWith("pending_")) {
                 console.warn(
-                    `Skipping invalid instance key "${key}" in editoritems for item ${this.id}`,
+                    `Skipped invalid instance key "${key}" in the editoritems of item ${this.id}`,
                 )
                 return
             }
@@ -130,8 +133,6 @@ class Item {
 
         // VBSP instances are now imported on-demand via autoImportVBSPInstances()
         // This is called during package import/load, not every time the item is created
-
-        console.log(`Added item: ${this.name} (id: ${this.id})`)
     }
 
     extractChangeInstances(obj, result) {
@@ -160,13 +161,11 @@ class Item {
         // Check if already imported
         const meta = this.getMetadata()
         if (meta._vbsp_imported) {
-            console.log(`⏭️ VBSP instances already imported for ${this.name}`)
             return false
         }
 
         // Check if VBSP config exists
         if (!this.paths.vbsp_config || !fs.existsSync(this.paths.vbsp_config)) {
-            console.log(`⏭️ No VBSP config found for ${this.name}`)
             return false
         }
 
@@ -180,15 +179,8 @@ class Item {
             this.extractChangeInstances(vbspData, changeInstances)
 
             if (changeInstances.length === 0) {
-                console.log(
-                    `⏭️ No changeinstance blocks found in VBSP config for ${this.name}`,
-                )
                 return false
             }
-
-            console.log(
-                `🔄 Auto-importing ${changeInstances.length} VBSP instances for ${this.name}...`,
-            )
 
             // Start index after the last editor instance
             let nextIndex = Object.keys(this.instances).length
@@ -219,14 +211,11 @@ class Item {
             meta.isImported = true
             this.saveMetadata(meta)
 
-            console.log(
-                `✅ Auto-imported and saved ${changeInstances.length} VBSP instances for ${this.name}`,
-            )
             return true
         } catch (error) {
             console.error(
-                `❌ Failed to auto-import VBSP instances for ${this.name}:`,
-                error.message,
+                `Failed to import the VBSP instances of "${this.name}":`,
+                error,
             )
             return false
         }
@@ -254,7 +243,6 @@ class Item {
             )
 
             let addedCount = 0
-            let skippedCount = 0
 
             // Process each VBSP instance
             for (const instancePath of changeInstances) {
@@ -264,7 +252,6 @@ class Item {
                         instancePath.toLowerCase(),
                     )
                 ) {
-                    skippedCount++
                     continue
                 }
 
@@ -296,7 +283,7 @@ class Item {
                     vmfStats = vmfStatsCache.getStats(fullInstancePath)
                 } catch (error) {
                     console.warn(
-                        `Could not get VMF stats for VBSP instance ${instancePath}: ${error.message}`,
+                        `Failed to get the VMF stats of VBSP instance ${instancePath} of "${this.name}": ${error.message}`,
                     )
                     const meta = this.getMetadata()
                     if (!meta.instanceErrors) {
@@ -319,18 +306,13 @@ class Item {
             if (addedCount > 0) {
                 this.saveEditorItems(editoritems)
                 console.log(
-                    `Auto-registered ${addedCount} VBSP instances in editoritems.json for ${this.name}`,
+                    `Registered ${plural(addedCount, "VBSP instance")} in the editoritems of "${this.name}"`,
                 )
-                if (skippedCount > 0) {
-                    console.log(
-                        `Skipped ${skippedCount} already registered VBSP instances`,
-                    )
-                }
             }
         } catch (error) {
             console.error(
-                `Failed to auto-register VBSP instances for ${this.name}:`,
-                error.message,
+                `Failed to register the VBSP instances of "${this.name}" in its editoritems:`,
+                error,
             )
         }
     }
@@ -352,7 +334,7 @@ class Item {
             // Skip keys written by the old NaN-index bug
             if (key === "NaN" || key.startsWith("pending_")) {
                 console.warn(
-                    `Skipping invalid instance key "${key}" in editoritems for item ${this.id}`,
+                    `Skipped invalid instance key "${key}" in the editoritems of item ${this.id}`,
                 )
                 return
             }
@@ -406,8 +388,8 @@ class Item {
                 this.autoRegisterVbspInstances(changeInstances)
             } catch (error) {
                 console.error(
-                    `Failed to parse VBSP config for ${this.name}:`,
-                    error.message,
+                    `Failed to read the VBSP config of "${this.name}":`,
+                    error,
                 )
             }
         }
@@ -474,12 +456,10 @@ class Item {
 
             // Also reload instances
             this.reloadInstances()
-
-            console.log(`Reloaded item data: ${this.name} (id: ${this.id})`)
         } catch (error) {
             console.error(
-                `Failed to reload item data for ${this.id}:`,
-                error.message,
+                `Failed to reload item "${this.name}" from disk:`,
+                error,
             )
         }
     }
@@ -614,8 +594,7 @@ class Item {
                     }
                 } catch (error) {
                     console.error(
-                        `Error getting VMF stats for instance ${index}:`,
-                        error.message,
+                        `Failed to get the VMF stats of instance ${index} of "${this.name}": ${error.message}`,
                     )
                     const meta = this.getMetadata()
                     if (!meta.instanceErrors) {
@@ -724,8 +703,8 @@ class Item {
             vmfStats = vmfStatsCache.getStats(fullInstancePath)
         } catch (error) {
             console.error(
-                `Error getting VMF stats for new instance ${instanceName}:`,
-                error.message,
+                `Failed to get the VMF stats of new instance ${instanceName} of "${this.name}":`,
+                error,
             )
             const meta = this.getMetadata()
             if (!meta.instanceErrors) {
@@ -775,7 +754,7 @@ class Item {
 
             if (fs.existsSync(instanceFilePath)) {
                 fs.unlinkSync(instanceFilePath)
-                console.log(`Deleted instance file: ${instanceFilePath}`)
+                console.log(`Deleted instance file ${instanceFilePath}`)
 
                 // Also try to remove the directory if it's empty
                 const instanceDir = path.dirname(instanceFilePath)
@@ -783,21 +762,21 @@ class Item {
                     const files = fs.readdirSync(instanceDir)
                     if (files.length === 0) {
                         fs.rmdirSync(instanceDir)
-                        console.log(`Removed empty directory: ${instanceDir}`)
+                        console.log(`Removed empty directory ${instanceDir}`)
                     }
                 } catch (dirError) {
                     // Directory not empty or other error, ignore
-                    console.log(
-                        `Could not remove directory ${instanceDir}: ${dirError.message}`,
-                    )
                 }
             } else {
                 console.log(
-                    `Instance file not found, skipping deletion: ${instanceFilePath}`,
+                    `Instance file ${instanceFilePath} doesn't exist, nothing to delete`,
                 )
             }
         } catch (fileError) {
-            console.error(`Error deleting instance file: ${fileError.message}`)
+            console.error(
+                `Failed to delete the file of instance ${index} of "${this.name}":`,
+                fileError,
+            )
             // Don't throw error, continue with removal from editoritems
         }
 
@@ -843,7 +822,7 @@ class Item {
                     this.generateDefaultConnectionPoints()
                 this.saveEditorItems(editoritems)
                 console.log(
-                    `Auto-generated ConnectionPoints for ${this.name} (has I/O but none defined)`,
+                    `Added default ConnectionPoints to "${this.name}" (it has inputs or outputs but no ConnectionPoints)`,
                 )
             }
         } catch (error) {
@@ -1127,7 +1106,10 @@ class Item {
             variables.sort((a, b) => a.index - b.index)
             return variables
         } catch (error) {
-            console.error("Failed to get variables:", error)
+            console.error(
+                `Failed to read the variables of "${this.name}":`,
+                error,
+            )
             return []
         }
     }
@@ -1209,9 +1191,6 @@ class Item {
                     SubType: subTypeArray,
                     ...otherEditorProps,
                 }
-                console.log(
-                    "ButtonType exists: Ensured 3 SubTypes with SubTypeProperty first",
-                )
             } else {
                 // No ButtonType - ensure we have single SubType
                 if (
@@ -1233,7 +1212,7 @@ class Item {
                         ...otherEditorProps,
                     }
                     console.log(
-                        "ButtonType removed: Reverted to single SubType",
+                        `Reduced "${this.name}" to a single SubType (it has no ButtonType variable)`,
                     )
                 }
             }
@@ -1251,7 +1230,10 @@ class Item {
 
             return true
         } catch (error) {
-            console.error("Failed to save variables:", error)
+            console.error(
+                `Failed to save the variables of "${this.name}":`,
+                error,
+            )
             return false
         }
     }
@@ -1263,7 +1245,7 @@ class Item {
             const instances = editorItems.Item.Exporting.Instances
             if (!instances || Object.keys(instances).length === 0) {
                 console.log(
-                    "No instances found, skipping ButtonType condition generation",
+                    `Skipped generating ButtonType conditions for "${this.name}", it has no instances`,
                 )
                 return
             }
@@ -1339,18 +1321,12 @@ class Item {
                 )
 
                 console.log(
-                    "Auto-generated ButtonType VBSP conditions with",
-                    cases.length,
-                    "cases",
-                )
-            } else {
-                console.log(
-                    "ButtonType switch already exists, skipping auto-generation",
+                    `Generated ButtonType conditions for "${this.name}" with ${plural(cases.length, "case")}`,
                 )
             }
         } catch (error) {
             console.error(
-                "Failed to auto-generate ButtonType conditions:",
+                `Failed to generate ButtonType conditions for "${this.name}":`,
                 error,
             )
         }
@@ -1473,8 +1449,8 @@ class Item {
                 block.type === "case" &&
                 (block.value === undefined || block.value === "")
             ) {
-                console.log(
-                    `⚠️  Normalizing case block ${block.id}: setting missing/empty value to "0" (you should change this to the correct value)`,
+                console.warn(
+                    `Case block ${block.id} of "${this.name}" has no value, using "0" (change it to the right value)`,
                 )
                 block.value = "0"
             }
@@ -1509,9 +1485,6 @@ class Item {
                         metaData.vbsp_blocks &&
                         Array.isArray(metaData.vbsp_blocks)
                     ) {
-                        console.log(
-                            `Loading blocks from meta.json for ${this.name}`,
-                        )
                         // Normalize blocks to ensure all case blocks have a value property
                         const normalizedBlocks = this.normalizeBlocks(
                             metaData.vbsp_blocks,
@@ -1520,8 +1493,8 @@ class Item {
                     }
                 } catch (metaError) {
                     console.warn(
-                        `Failed to read meta.json for ${this.name}, falling back to VBSP:`,
-                        metaError.message,
+                        `Failed to read the condition blocks in meta.json of "${this.name}", using its vbsp_config.json:`,
+                        metaError,
                     )
                 }
             }
@@ -1533,7 +1506,7 @@ class Item {
                 fs.existsSync(this.paths.vbsp_config)
             ) {
                 console.log(
-                    `Loading VBSP format for ${this.name} (will be converted to blocks by frontend)`,
+                    `Read the conditions of "${this.name}" from vbsp_config.json (the editor converts them to blocks)`,
                 )
                 const vbspData = JSON.parse(
                     fs.readFileSync(this.paths.vbsp_config, "utf-8"),
@@ -1550,7 +1523,8 @@ class Item {
                             metaData._vbsp_conditions_imported === true
                     } catch (error) {
                         console.warn(
-                            `Failed to check _vbsp_conditions_imported flag: ${error.message}`,
+                            `Failed to check in meta.json whether the conditions of "${this.name}" were imported:`,
+                            error,
                         )
                     }
                 }
@@ -1559,12 +1533,11 @@ class Item {
                 return { ...vbspData, _vbsp_conditions_imported: vbspImported }
             }
 
-            console.log(`No conditions found for ${this.name}`)
             return {}
         } catch (error) {
             console.error(
-                `Failed to read VBSP config for ${this.name}:`,
-                error.message,
+                `Failed to read the conditions of "${this.name}":`,
+                error,
             )
             return {}
         }
@@ -1642,8 +1615,8 @@ class Item {
             return true
         } catch (error) {
             console.error(
-                `Failed to save VBSP conditions for ${this.name}:`,
-                error.message,
+                `Failed to save the conditions of "${this.name}":`,
+                error,
             )
             return false
         }
@@ -1877,23 +1850,9 @@ class Item {
                                 caseBlock.value !== null &&
                                 valueStr !== ""
 
-                            // Debug logging for case processing
                             if (!hasValue) {
-                                console.log(
-                                    `⚠️  Skipping case with invalid/empty value:`,
-                                    {
-                                        caseBlock: {
-                                            id: caseBlock?.id,
-                                            type: caseBlock?.type,
-                                        },
-                                        value: caseBlock?.value,
-                                        valueStr,
-                                        hasValue,
-                                        reason:
-                                            valueStr === ""
-                                                ? "empty string"
-                                                : "undefined/null",
-                                    },
+                                console.warn(
+                                    `Skipped case ${caseBlock?.id} of the ${variable} switch of "${this.name}", it has no value`,
                                 )
                             }
 
@@ -1907,16 +1866,6 @@ class Item {
                                     caseBlock?.thenBlocks || [],
                                     "thenBlocks",
                                 )
-
-                                // Debug logging for case results
-                                console.log(`✓ Adding case "${arg}":`, {
-                                    value: caseBlock.value,
-                                    thenBlocks:
-                                        caseBlock?.thenBlocks?.length || 0,
-                                    resultKeys: Object.keys(caseResults),
-                                    isEmpty:
-                                        Object.keys(caseResults).length === 0,
-                                })
 
                                 // Always add the case, even if result is empty
                                 // This makes the VBSP more explicit about all possible cases
@@ -1950,23 +1899,9 @@ class Item {
                                 caseBlock.value !== null &&
                                 valueStr !== ""
 
-                            // Debug logging for case processing
                             if (!hasValue) {
-                                console.log(
-                                    `⚠️  Skipping global case with invalid/empty value:`,
-                                    {
-                                        caseBlock: {
-                                            id: caseBlock?.id,
-                                            type: caseBlock?.type,
-                                        },
-                                        value: caseBlock?.value,
-                                        valueStr,
-                                        hasValue,
-                                        reason:
-                                            valueStr === ""
-                                                ? "empty string"
-                                                : "undefined/null",
-                                    },
+                                console.warn(
+                                    `Skipped case ${caseBlock?.id} of the ${testName} switch of "${this.name}", it has no value`,
                                 )
                             }
 
@@ -1980,16 +1915,6 @@ class Item {
                                     caseBlock?.thenBlocks || [],
                                     "thenBlocks",
                                 )
-
-                                // Debug logging for case results
-                                console.log(`✓ Adding global case "${arg}":`, {
-                                    value: caseBlock.value,
-                                    thenBlocks:
-                                        caseBlock?.thenBlocks?.length || 0,
-                                    resultKeys: Object.keys(caseResults),
-                                    isEmpty:
-                                        Object.keys(caseResults).length === 0,
-                                })
 
                                 // Always add the case, even if result is empty
                                 // This makes the VBSP more explicit about all possible cases
@@ -2109,7 +2034,7 @@ class Item {
                         for (const key of Object.keys(map)) {
                             if (!/^\d+$/.test(key)) {
                                 console.warn(
-                                    `Dropping invalid ${mapKey} key "${key}" from meta.json for item ${this.id}`,
+                                    `Dropped invalid ${mapKey} key "${key}" from the meta.json of item ${this.id}`,
                                 )
                                 delete map[key]
                             }
@@ -2121,8 +2046,8 @@ class Item {
             }
         } catch (error) {
             console.warn(
-                `Failed to load metadata for item ${this.id}:`,
-                error.message,
+                `Failed to read the meta.json of item ${this.id}, making a new one:`,
+                error,
             )
         }
 
@@ -2174,8 +2099,8 @@ class Item {
                     }
                 } catch (error) {
                     console.warn(
-                        `Failed to get stats for ${filePath}:`,
-                        error.message,
+                        `Failed to read the dates of ${filePath}:`,
+                        error,
                     )
                 }
             }
@@ -2220,8 +2145,8 @@ class Item {
             return true
         } catch (error) {
             console.error(
-                `Failed to save metadata for item ${this.id}:`,
-                error.message,
+                `Failed to save the meta.json of item ${this.id}:`,
+                error,
             )
             return false
         }
@@ -2270,7 +2195,7 @@ class Item {
         const key = String(index)
         if (!/^\d+$/.test(key)) {
             console.warn(
-                `Ignoring instance name for invalid index "${key}" on item ${this.id}`,
+                `Ignored the name of invalid instance index "${key}" of item ${this.id}`,
             )
             return
         }
@@ -2303,7 +2228,9 @@ class Item {
 
             return subType?.Model?.ModelName || ""
         } catch (error) {
-            console.error(`Failed to get model name for ${this.id}:`, error.message)
+            console.error(
+                `Failed to read the model name of item ${this.id}: ${error.message}`,
+            )
             return ""
         }
     }
@@ -2354,7 +2281,7 @@ class Item {
                 }
 
                 console.log(
-                    `Preset model selected: Reduced to single SubType and removed SubTypeProperty`,
+                    `Set preset model ${modelName} on "${this.name}" (now a single SubType without SubTypeProperty)`,
                 )
             } else {
                 // For custom models or empty modelName, handle both single and array SubTypes
@@ -2397,7 +2324,7 @@ class Item {
             this.saveEditorItems(editoritems)
             return true
         } catch (error) {
-            console.error(`Failed to set model name for ${this.id}:`, error.message)
+            console.error(`Failed to set the model of "${this.name}":`, error)
             return false
         }
     }

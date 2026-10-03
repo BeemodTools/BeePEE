@@ -53,11 +53,10 @@ async function handleVTFConversion(
         if (!subType.Palette) subType.Palette = {}
         subType.Palette.Image = `palette/bpee/${itemId}/${itemId}`
 
-        console.log(
-            `Successfully converted icon to VTF and updated reference: ${vtfPath}`,
-        )
+        console.log(`Converted the palette icon to ${vtfPath}`)
     } catch (error) {
-        console.error(`Failed to handle VTF conversion:`, error)
+        // The caller logs the error with its stack
+        console.error(`Failed to convert ${iconPath} to VTF: ${error.message}`)
         throw error
     }
 }
@@ -214,7 +213,7 @@ async function saveItem(item) {
                 )
 
                 console.log(
-                    `Icon updated: ${stagedIconPath} -> ${targetIconPath}`,
+                    `Updated the icon of "${item.name}": ${targetIconPath}`,
                 )
 
                 // Also convert to VTF and update editoritems.json if the item uses palette images
@@ -227,14 +226,19 @@ async function saveItem(item) {
                         item.id,
                     )
                 } catch (error) {
-                    console.error("Failed to convert icon to VTF:", error)
+                    console.error(
+                        `Failed to make the palette icon of "${item.name}", saving without it:`,
+                        error,
+                    )
                     // Don't throw here - let the save continue even if VTF conversion fails
                 }
             } else {
-                console.warn(`Staged icon file not found: ${stagedIconPath}`)
+                console.warn(
+                    `Skipped the new icon of "${item.name}", its file is missing: ${stagedIconPath}`,
+                )
             }
         } catch (error) {
-            console.error("Failed to process staged icon:", error)
+            console.error(`Failed to update the icon of "${item.name}":`, error)
             // Don't throw here - let the save continue even if icon fails
         }
     }
@@ -259,8 +263,8 @@ async function saveItem(item) {
                     )
                 } catch (error) {
                     console.warn(
-                        "Failed to update metadata timestamp:",
-                        error.message,
+                        `Failed to update the modified time in the meta.json of "${item.name}":`,
+                        error,
                     )
                 }
             }

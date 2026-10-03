@@ -19,7 +19,8 @@ class AutoUpdater {
         this.autoUpdater = getAutoUpdater()
         this.updateAvailableVersion = null // Set when an update is found
 
-        // Configure auto-updater
+        // Configure auto-updater. It logs its own steps and errors (with
+        // their stacks) through our logger, so the listeners don't repeat them
         this.autoUpdater.logger = logger
         this.autoUpdater.autoDownload = false // Don't auto-download, ask user first
         this.autoUpdater.autoInstallOnAppQuit = true
@@ -27,10 +28,6 @@ class AutoUpdater {
         // Beta builds follow GitHub prereleases; stable builds only see full
         // releases (betas are published as prereleases via publish:beta)
         this.autoUpdater.allowPrerelease = isBeta()
-
-        // Log updater initialization
-        logger.info(`Auto-updater: Initialized (channel: ${isBeta() ? "beta" : "stable"})`)
-        console.log("[Auto-updater] Initialized")
 
         // Set up event listeners
         this.setupEventListeners()
@@ -41,17 +38,11 @@ class AutoUpdater {
 
         // Checking for updates
         updater.on("checking-for-update", () => {
-            const msg = "Auto-updater: Checking for updates..."
-            logger.info(msg)
-            console.log(`[${msg}]`)
             this.sendStatusToWindow("checking-for-update")
         })
 
         // Update available
         updater.on("update-available", (info) => {
-            const msg = `Auto-updater: Update available - v${info.version}`
-            logger.info(msg)
-            console.log(`[${msg}]`)
             this.updateAvailableVersion = info.version
             this.sendStatusToWindow("update-available", {
                 version: info.version,
@@ -65,9 +56,6 @@ class AutoUpdater {
 
         // Update not available
         updater.on("update-not-available", (info) => {
-            const msg = `Auto-updater: No updates available. Current version (${info.version}) is the latest.`
-            logger.info(msg)
-            console.log(`[${msg}]`)
             this.updateAvailableVersion = null
             this.sendStatusToWindow("update-not-available", {
                 version: info.version,
@@ -76,18 +64,15 @@ class AutoUpdater {
 
         // Update error
         updater.on("error", (err) => {
-            const msg = `Auto-updater: Error occurred - ${err.message || err}`
-            logger.error(msg)
-            logger.error("Auto-updater: Full error details:", err)
-            console.error(`[${msg}]`)
             const errorInfo = this.parseUpdateError(err)
             this.sendStatusToWindow("update-error", errorInfo)
         })
 
         // Download progress
         updater.on("download-progress", (progressObj) => {
-            const message = `Download speed: ${progressObj.bytesPerSecond} - Downloaded ${progressObj.percent}% (${progressObj.transferred}/${progressObj.total})`
-            logger.info(message)
+            logger.debug(
+                `Downloaded ${Math.round(progressObj.percent)}% (${Math.round(progressObj.bytesPerSecond / 1024)} KB/s)`,
+            )
             this.sendStatusToWindow("download-progress", {
                 percent: progressObj.percent,
                 bytesPerSecond: progressObj.bytesPerSecond,
@@ -98,7 +83,6 @@ class AutoUpdater {
 
         // Update downloaded
         updater.on("update-downloaded", (info) => {
-            logger.info("Update downloaded:", info.version)
             this.sendStatusToWindow("update-downloaded", {
                 version: info.version,
             })
@@ -273,7 +257,9 @@ class AutoUpdater {
 
     async checkForUpdates(silent = false) {
         if (isDev) {
-            logger.info("Auto-updater is disabled in development mode")
+            logger.info(
+                "Skipped the update check, updates are disabled in development mode",
+            )
             if (!silent) {
                 dialog.showMessageBox(this.mainWindow, {
                     type: "info",
@@ -286,7 +272,10 @@ class AutoUpdater {
         }
 
         try {
-            await this.autoUpdater.checkForUpdates()
+            await logger.section(
+                `Checking for updates (current ${this.autoUpdater.currentVersion}, ${isBeta() ? "beta" : "stable"} channel)`,
+                () => this.autoUpdater.checkForUpdates(),
+            )
         } catch (error) {
             logger.error("Failed to check for updates:", error)
             if (!silent) {
@@ -307,9 +296,12 @@ class AutoUpdater {
     }
 
     downloadUpdate() {
-        logger.info("Starting update download...")
         this.sendStatusToWindow("download-started")
-        this.autoUpdater.downloadUpdate()
+        // Not awaited: the download runs on while the window shows progress
+        logger.section(
+            `Downloading update ${this.updateAvailableVersion ?? ""}`.trim(),
+            () => this.autoUpdater.downloadUpdate(),
+        )
     }
 
     quitAndInstall() {
@@ -319,18 +311,12 @@ class AutoUpdater {
     // Check for updates on app startup
     checkOnStartup() {
         if (isDev) {
-            logger.info("Skipping update check in development mode")
+            logger.debug("Skipped the startup update check in development mode")
             return
         }
 
-        const msg = "Auto-updater: Scheduling startup update check in 5 seconds..."
-        logger.info(msg)
-        console.log(`[${msg}]`)
         // Check for updates 5 seconds after startup
         setTimeout(() => {
-            const checkMsg = "Auto-updater: Running startup update check..."
-            logger.info(checkMsg)
-            console.log(`[${checkMsg}]`)
             this.checkForUpdates(true) // Silent check
         }, 5000)
     }
@@ -338,19 +324,13 @@ class AutoUpdater {
     // Set up periodic update checks (every 4 hours)
     startPeriodicChecks() {
         if (isDev) {
-            logger.info("Periodic update checks disabled in development mode")
+            logger.debug("Skipped periodic update checks in development mode")
             return
         }
 
         const CHECK_INTERVAL = 4 * 60 * 60 * 1000 // 4 hours in milliseconds
 
-        const msg = "Auto-updater: Starting periodic update checks (every 4 hours)"
-        logger.info(msg)
-        console.log(`[${msg}]`)
         this.updateCheckInterval = setInterval(() => {
-            const checkMsg = "Auto-updater: Running periodic update check..."
-            logger.info(checkMsg)
-            console.log(`[${checkMsg}]`)
             this.checkForUpdates(true) // Silent check
         }, CHECK_INTERVAL)
     }

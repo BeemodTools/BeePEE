@@ -11,6 +11,9 @@ let beePackageWindow = null // Track the bee-package.json editor window
 let setupWindow = null // Track the setup window
 let settingsWindow = null // Track the settings window
 const { BrowserWindow, app, Menu } = require("electron")
+const { logger } = require("../utils/logger")
+
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
 // Native File/Edit menu for the signage designer window. Items forward an
 // action name to the window's renderer, which performs it (the designer's
@@ -139,10 +142,7 @@ function createItemEditor(item, mainWindow) {
 function sendItemUpdateToEditor(itemId, updatedItem) {
     const editorWindow = openEditors.get(itemId)
     if (editorWindow && !editorWindow.isDestroyed()) {
-        console.log(`Sending item-updated to editor window for item: ${itemId}`)
         editorWindow.webContents.send("item-updated", updatedItem)
-    } else {
-        console.log(`No open editor window found for item: ${itemId}`)
     }
 }
 
@@ -203,10 +203,7 @@ function createSignageEditor(signage, mainWindow) {
 function sendSignageUpdateToEditor(signageId, updatedSignage) {
     const editorWindow = openSignageEditors.get(signageId)
     if (editorWindow && !editorWindow.isDestroyed()) {
-        console.log(`Sending signage-updated to editor window for signage: ${signageId}`)
         editorWindow.webContents.send("signage-updated", updatedSignage)
-    } else {
-        console.log(`No open editor window found for signage: ${signageId}`)
     }
 }
 
@@ -707,7 +704,9 @@ async function closeAllEditorWindows() {
     }
 
     if (closePromises.length > 0) {
-        console.log(`Closing ${closePromises.length} editor window(s)...`)
+        console.log(
+            `Closing ${plural(closePromises.length, "item editor window")}`,
+        )
         await Promise.all(closePromises)
         // Give time for file handles to be released
         await new Promise((resolve) => setTimeout(resolve, 300))
@@ -739,7 +738,9 @@ async function closeAllSignageEditorWindows() {
     }
 
     if (closePromises.length > 0) {
-        console.log(`Closing ${closePromises.length} signage editor window(s)...`)
+        console.log(
+            `Closing ${plural(closePromises.length, "signage editor window")}`,
+        )
         await Promise.all(closePromises)
         await new Promise((resolve) => setTimeout(resolve, 300))
     }
@@ -749,29 +750,40 @@ async function closeAllSignageEditorWindows() {
  * Close all windows (editors, model previews, etc.) to release all file handles
  */
 async function closeAllWindows() {
-    console.log('Closing all BeePEE windows to release file handles...')
-    await closeAllEditorWindows()
-    await closeAllSignageEditorWindows()
-    await closeAllModelPreviewWindows()
+    const isOpen = (window) => window && !window.isDestroyed()
+    const open = [
+        ...openEditors.values(),
+        ...openSignageEditors.values(),
+        ...openModelPreviewWindows.values(),
+        createItemWindow,
+        createPackageWindow,
+    ].filter(isOpen).length
+    const closeAll = async () => {
+        await closeAllEditorWindows()
+        await closeAllSignageEditorWindows()
+        await closeAllModelPreviewWindows()
 
-    // Also close create item and create package windows if open
-    if (createItemWindow && !createItemWindow.isDestroyed()) {
-        createItemWindow.close()
+        // Also close create item and create package windows if open
+        if (createItemWindow && !createItemWindow.isDestroyed()) {
+            createItemWindow.close()
+        }
+        if (createPackageWindow && !createPackageWindow.isDestroyed()) {
+            createPackageWindow.close()
+        }
+
+        // Give extra time for all handles to be released
+        await new Promise((resolve) => setTimeout(resolve, 500))
+
+        // Force garbage collection
+        if (global.gc) {
+            global.gc()
+            await new Promise((resolve) => setTimeout(resolve, 200))
+        }
     }
-    if (createPackageWindow && !createPackageWindow.isDestroyed()) {
-        createPackageWindow.close()
-    }
-
-    // Give extra time for all handles to be released
-    await new Promise((resolve) => setTimeout(resolve, 500))
-
-    // Force garbage collection
-    if (global.gc) {
-        global.gc()
-        await new Promise((resolve) => setTimeout(resolve, 200))
-    }
-
-    console.log('All BeePEE windows closed')
+    // Only worth logging when there were windows to close
+    if (open === 0) return closeAll()
+    const windows = open === 1 ? "1 window" : `${open} windows`
+    return logger.section(`Closing ${windows} to release files`, closeAll)
 }
 
 /**

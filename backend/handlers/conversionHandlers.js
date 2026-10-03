@@ -10,6 +10,10 @@ const { convertVmfToObj, convertVmfsToObj } = require("../utils/vmf2obj")
 const { Instance } = require("../items/Instance")
 const { fixInstancePath } = require("./instanceHandlers")
 const { closeAllModelPreviewWindows } = require("../items/itemEditor")
+const { logger } = require("../utils/logger")
+
+/** "1 model", "3 models" */
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
 /**
  * Helper to create directory with retry logic for EPERM errors
@@ -24,7 +28,7 @@ async function mkdirWithRetry(dirPath, maxAttempts = 5) {
         } catch (error) {
             if (error.code === "EPERM" || error.code === "EBUSY") {
                 if (attempt < maxAttempts - 1) {
-                    console.warn(`mkdir attempt ${attempt + 1} failed (${error.code}), retrying in ${(attempt + 1) * 200}ms...`)
+                    console.warn(`Could not create ${dirPath} (${error.code}), retrying in ${(attempt + 1) * 200} ms`)
                     await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 200))
                 } else {
                     throw error
@@ -69,93 +73,16 @@ function register(ipcMain, mainWindow) {
         "convert-instance-to-obj",
         async (event, { itemId, instanceKey, options = {} }) => {
             try {
-                // Close any open model preview windows to release file handles
-                await closeAllModelPreviewWindows()
-
                 const item = packages
                     .flatMap((p) => p.items)
                     .find((i) => i.id === itemId)
-                if (!item) throw new Error("Item not found")
-
-                // If this is a variable-based conversion, handle it differently
-                if (options.isVariable) {
-                    return handleVariableConversion(event, item, instanceKey, options)
-                }
-
-                // --- Original single-instance conversion logic ---
-                const instance = item.instances?.[instanceKey]
-                if (!instance?.Name) throw new Error("Instance not found")
-
-                const vmfPath = Instance.getCleanPath(
-                    item.packagePath,
-                    instance.Name,
+                const variant = options.isVariable
+                    ? `${instanceKey} variants`
+                    : `instance ${instanceKey}`
+                return await logger.section(
+                    `Model generation for "${item?.name ?? itemId}" (${variant})`,
+                    () => convertInstance(event, item, instanceKey, options),
                 )
-
-                // Create persistent models directory for this item
-                const itemName = item.id.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase()
-                const modelsDir = path.join(item.packagePath, ".bpee", itemName, "models")
-                await mkdirWithRetry(modelsDir)
-                const tempDir = modelsDir // Use persistent location
-
-                const result = await convertVmfToObj(vmfPath, {
-                    outputDir: tempDir,
-                    textureStyle: options.textureStyle || "cartoon",
-                })
-
-                const fileBase = path.basename(vmfPath, path.extname(vmfPath))
-                const objPath = path.join(tempDir, `${fileBase}.obj`)
-                const mtlPath = path.join(tempDir, `${fileBase}.mtl`)
-
-                // Convert OBJ to MDL
-                let mdlResult = null
-                try {
-                        const { convertAndInstallMDL } = require("../utils/mdlConverter")
-
-                    const itemName = item.id
-                        .replace(/[^a-zA-Z0-9_-]/g, "_")
-                        .toLowerCase()
-
-                    mdlResult = await convertAndInstallMDL(
-                        objPath,
-                        item.packagePath,
-                        itemName,
-                        { scale: options.scale || 1.0 },
-                    )
-
-                    if (mdlResult.success && mdlResult.relativeModelPath) {
-                        const editorItems = item.getEditorItems()
-                        const subType = Array.isArray(editorItems.Item.Editor.SubType)
-                            ? editorItems.Item.Editor.SubType[0]
-                            : editorItems.Item.Editor.SubType
-
-                        if (!subType.Model) {
-                            subType.Model = {}
-                        }
-                        subType.Model.ModelName = mdlResult.relativeModelPath
-
-                        if (!Array.isArray(editorItems.Item.Editor.SubType)) {
-                            editorItems.Item.Editor.SubType = [subType]
-                        }
-
-                        mdlResult.stagedEditorItems = editorItems
-                    }
-                } catch (mdlError) {
-                    console.error("❌ MDL conversion failed:", mdlError)
-                    mdlResult = {
-                        success: false,
-                        error: mdlError.message,
-                    }
-                }
-
-                return {
-                    success: true,
-                    vmfPath,
-                    tempDir,
-                    objPath,
-                    mtlPath,
-                    mdlResult,
-                    ...result,
-                }
             } catch (error) {
                 const details = [
                     error.message,
@@ -178,11 +105,102 @@ function register(ipcMain, mainWindow) {
 }
 
 /**
+ * Make Model for one item: the variants of a variable (one model each), or
+ * one instance
+ */
+async function convertInstance(event, item, instanceKey, options) {
+    // Close any open model preview windows to release file handles
+    await closeAllModelPreviewWindows()
+
+    if (!item) throw new Error("Item not found")
+
+    // If this is a variable-based conversion, handle it differently
+    if (options.isVariable) {
+        return handleVariableConversion(event, item, instanceKey, options)
+    }
+
+    // --- Original single-instance conversion logic ---
+    const instance = item.instances?.[instanceKey]
+    if (!instance?.Name) throw new Error("Instance not found")
+
+    const vmfPath = Instance.getCleanPath(item.packagePath, instance.Name)
+
+    // Create persistent models directory for this item
+    const itemName = item.id.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase()
+    const modelsDir = path.join(item.packagePath, ".bpee", itemName, "models")
+    await mkdirWithRetry(modelsDir)
+    const tempDir = modelsDir // Use persistent location
+
+    const result = await convertVmfToObj(vmfPath, {
+        outputDir: tempDir,
+        textureStyle: options.textureStyle || "cartoon",
+    })
+
+    const fileBase = path.basename(vmfPath, path.extname(vmfPath))
+    const objPath = path.join(tempDir, `${fileBase}.obj`)
+    const mtlPath = path.join(tempDir, `${fileBase}.mtl`)
+
+    // Convert OBJ to MDL
+    const mdlResult = await makeModel(item, objPath, options)
+
+    return {
+        success: true,
+        vmfPath,
+        tempDir,
+        objPath,
+        mtlPath,
+        mdlResult,
+        ...result,
+    }
+}
+
+/**
+ * Compile the item's OBJ to an MDL and stage it as the item's model (applied
+ * when the item is saved)
+ * @returns {Promise<Object>} convertAndInstallMDL's result with
+ *   stagedEditorItems, or { success: false, error }
+ */
+async function makeModel(item, objPath, options) {
+    let mdlResult
+    try {
+        const { convertAndInstallMDL } = require("../utils/mdlConverter")
+        const itemName = item.id.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase()
+        mdlResult = await convertAndInstallMDL(objPath, item.packagePath, itemName, {
+            scale: options.scale || 1.0,
+        })
+    } catch (mdlError) {
+        // Logged as the failed "Making ....mdl" step
+        return { success: false, error: mdlError.message }
+    }
+
+    if (mdlResult.success && mdlResult.relativeModelPath) {
+        try {
+            const editorItems = item.getEditorItems()
+            const subType = Array.isArray(editorItems.Item.Editor.SubType)
+                ? editorItems.Item.Editor.SubType[0]
+                : editorItems.Item.Editor.SubType
+
+            if (!subType.Model) subType.Model = {}
+            subType.Model.ModelName = mdlResult.relativeModelPath
+
+            if (!Array.isArray(editorItems.Item.Editor.SubType)) {
+                editorItems.Item.Editor.SubType = [subType]
+            }
+
+            mdlResult.stagedEditorItems = editorItems
+            console.log("Staged as the item's model (applied on Save)")
+        } catch (error) {
+            console.error("Failed to set the new model in the item's editoritems:", error)
+            return { success: false, error: error.message }
+        }
+    }
+    return mdlResult
+}
+
+/**
  * Handle variable-based model conversion (multiple instances)
  */
 async function handleVariableConversion(event, item, instanceKey, options) {
-    console.log(`🔄 Variable model conversion: "${item.name}" (${instanceKey})`)
-
     const { mapVariableValuesToInstances } = require("../utils/mdlConverter")
     const conditions = item.getConditions()
 
@@ -217,6 +235,9 @@ async function handleVariableConversion(event, item, instanceKey, options) {
                 return { success: false, error: "No instances available for fallback" }
             }
 
+            console.log(
+                `No instances are set for "${instanceKey}" in the VBSP conditions, so every cube type uses the first instance`,
+            )
             const cubeTypeMap = new Map()
             for (let i = 0; i <= 4; i++) {
                 cubeTypeMap.set(String(i), firstInstance.Name)
@@ -276,34 +297,7 @@ async function handleDefaultConversion(event, item, options) {
     const objPath = path.join(tempDir, `${fileBase}.obj`)
     const mtlPath = path.join(tempDir, `${fileBase}.mtl`)
 
-    let mdlResult = null
-    try {
-        const { convertAndInstallMDL } = require("../utils/mdlConverter")
-        const itemName = item.id.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase()
-
-        mdlResult = await convertAndInstallMDL(objPath, item.packagePath, itemName, {
-            scale: options.scale || 1.0,
-        })
-
-        if (mdlResult.success && mdlResult.relativeModelPath) {
-            const editorItems = item.getEditorItems()
-            const subType = Array.isArray(editorItems.Item.Editor.SubType)
-                ? editorItems.Item.Editor.SubType[0]
-                : editorItems.Item.Editor.SubType
-
-            if (!subType.Model) subType.Model = {}
-            subType.Model.ModelName = mdlResult.relativeModelPath
-
-            if (!Array.isArray(editorItems.Item.Editor.SubType)) {
-                editorItems.Item.Editor.SubType = [subType]
-            }
-
-            mdlResult.stagedEditorItems = editorItems
-        }
-    } catch (mdlError) {
-        console.error("❌ MDL conversion failed (DEFAULT):", mdlError)
-        mdlResult = { success: false, error: mdlError.message }
-    }
+    const mdlResult = await makeModel(item, objPath, options)
 
     return {
         success: true,
@@ -356,6 +350,9 @@ function handleTimerVariable(sortedValueInstanceMap) {
 async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap, options) {
 
     const uniqueInstances = [...new Set(finalInstanceMap.values())]
+    console.log(
+        `${plural(finalInstanceMap.size, "value")} of ${instanceKey} use ${plural(uniqueInstances.length, "instance")}`,
+    )
 
     // Create persistent models directory for this item
     const itemName = item.id.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase()
@@ -368,7 +365,7 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
         const vmfPath = Instance.getCleanPath(item.packagePath, instancePath)
 
         if (!fs.existsSync(vmfPath)) {
-            console.warn(`   ⚠️ VMF file not found: ${vmfPath}`)
+            console.warn(`Instance file not found: ${vmfPath}`)
             continue
         }
 
@@ -440,7 +437,7 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
         message: `Converting ${variantResults.length} models to MDL format...`,
     })
 
-    const conversionPromises = variantResults.map(async (variant) => {
+    const compileModel = async (variant) => {
         const { instancePath } = variant
 
         try {
@@ -454,6 +451,8 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
                     skipMaterialConversion: true,
                     sharedMaterialsPath: sharedMaterialsPath,
                     sharedModelFolder: sharedFolderName,
+                    // Compiled alongside the other variants
+                    logBuffered: true,
                 },
             )
 
@@ -463,19 +462,22 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
                 value: instancePath,
             }
         } catch (error) {
-            console.error(`   ❌ FAILED to convert ${variant.name}:`, error.message)
+            // Logged as the variant's failed "Making ....mdl" step
             return { instancePath, error: error.message }
         }
-    })
+    }
 
-    const conversionResults = [...objFailures, ...(await Promise.all(conversionPromises))]
+    const compiled = await logger.section(
+        `Compiling ${plural(variantResults.length, "model")}`,
+        () => Promise.all(variantResults.map(compileModel)),
+    )
+    const conversionResults = [...objFailures, ...compiled]
 
     const successfulResults = conversionResults.filter((r) => r.modelPath)
     const failedResults = conversionResults.filter((r) => r.error)
 
-    console.log(`Model conversion: ${successfulResults.length} succeeded, ${failedResults.length} failed`)
-
     if (successfulResults.length === 0) {
+        console.error(`None of the ${plural(conversionResults.length, "model")} could be made`)
         dialog.showMessageBox({
             type: "error",
             title: "All Conversions Failed",
@@ -514,6 +516,11 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
     )
 
     editorItems.Item.Editor.SubType = newSubTypes
+    // A warning when some models couldn't be made (their steps say why)
+    const summarize = failedResults.length > 0 ? console.warn : console.log
+    summarize(
+        `Made ${successfulResults.length} of ${plural(conversionResults.length, "model")}, staged as ${plural(newSubTypes.length, "subtype")} (applied on Save)`,
+    )
 
     const failureDetail = failedResults.length
         ? `\n\nNot generated:\n${failedResults

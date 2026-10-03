@@ -21,6 +21,9 @@ const {
 const { Item } = require("../models/items")
 const { vmfStatsCache } = require("../utils/vmfParser")
 
+/** "1 instance", "3 instances" */
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
+
 function register(ipcMain, mainWindow) {
     // Open item editor
     // Note: Frontend passes item directly (not wrapped in object)
@@ -36,7 +39,10 @@ function register(ipcMain, mainWindow) {
             createItemEditor(actualItem, mainWindow)
             return { success: true }
         } catch (error) {
-            console.error("Failed to open item editor:", error)
+            console.error(
+                `Failed to open the item editor for ${item?.id}:`,
+                error,
+            )
             throw error
         }
     })
@@ -47,7 +53,7 @@ function register(ipcMain, mainWindow) {
             createItemCreationWindow(mainWindow)
             return { success: true }
         } catch (error) {
-            console.error("Failed to open item creation window:", error)
+            console.error("Failed to open the item creation window:", error)
             throw error
         }
     })
@@ -288,8 +294,13 @@ function register(ipcMain, mainWindow) {
                 if (pkg) {
                     pkg.items.push(newItem)
                 } else {
-                    console.warn(`Package not found for path: ${packagePath}`)
+                    console.warn(
+                        `No loaded package matches ${packagePath}, so the new item isn't listed`,
+                    )
                 }
+                console.log(
+                    `Created item "${name}" (${itemId}) with ${plural(instances.length, "instance")}`,
+                )
 
                 // Package changed on disk (working dir) but not the .bpee
                 global.titleManager?.setUnsavedChanges(true)
@@ -310,7 +321,7 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true, itemId }
             } catch (error) {
-                console.error("Failed to create item:", error)
+                console.error(`Failed to create item "${name}":`, error)
                 dialog.showErrorBox(
                     "Failed to Create Item",
                     error.message || "An unknown error occurred",
@@ -432,8 +443,11 @@ function register(ipcMain, mainWindow) {
                 if (pkg) {
                     pkg.items.push(newItem)
                 } else {
-                    console.warn(`Package not found for path: ${packagePath}`)
+                    console.warn(
+                        `No loaded package matches ${packagePath}, so the new item isn't listed`,
+                    )
                 }
+                console.log(`Created item "${itemName}" (${itemId})`)
 
                 // Package changed on disk (working dir) but not the .bpee
                 global.titleManager?.setUnsavedChanges(true)
@@ -454,7 +468,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true, itemId, item: newItem.toJSONWithExistence() }
             } catch (error) {
-                console.error("Failed to create item:", error)
+                console.error(
+                    `Failed to create item "${name || providedItemId}":`,
+                    error,
+                )
                 return { success: false, error: error.message }
             }
         },
@@ -547,6 +564,7 @@ function register(ipcMain, mainWindow) {
                     (i) => i.id !== itemId,
                 )
             }
+            console.log(`Deleted item "${targetItem.name}" (${itemId})`)
 
             // Package changed on disk (working dir) but not the .bpee
             global.titleManager?.setUnsavedChanges(true)
@@ -561,7 +579,7 @@ function register(ipcMain, mainWindow) {
 
             return { success: true }
         } catch (error) {
-            console.error("Failed to delete item:", error)
+            console.error(`Failed to delete item ${itemId}:`, error)
             dialog.showErrorBox("Failed to Delete Item", error.message)
             return { success: false, error: error.message }
         }

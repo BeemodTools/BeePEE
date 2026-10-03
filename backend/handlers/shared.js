@@ -9,6 +9,7 @@ const { saveItem } = require("../saveItem")
 const { Item } = require("../models/items")
 const { packages } = require("../packageManager")
 const { sendItemUpdateToEditor } = require("../items/itemEditor")
+const { logger } = require("../utils/logger")
 
 // Track last saved .bpee path in memory
 let lastSavedBpeePath = null
@@ -141,87 +142,86 @@ function createIconPreviewWindow(iconPath, itemName, parentWindow) {
  */
 async function handleItemSave(item, event, mainWindow) {
     try {
-        // Validate input
-        if (!item?.fullItemPath) {
-            throw new Error("Invalid item path")
-        }
-        if (!item?.name?.trim()) {
-            throw new Error("Item name cannot be empty")
-        }
-
-        // Use the new saveItem function to handle file operations
-        const { editorItems, properties } = await saveItem(item)
-
-        // Find the current item instance in memory to get the most up-to-date data
-        const packagePath =
-            item.packagePath || path.dirname(path.dirname(item.fullItemPath))
-
-        // Try to find the existing item instance first
-        let updatedItemInstance = packages
-            .flatMap((p) => p.items)
-            .find((i) => i.id === item.id)
-
-        if (updatedItemInstance) {
-            // Reload the item's data from disk to get the latest changes
-            updatedItemInstance.reloadItemData()
-
-            // Update the icon path if it was changed during save
-            if (item.iconData && item.iconData.stagedIconPath) {
-                const bee2ItemsPath = path.join(
-                    packagePath,
-                    "resources",
-                    "BEE2",
-                    "items",
-                )
-                const relativePath = path.relative(
-                    bee2ItemsPath,
-                    item.iconData.stagedIconPath,
-                )
-                updatedItemInstance.icon = item.iconData.stagedIconPath
+        return await logger.section(`Saving item "${item?.name}"`, async () => {
+            // Validate input
+            if (!item?.fullItemPath) {
+                throw new Error("Invalid item path")
             }
-        } else {
-            // Fallback: reconstruct from disk if not found in memory
-            let itemJSON
-            try {
-                itemJSON = loadOriginalItemJSON(packagePath, item.id)
-            } catch (e) {
-                // fallback to minimal itemJSON if info.json is missing or item not found
-                const itemFolder =
-                    item.itemFolder || path.basename(item.fullItemPath)
-                itemJSON = {
-                    ID: item.id,
-                    Version: { Styles: { BEE2_CLEAN: itemFolder } },
+            if (!item?.name?.trim()) {
+                throw new Error("Item name cannot be empty")
+            }
+
+            // Use the new saveItem function to handle file operations
+            const { editorItems, properties } = await saveItem(item)
+
+            // Find the current item instance in memory to get the most up-to-date data
+            const packagePath =
+                item.packagePath || path.dirname(path.dirname(item.fullItemPath))
+
+            // Try to find the existing item instance first
+            let updatedItemInstance = packages
+                .flatMap((p) => p.items)
+                .find((i) => i.id === item.id)
+
+            if (updatedItemInstance) {
+                // Reload the item's data from disk to get the latest changes
+                updatedItemInstance.reloadItemData()
+
+                // Update the icon path if it was changed during save
+                if (item.iconData && item.iconData.stagedIconPath) {
+                    const bee2ItemsPath = path.join(
+                        packagePath,
+                        "resources",
+                        "BEE2",
+                        "items",
+                    )
+                    const relativePath = path.relative(
+                        bee2ItemsPath,
+                        item.iconData.stagedIconPath,
+                    )
+                    updatedItemInstance.icon = item.iconData.stagedIconPath
                 }
+            } else {
+                // Fallback: reconstruct from disk if not found in memory
+                let itemJSON
+                try {
+                    itemJSON = loadOriginalItemJSON(packagePath, item.id)
+                } catch (e) {
+                    // fallback to minimal itemJSON if info.json is missing or item not found
+                    const itemFolder =
+                        item.itemFolder || path.basename(item.fullItemPath)
+                    itemJSON = {
+                        ID: item.id,
+                        Version: { Styles: { BEE2_CLEAN: itemFolder } },
+                    }
+                }
+                updatedItemInstance = new Item({ packagePath, itemJSON })
             }
-            updatedItemInstance = new Item({ packagePath, itemJSON })
-        }
 
-        const updatedItem = updatedItemInstance.toJSONWithExistence()
+            const updatedItem = updatedItemInstance.toJSONWithExistence()
 
-        // Debug logging
-        console.log("Item save completed, sending update:")
-        console.log("- Item ID:", updatedItem.id)
-        console.log("- Item name:", updatedItem.name)
-        console.log("- Icon path:", updatedItem.icon)
-        console.log("- Icon data was provided:", !!item.iconData)
+            logger.debug(
+                `Saved item ${updatedItem.id} (icon ${updatedItem.icon}${item.iconData ? ", changed" : ""})`,
+            )
 
-        // Send the updated item data to both windows
-        event.sender.send("item-updated", updatedItem) // Send to editor window
-        mainWindow.webContents.send("item-updated", updatedItem) // Send to main window
+            // Send the updated item data to both windows
+            event.sender.send("item-updated", updatedItem) // Send to editor window
+            mainWindow.webContents.send("item-updated", updatedItem) // Send to main window
 
-        // Also notify the editor window through the dedicated function
-        sendItemUpdateToEditor(item.id, updatedItem)
+            // Also notify the editor window through the dedicated function
+            sendItemUpdateToEditor(item.id, updatedItem)
 
-        // The item is saved into the WORKING package, which now differs
-        // from the .bpee on disk — the main window stays starred until
-        // File > Save Package writes the actual file
-        if (global.titleManager) {
-            global.titleManager.setUnsavedChanges(true)
-        }
+            // The item is saved into the WORKING package, which now differs
+            // from the .bpee on disk — the main window stays starred until
+            // File > Save Package writes the actual file
+            if (global.titleManager) {
+                global.titleManager.setUnsavedChanges(true)
+            }
 
-        return { success: true }
+            return { success: true }
+        })
     } catch (error) {
-        console.error("Failed to save item:", error)
+        console.error(`Failed to save item "${item?.name}":`, error)
         dialog.showErrorBox(
             "Save Failed",
             `Failed to save item: ${error.message}\n\nPlease check the file permissions and try again.`,

@@ -9,6 +9,7 @@ const { packages } = require("../packageManager")
 const { sendItemUpdateToEditor, createModelPreviewWindow } = require("../items/itemEditor")
 const { Item } = require("../models/items")
 const { createIconPreviewWindow, loadOriginalItemJSON } = require("./shared")
+const { logger } = require("../utils/logger")
 
 /**
  * Convert a file path to a beep:// URL for secure protocol
@@ -37,7 +38,7 @@ function toBeepUrl(p) {
 
         return `beep://${normalized}`
     } catch (error) {
-        console.error("Error creating beep URL from path:", p, error)
+        console.error(`Failed to make a beep:// URL for ${p}:`, error)
         return null
     }
 }
@@ -56,7 +57,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true }
             } catch (error) {
-                console.error("Failed to show icon preview:", error)
+                console.error(
+                    `Failed to show the icon preview of ${iconPath}:`,
+                    error,
+                )
                 throw error
             }
         },
@@ -108,7 +112,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true, segments: objFiles, modelsDir }
             } catch (error) {
-                console.error("Failed to list model segments:", error)
+                console.error(
+                    `Failed to list the model segments of item ${itemId}:`,
+                    error,
+                )
                 return { success: false, error: error.message, segments: [] }
             }
         },
@@ -155,8 +162,6 @@ function register(ipcMain, mainWindow) {
 
                     actualObjPath = path.join(objPath, objFile)
                     actualMtlPath = actualObjPath.replace(".obj", ".mtl")
-
-                    console.log(`Found OBJ file for preview: ${objFile}`)
                 }
 
                 // Convert paths to beep:// URLs
@@ -170,10 +175,9 @@ function register(ipcMain, mainWindow) {
                     mtlUrl: seg.mtlPath ? toBeepUrl(seg.mtlPath) : null
                 })) : null
 
-                console.log("Creating model preview window with:")
-                console.log("  objUrl:", objUrl)
-                console.log("  mtlUrl:", mtlUrl)
-                console.log("  segments:", segmentsWithUrls?.length || 0)
+                logger.debug(
+                    `Opening the model preview of ${actualObjPath} (${mtlUrl ? "with" : "without"} MTL, ${segmentsWithUrls?.length || 0} segments)`,
+                )
 
                 // Create the preview window with model data
                 createModelPreviewWindow({
@@ -185,7 +189,10 @@ function register(ipcMain, mainWindow) {
                 })
                 return { success: true }
             } catch (error) {
-                console.error("Failed to show model preview:", error)
+                console.error(
+                    `Failed to show the model preview of ${objPath}:`,
+                    error,
+                )
                 throw error
             }
         },
@@ -319,9 +326,14 @@ function register(ipcMain, mainWindow) {
                     format: "DXT5",
                     generateMipmaps: true,
                 })
-                console.log(`Created VTF icon at: ${vtfPath}`)
+                console.log(
+                    `Converted ${fileName} to VTF for the icon of "${item.name}"`,
+                )
             } catch (error) {
-                console.error("Failed to convert icon to VTF:", error)
+                console.error(
+                    `Failed to convert the icon of "${item.name}" to VTF:`,
+                    error,
+                )
             }
 
             // Update the item's icon path in the properties file
@@ -372,7 +384,7 @@ function register(ipcMain, mainWindow) {
 
             return { success: true, iconPath: targetIconPath }
         } catch (error) {
-            console.error("Failed to browse for icon:", error)
+            console.error(`Failed to set the icon of item ${itemId}:`, error)
             dialog.showErrorBox(
                 "Failed to Set Icon",
                 `Could not set icon: ${error.message}`,

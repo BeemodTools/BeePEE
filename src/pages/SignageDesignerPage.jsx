@@ -63,8 +63,14 @@ function SignageDesignerPage() {
                             : ""
                     document.title = `Edit Signage: ${payload.name || payload.editId}${styleTag}`
                 }
+                console.log(
+                    `Loaded design for signage "${payload.name || payload.editId}" (${payload.styleId || "BEE2_CLEAN"}, ${layers.length} layers)`,
+                )
             } catch (err) {
-                console.error("Failed to load signage design:", err)
+                console.error(
+                    `Failed to load design for signage "${payload.name || payload.editId}":`,
+                    err,
+                )
             }
         })
         return () => window.package?.onLoadSignageDesign?.(null)
@@ -125,6 +131,11 @@ function SignageDesignerPage() {
                 editId: editId || undefined,
                 styleId: (editId && editStyle) || undefined,
             }
+            console.log(
+                editId
+                    ? `Sending design for signage "${payload.name}" to its editor (${payload.styleId || "BEE2_CLEAN"}, ${layers.length} layers)`
+                    : `Creating signage "${payload.name}" from the designer (${layers.length} layers)`,
+            )
             // Edits are STAGED into the signage editor window - its Save
             // button performs the real commit. Only brand-new signage is
             // created directly (there's no editor to stage into yet).
@@ -138,7 +149,10 @@ function SignageDesignerPage() {
             }
             // On success the backend closes this window
         } catch (err) {
-            console.error("Failed to save signage:", err)
+            console.error(
+                `Failed to save signage design "${name.trim()}":`,
+                err,
+            )
             setError(err.message || "Failed to save signage")
             setPendingLayers(layers)
         } finally {

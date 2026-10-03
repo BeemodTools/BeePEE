@@ -28,7 +28,7 @@ function register(ipcMain, mainWindow) {
             createPackageCreationWindow(mainWindow)
             return { success: true }
         } catch (error) {
-            console.error("Failed to open package creation window:", error)
+            console.error("Failed to open the package creation window:", error)
             throw error
         }
     })
@@ -99,6 +99,7 @@ function register(ipcMain, mainWindow) {
                     infoPath,
                     JSON.stringify(packageInfo, null, 2),
                 )
+                console.log(`Created package "${name}" in ${packagePath}`)
 
                 // Load the package
                 const pkg = await loadPackage(infoPath)
@@ -117,7 +118,7 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true, packageId }
             } catch (error) {
-                console.error("Failed to create package:", error)
+                console.error(`Failed to create package "${name}":`, error)
                 dialog.showErrorBox("Failed to Create Package", error.message)
                 return { success: false, error: error.message }
             }
@@ -205,7 +206,6 @@ function register(ipcMain, mainWindow) {
 
         try {
             const originalFilePath = result.filePaths[0]
-            console.log("Importing package from:", originalFilePath)
 
             await importPackage(originalFilePath)
 
@@ -230,7 +230,7 @@ function register(ipcMain, mainWindow) {
                     try {
                         return fs.statSync(filepath).isDirectory()
                     } catch (error) {
-                        console.error(`Error checking path: ${filepath}`, error)
+                        console.error(`Failed to check ${filepath}:`, error)
                         return false
                     }
                 })
@@ -238,7 +238,10 @@ function register(ipcMain, mainWindow) {
                     try {
                         return fs.statSync(b).mtime - fs.statSync(a).mtime
                     } catch (error) {
-                        console.error(`Error sorting directories:`, error)
+                        console.error(
+                            "Failed to sort the package directories by date:",
+                            error,
+                        )
                         return 0
                     }
                 })
@@ -249,9 +252,6 @@ function register(ipcMain, mainWindow) {
 
             const extractedPackageDir = packageDirs[0]
             const infoPath = path.join(extractedPackageDir, "info.json")
-
-            console.log("Extracted package directory:", extractedPackageDir)
-            console.log("Loading from info.json:", infoPath)
 
             mainWindow.webContents.send("package-loading-progress", {
                 progress: 80,
@@ -272,7 +272,10 @@ function register(ipcMain, mainWindow) {
 
             return { success: true }
         } catch (error) {
-            console.error("Failed to import package:", error)
+            // Import and load failures are logged with their stack already
+            console.error(
+                `Failed to import ${result.filePaths[0]}: ${error.message}`,
+            )
             throw error
         }
     })

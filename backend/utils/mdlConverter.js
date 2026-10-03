@@ -9,8 +9,15 @@ const sharp = require("sharp")
 const { findPortal2Resources } = require("../data")
 const { convertImageToVTF } = require("./vtfConverter")
 const { isDev } = require("./isDev.js")
+const { logger } = require("./logger")
 
 const execAsync = promisify(exec)
+
+/** "1 texture", "3 textures" */
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
+
+/** Lines of studiomdl's output logged when it fails (it ends with the error) */
+const STUDIOMDL_OUTPUT_LINES = 12
 
 /**
  * Helper to create directory with retry logic for EPERM errors
@@ -26,7 +33,7 @@ async function mkdirWithRetry(dirPath, maxAttempts = 5) {
         } catch (error) {
             if (error.code === "EPERM" || error.code === "EBUSY") {
                 if (attempt < maxAttempts - 1) {
-                    console.warn(`mkdir attempt ${attempt + 1} failed (${error.code}), retrying in ${(attempt + 1) * 200}ms...`)
+                    console.warn(`Could not create ${dirPath} (${error.code}), retrying in ${(attempt + 1) * 200} ms`)
                     await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 200))
                 } else {
                     throw error
@@ -199,8 +206,6 @@ async function convertObjToMDL(objPath, outputDir, options = {}) {
         modelFolder: options.modelFolder, // Allow override for model parent folder
     })
 
-    console.log(`Compiling MDL: ${path.basename(qcPath)}`)
-
     // Get Portal 2 game directory for STUDIOMDL -game parameter
     let gameDir = null
     try {
@@ -209,7 +214,7 @@ async function convertObjToMDL(objPath, outputDir, options = {}) {
             gameDir = path.join(p2Resources.root, "portal2")
         }
     } catch (error) {
-        console.warn("Could not find Portal 2 directory:", error.message)
+        console.warn("Could not find Portal 2:", error.message)
     }
 
     if (!gameDir || !fs.existsSync(gameDir)) {
@@ -254,20 +259,22 @@ async function convertObjToMDL(objPath, outputDir, options = {}) {
         }
         copyDir(packageMaterialsDir, gameMaterialsDir)
     } else {
-        console.warn(`⚠️ Package materials directory not found`)
+        console.warn(`No converted materials to copy for studiomdl: ${packageMaterialsDir}`)
     }
 
     // Run STUDIOMDL
     const cmd = `"${studiomdlPath}" -game "${gameDir}" -nop4 -verbose "${qcPath}"`
 
+    let compileOutput = ""
     try {
         const { stdout, stderr } = await execAsync(cmd, {
             cwd: path.dirname(studiomdlPath),
             maxBuffer: 1024 * 1024 * 10, // 10MB buffer for large outputs
             timeout: 120000, // 2 minute timeout
         })
+        compileOutput = stdout
 
-        if (stderr && !stderr.includes("already exists")) console.warn("STUDIOMDL stderr:", stderr)
+        if (stderr && !stderr.includes("already exists")) console.warn(`studiomdl reported: ${stderr.trim()}`)
 
         // STUDIOMDL outputs to the game directory structure
         // The model will be at: gameDir/models/props_map_editor/bpee/{modelFolder}/{modelName}.mdl
@@ -296,7 +303,7 @@ async function convertObjToMDL(objPath, outputDir, options = {}) {
             )
         }
 
-        console.log(`✅ MDL compiled: ${path.basename(mdlPath)}`)
+        console.log(`Compiled ${path.basename(mdlPath)} with studiomdl`)
 
         // Collect all VTX files that exist
         const result = {
@@ -319,7 +326,13 @@ async function convertObjToMDL(objPath, outputDir, options = {}) {
 
         return result
     } catch (error) {
-        console.error("STUDIOMDL execution failed:", error)
+        // studiomdl prints its errors at the end of its output
+        const output = (error.stdout ?? compileOutput)
+            .trim()
+            .split(/\r?\n/)
+            .slice(-STUDIOMDL_OUTPUT_LINES)
+            .join("\n")
+        if (output) console.error(`studiomdl's output ended with:\n${output}`)
         throw new Error(`STUDIOMDL compilation failed: ${error.message}`)
     }
 }
@@ -367,19 +380,28 @@ async function convertMaterialsToPackage(
     itemName,
 ) {
     if (!materialsSourceDir || !fs.existsSync(materialsSourceDir)) {
-        console.warn(
-            `⚠️ Materials source directory not found: ${materialsSourceDir}`,
-        )
+        console.warn(`No textures to convert: ${materialsSourceDir} doesn't exist`)
         return
     }
+    return logger.section("Converting textures to VTF", () =>
+        writePackageMaterials(materialsSourceDir, materialTargetDir, tempDir, itemName),
+    )
+}
 
-    console.log("Converting materials to VTF/VMT...")
+async function writePackageMaterials(
+    materialsSourceDir,
+    materialTargetDir,
+    tempDir,
+    itemName,
+) {
+    let converted = 0
+    let failed = 0
 
     // Find all PNG/TGA files and convert them to VTF + create VMT
     // FLAT structure - all VTFs go directly in materialTargetDir
     const convertMaterials = async (src, flatDest) => {
         if (!fs.existsSync(src)) {
-            console.warn(`⚠️ Source materials directory not found: ${src}`)
+            console.warn(`Texture folder not found: ${src}`)
             return
         }
 
@@ -415,8 +437,10 @@ async function convertMaterialsToPackage(
                         editorVmt(itemName, baseFileName),
                         "utf-8",
                     )
+                    converted++
                 } catch (error) {
-                    console.error(`  Failed to convert ${entry.name}: ${error.message}`)
+                    failed++
+                    console.error(`Failed to convert ${entry.name} to VTF:`, error.message)
                 }
             }
         }
@@ -461,74 +485,74 @@ async function convertMaterialsToPackage(
                 alphaModes[currentMaterial] = line.substring(9).trim()
             }
         }
-        console.log(`Found ${Object.keys(materialMap).length} materials in MTL file`)
     } else {
-        console.warn(`⚠️ MTL file not found: ${mtlFilePath}`)
+        console.warn(`No MTL file in ${tempDir}, so every texture gets an opaque VMT`)
     }
 
     // Convert all materials from temp_models/materials/ to resources/materials/models/props_map_editor/
     // And create VMT files based on MATERIAL NAMES, not file paths
-    try {
-        await convertMaterials(materialsSourceDir, materialTargetDir)
+    await convertMaterials(materialsSourceDir, materialTargetDir)
 
-        // Now create VMT files based on TEXTURE filenames (not material names!)
-        // STUDIOMDL references materials by their TEXTURE filename, not the MTL material name
-        const createdVmts = new Set()
+    // Now create VMT files based on TEXTURE filenames (not material names!)
+    // STUDIOMDL references materials by their TEXTURE filename, not the MTL material name
+    const createdVmts = new Set()
 
-        for (const [materialName, texturePath] of Object.entries(materialMap)) {
-            try {
-                // Extract just the texture filename (no path, no extension)
-                // Use split on BOTH / and \ since MTL files use forward slashes
-                const textureFileName = texturePath
-                    .split(/[/\\]/)
-                    .pop()
-                    .replace(/\.(png|tga)$/i, "")
+    for (const [materialName, texturePath] of Object.entries(materialMap)) {
+        try {
+            // Extract just the texture filename (no path, no extension)
+            // Use split on BOTH / and \ since MTL files use forward slashes
+            const textureFileName = texturePath
+                .split(/[/\\]/)
+                .pop()
+                .replace(/\.(png|tga)$/i, "")
 
-                // VMT filename MUST match the texture filename (what STUDIOMDL uses)
-                const vmtPath = path.join(
-                    materialTargetDir,
-                    textureFileName + ".vmt",
-                )
+            // VMT filename MUST match the texture filename (what STUDIOMDL uses)
+            const vmtPath = path.join(
+                materialTargetDir,
+                textureFileName + ".vmt",
+            )
 
-                fs.writeFileSync(
-                    vmtPath,
-                    editorVmt(
-                        itemName,
-                        textureFileName,
-                        alphaModes[materialName],
-                    ),
-                    "utf-8",
-                )
-                createdVmts.add(textureFileName)
-            } catch (error) {
-                console.error(`  Failed to create VMT for ${materialName}: ${error.message}`)
-            }
+            fs.writeFileSync(
+                vmtPath,
+                editorVmt(
+                    itemName,
+                    textureFileName,
+                    alphaModes[materialName],
+                ),
+                "utf-8",
+            )
+            createdVmts.add(textureFileName)
+        } catch (error) {
+            console.error(`Failed to write the VMT for ${materialName}:`, error.message)
         }
+    }
 
-        // Fallback: Create VMT files for any VTF that doesn't have a corresponding VMT
-        // This handles cases where MTL parsing failed or was incomplete
-        if (fs.existsSync(materialTargetDir)) {
-            const vtfFiles = fs.readdirSync(materialTargetDir).filter(f => f.endsWith('.vtf'))
-            for (const vtfFile of vtfFiles) {
-                const baseName = vtfFile.replace('.vtf', '')
-                if (!createdVmts.has(baseName)) {
-                    const vmtPath = path.join(materialTargetDir, baseName + ".vmt")
-                    if (!fs.existsSync(vmtPath)) {
-                        fs.writeFileSync(
-                            vmtPath,
-                            editorVmt(itemName, baseName),
-                            "utf-8",
-                        )
-                    }
+    // Fallback: Create VMT files for any VTF that doesn't have a corresponding VMT
+    // This handles cases where MTL parsing failed or was incomplete
+    if (fs.existsSync(materialTargetDir)) {
+        const vtfFiles = fs.readdirSync(materialTargetDir).filter(f => f.endsWith('.vtf'))
+        for (const vtfFile of vtfFiles) {
+            const baseName = vtfFile.replace('.vtf', '')
+            if (!createdVmts.has(baseName)) {
+                const vmtPath = path.join(materialTargetDir, baseName + ".vmt")
+                if (!fs.existsSync(vmtPath)) {
+                    fs.writeFileSync(
+                        vmtPath,
+                        editorVmt(itemName, baseName),
+                        "utf-8",
+                    )
                 }
             }
         }
-
-        console.log(`✅ Materials converted: ${Object.keys(materialMap).length} materials`)
-    } catch (error) {
-        console.warn(`⚠️  Failed to convert materials: ${error.message}`)
-        throw error
     }
+
+    const transparent = Object.values(alphaModes).length
+    // A warning when textures failed (the model would show them missing)
+    const summarize = failed > 0 ? console.warn : console.log
+    summarize(
+        `Converted ${converted} of ${plural(converted + failed, "texture")} for ${plural(Object.keys(materialMap).length, "material")}` +
+            (transparent ? ` (${transparent} transparent)` : ""),
+    )
 }
 
 /**
@@ -592,7 +616,7 @@ async function copyMDLToPackage(
                 if (!cleanupDir) cleanupDir = path.dirname(filePath)
             }
         } catch (error) {
-            console.warn(`  Failed to delete ${path.basename(filePath)}: ${error.message}`)
+            console.warn(`Could not remove the compiled ${path.basename(filePath)} from Portal 2's folder: ${error.message}`)
         }
     }
 
@@ -637,8 +661,15 @@ async function convertAndInstallMDL(
     itemName,
     options = {},
 ) {
-    console.log(`🔄 Converting OBJ to MDL: ${itemName}`)
+    return logger.section(
+        `Making ${itemName}.mdl`,
+        () => makeMDL(objPath, packagePath, itemName, options),
+        // Made alongside other models: keep its lines together
+        { buffered: !!options.logBuffered },
+    )
+}
 
+async function makeMDL(objPath, packagePath, itemName, options) {
     // STAGING MODE: Use .bpee/tempmdl instead of temp_models
     const useStaging = options.useStaging !== false  // Default to true
     const tempDir = path.dirname(objPath)
@@ -698,7 +729,7 @@ async function convertAndInstallMDL(
         useStaging,
     )
 
-    console.log(`✅ MDL complete: ${result.relativeModelPath}`)
+    console.log(`Model: ${result.relativeModelPath}`)
 
     // Step 4: Generate 3DS collision model
     let threeDSResult = null
@@ -732,9 +763,9 @@ async function convertAndInstallMDL(
             useStaging,
         )
 
-        console.log(`✅ 3DS collision model: ${threeDSResult.relativeModelPath}`)
+        console.log(`Collision model: ${threeDSResult.relativeModelPath}`)
     } catch (threeDSError) {
-        console.warn(`⚠️ 3DS collision model failed: ${threeDSError.message}`)
+        console.warn(`Could not make the collision model: ${threeDSError.message}`)
         // Don't throw - 3DS is optional, MDL is the main output
         threeDSResult = { success: false, error: threeDSError.message }
     }
@@ -869,8 +900,6 @@ function convertVbspToBlocks(vbspConditions) {
 function mapVariableValuesToInstances(blocksOrVbsp, targetVariable, item = null) {
     const valueInstanceMap = new Map()
 
-    console.log(`Mapping variable "${targetVariable}" to instances...`)
-
     let blocks = blocksOrVbsp
 
     // Handle VBSP format conditions
@@ -883,7 +912,7 @@ function mapVariableValuesToInstances(blocksOrVbsp, targetVariable, item = null)
     }
 
     if (!Array.isArray(blocks)) {
-        console.warn("Blocks is not an array")
+        console.warn(`Could not read the item's VBSP conditions to find the instances of "${targetVariable}"`)
         return valueInstanceMap
     }
 
@@ -1008,8 +1037,6 @@ function mapVariableValuesToInstances(blocksOrVbsp, targetVariable, item = null)
         }
     }
 
-    console.log(`   Mapped "${targetVariable}": ${valueInstanceMap.size} entries`)
-
     return valueInstanceMap
 }
 
@@ -1047,7 +1074,6 @@ async function convertObjTo3DS(
         })
         return outputPath
     } catch (error) {
-        console.error("3DS conversion failed:", error)
         throw new Error(`3DS conversion failed: ${error.message}`)
     }
 }

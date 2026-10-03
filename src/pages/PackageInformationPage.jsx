@@ -36,7 +36,7 @@ function PackageInformationPage() {
                     )
                 }
             } catch (err) {
-                console.error("Error loading package info:", err)
+                console.error("Failed to load package info:", err)
                 setError(err.message || "Failed to load package information")
             } finally {
                 setLoading(false)
@@ -59,7 +59,7 @@ function PackageInformationPage() {
 
             if (result.success) {
                 setSuccess(true)
-                console.log("Package information updated successfully")
+                console.log(`Updated package info for "${name}"`)
 
                 // Close window after a short delay
                 setTimeout(() => {
@@ -69,7 +69,7 @@ function PackageInformationPage() {
                 setError(result.error || "Failed to update package information")
             }
         } catch (err) {
-            console.error("Error updating package info:", err)
+            console.error("Failed to update package info:", err)
             setError(err.message || "Failed to update package information")
         } finally {
             setSaving(false)

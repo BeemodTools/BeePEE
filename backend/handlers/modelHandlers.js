@@ -56,6 +56,10 @@ function register(ipcMain, mainWindow) {
 
             return { success: true }
         } catch (error) {
+            console.error(
+                `Failed to save the model name of item ${itemId}:`,
+                error,
+            )
             dialog.showErrorBox("Failed to Save Model Name", error.message)
             return { success: false, error: error.message }
         }
@@ -93,6 +97,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success }
             } catch (error) {
+                console.error(
+                    `Failed to update the metadata of item ${itemId}:`,
+                    error,
+                )
                 dialog.showErrorBox("Failed to Update Metadata", error.message)
                 return { success: false, error: error.message }
             }
@@ -158,10 +166,13 @@ function register(ipcMain, mainWindow) {
             mainWindow.webContents.send("item-updated", updatedItem)
             sendItemUpdateToEditor(itemId, updatedItem)
 
-            console.log(`✅ Saved staged editoritems for: ${item.name}`)
+            console.log(`Saved the staged editoritems of "${item.name}"`)
             return { success: true }
         } catch (error) {
-            console.error("Failed to save staged editoritems:", error)
+            console.error(
+                `Failed to save the staged editoritems of item ${itemId}:`,
+                error,
+            )
             return { success: false, error: error.message }
         }
     })
@@ -220,7 +231,10 @@ function register(ipcMain, mainWindow) {
 
             return { success: true, copied: true, hasObjFiles }
         } catch (error) {
-            console.error("Failed to copy staged files:", error)
+            console.error(
+                `Failed to copy the staged model files of item ${itemId}:`,
+                error,
+            )
             return { success: false, error: error.message }
         }
     })

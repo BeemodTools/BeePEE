@@ -183,15 +183,7 @@ export const logVbspConfig = (
     itemName = "Unknown Item",
     blocks = [],
 ) => {
-    const vbspJson = JSON.stringify(vbspConfig, null, 2)
-
-    console.log("=== VBSP CONFIG JSON ===")
-    console.log("Generated VBSP config for item:", itemName)
-    console.log("Timestamp:", new Date().toISOString())
-    console.log("Number of conditions:", blocks.length)
-    console.log("")
-    console.log("VBSP JSON:")
-    console.log(vbspJson)
-    console.log("")
-    console.log("=== END VBSP CONFIG JSON ===")
+    console.log(
+        `Converted ${blocks.length} condition blocks to VBSP config for "${itemName}"`,
+    )
 }
