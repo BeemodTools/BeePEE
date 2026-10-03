@@ -52,10 +52,12 @@ function Instances({
     const [isRemovingMissing, setIsRemovingMissing] = useState(false)
     const [expandedStats, setExpandedStats] = useState(new Set())
     const [isCheckingAssets, setIsCheckingAssets] = useState(false)
+    // Files instances use that don't exist or aren't mounted properly
     const [externalAssetsDialog, setExternalAssetsDialog] = useState({
         open: false,
-        files: [], // Array of { fileName, externalAssets }
+        files: [], // Array of { fileName, missingAssets }
         pendingFiles: [], // Files to add after user acknowledges warning
+        mode: "add", // "add": Add Anyway / Cancel, "replace": already replaced, OK
     })
 
     // Convert formData instances to array format for rendering
@@ -99,21 +101,20 @@ function Instances({
         try {
             const result = await window.package.selectInstanceFile(item.id)
             if (result.success && result.files && result.files.length > 0) {
-                // Check each file for external assets
+                // Check each file for files it uses that aren't on this
+                // machine (custom ones are packed when the item is saved)
                 setIsCheckingAssets(true)
-                const filesWithExternalAssets = []
+                const filesWithMissingAssets = []
                 const successfulFiles = result.files.filter(f => f.success)
 
                 for (const fileResult of successfulFiles) {
                     try {
                         const assetCheck = await window.package.checkVmfExternalAssets(fileResult.filePath)
-                        if (assetCheck.success && assetCheck.hasExternalAssets) {
-                            filesWithExternalAssets.push({
+                        const missingAssets = assetCheck.assets?.missing ?? []
+                        if (assetCheck.success && missingAssets.length > 0) {
+                            filesWithMissingAssets.push({
                                 fileName: fileResult.fileName,
-                                filePath: fileResult.filePath,
-                                instanceName: fileResult.instanceName,
-                                externalAssets: assetCheck.assets.external,
-                                summary: assetCheck.summary,
+                                missingAssets,
                             })
                         }
                     } catch (err) {
@@ -122,9 +123,16 @@ function Instances({
                 }
                 setIsCheckingAssets(false)
 
-                // External assets check is informational only - autopacker handles copying
-                // Just add instances directly without blocking dialog
-                addPendingInstances(successfulFiles)
+                if (filesWithMissingAssets.length > 0) {
+                    setExternalAssetsDialog({
+                        open: true,
+                        files: filesWithMissingAssets,
+                        pendingFiles: successfulFiles,
+                        mode: "add",
+                    })
+                } else {
+                    addPendingInstances(successfulFiles)
+                }
             } else if (!result.canceled) {
                 console.error(
                     `Failed to select instance files for item "${item.name}":`,
@@ -168,15 +176,25 @@ function Instances({
         )
     }
 
-    // Handle user acknowledging external assets warning
+    // Handle user acknowledging the missing files warning
     const handleExternalAssetsAcknowledge = () => {
-        addPendingInstances(externalAssetsDialog.pendingFiles)
-        setExternalAssetsDialog({ open: false, files: [], pendingFiles: [] })
+        if (externalAssetsDialog.mode === "add") {
+            addPendingInstances(externalAssetsDialog.pendingFiles)
+        }
+        setExternalAssetsDialog({ open: false, files: [], pendingFiles: [], mode: "add" })
     }
 
-    // Handle user canceling due to external assets
+    // Handle user canceling due to missing files
     const handleExternalAssetsCancel = () => {
-        setExternalAssetsDialog({ open: false, files: [], pendingFiles: [] })
+        setExternalAssetsDialog({ open: false, files: [], pendingFiles: [], mode: "add" })
+    }
+
+    // Asset type from its path, for the icons
+    const assetType = (assetPath) => {
+        if (assetPath.startsWith("models/")) return "MODEL"
+        if (assetPath.startsWith("sound/")) return "SOUND"
+        if (assetPath.startsWith("scripts/")) return "SCRIPT"
+        return "MATERIAL"
     }
 
     // Get icon for asset type
@@ -213,6 +231,25 @@ function Instances({
                 console.log(
                     `Replaced instance "${updatedInstance.Name}" in item "${item.name}"`,
                 )
+
+                // The replacement uses files that aren't on this machine
+                if (result.missingFiles?.length > 0) {
+                    setExternalAssetsDialog({
+                        open: true,
+                        files: [
+                            {
+                                fileName: result.fileName,
+                                missingAssets: result.missingFiles.map((path) => ({
+                                    type: assetType(path),
+                                    path,
+                                    neededBy: result.neededBy?.[path] ?? null,
+                                })),
+                            },
+                        ],
+                        pendingFiles: [],
+                        mode: "replace",
+                    })
+                }
             } else if (!result.canceled) {
                 console.error(
                     `Failed to replace instance ${instanceIndex} of item "${item.name}":`,
@@ -733,12 +770,13 @@ function Instances({
                 }}>
                 <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                     <WarningIcon color="warning" />
-                    External Assets Detected
+                    Missing Files
                 </DialogTitle>
                 <DialogContent>
                     <Alert severity="warning" sx={{ mb: 2 }}>
-                        The following VMF file(s) use assets that are not part of the base Portal 2 installation.
-                        These custom assets may need to be included in your package for the item to work correctly.
+                        These files don't exist or aren't mounted properly, so they'll be missing in game.
+                        If you have them, check that their folder is in Portal 2's search paths (gameinfo.txt),
+                        or that their VPK is mounted.
                     </Alert>
 
                     {externalAssetsDialog.files.map((file, fileIndex) => (
@@ -747,17 +785,17 @@ function Instances({
                                 {file.fileName}
                             </Typography>
                             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                                {file.summary?.externalCount || file.externalAssets.length} external asset(s) found
+                                {file.missingAssets.length} missing file(s)
                             </Typography>
                             <List dense sx={{ bgcolor: "rgba(0,0,0,0.2)", borderRadius: 1, maxHeight: 200, overflow: "auto" }}>
-                                {file.externalAssets.slice(0, 20).map((asset, assetIndex) => (
+                                {file.missingAssets.slice(0, 20).map((asset, assetIndex) => (
                                     <ListItem key={assetIndex}>
                                         <ListItemIcon sx={{ minWidth: 36 }}>
                                             {getAssetIcon(asset.type)}
                                         </ListItemIcon>
                                         <ListItemText
                                             primary={asset.path}
-                                            secondary={asset.type}
+                                            secondary={asset.neededBy ? `Used by ${asset.neededBy}` : asset.type}
                                             primaryTypographyProps={{
                                                 variant: "body2",
                                                 sx: { fontFamily: "monospace", fontSize: "0.75rem" }
@@ -766,10 +804,10 @@ function Instances({
                                         />
                                     </ListItem>
                                 ))}
-                                {file.externalAssets.length > 20 && (
+                                {file.missingAssets.length > 20 && (
                                     <ListItem>
                                         <ListItemText
-                                            primary={`... and ${file.externalAssets.length - 20} more`}
+                                            primary={`... and ${file.missingAssets.length - 20} more`}
                                             primaryTypographyProps={{
                                                 variant: "body2",
                                                 color: "text.secondary",
@@ -783,16 +821,18 @@ function Instances({
                     ))}
                 </DialogContent>
                 <DialogActions>
-                    <Button
-                        onClick={handleExternalAssetsCancel}
-                        sx={{ color: "rgba(255,255,255,0.6)" }}>
-                        Cancel
-                    </Button>
+                    {externalAssetsDialog.mode === "add" && (
+                        <Button
+                            onClick={handleExternalAssetsCancel}
+                            sx={{ color: "rgba(255,255,255,0.6)" }}>
+                            Cancel
+                        </Button>
+                    )}
                     <Button
                         onClick={handleExternalAssetsAcknowledge}
                         variant="contained"
                         color="warning">
-                        Add Anyway
+                        {externalAssetsDialog.mode === "add" ? "Add Anyway" : "OK"}
                     </Button>
                 </DialogActions>
             </Dialog>

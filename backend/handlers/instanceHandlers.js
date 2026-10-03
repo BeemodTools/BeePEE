@@ -433,11 +433,36 @@ function register(ipcMain, mainWindow) {
                     `Replaced instance ${instanceIndex} of "${item.name}" with ${selectedFilePath}`,
                 )
 
+                // Pack the new instance's custom files, as when adding one
+                let missingFiles = []
+                let neededBy = {}
+                try {
+                    const { autopackInstance } = require("../utils/autopacker")
+                    const autopackResult = await autopackInstance(
+                        selectedFilePath,
+                        item.packagePath,
+                        item.name,
+                    )
+                    missingFiles = autopackResult.missingFiles ?? []
+                    neededBy = autopackResult.neededBy ?? {}
+                } catch (autopackError) {
+                    console.warn(
+                        `Failed to autopack the replacement of instance ${instanceIndex}:`,
+                        autopackError,
+                    )
+                }
+
                 const updatedItem = item.toJSONWithExistence()
                 mainWindow.webContents.send("item-updated", updatedItem)
                 sendItemUpdateToEditor(itemId, updatedItem)
 
-                return { success: true, instanceName: instanceData.Name }
+                return {
+                    success: true,
+                    instanceName: instanceData.Name,
+                    fileName,
+                    missingFiles,
+                    neededBy,
+                }
             } catch (error) {
                 console.error(
                     `Failed to replace instance ${instanceIndex}:`,
@@ -706,6 +731,16 @@ function register(ipcMain, mainWindow) {
                 path: file,
             })
             const foundAssets = files.custom.map(({ file }) => asset(file))
+            // Files it uses that don't exist or aren't mounted properly
+            const missingAssets = files.missing.map((file) => ({
+                ...asset(file),
+                neededBy: files.neededBy[file] ?? null,
+            }))
+            if (missingAssets.length > 0) {
+                console.warn(
+                    `${path.basename(vmfPath)} uses ${missingAssets.length} file(s) that don't exist or aren't mounted properly: ${files.missing.join(", ")}`,
+                )
+            }
             const externalAssets = [
                 ...files.baseGame,
                 ...files.bee2,
@@ -718,12 +753,14 @@ function register(ipcMain, mainWindow) {
                 hasExternalAssets: externalAssets.length > 0,
                 assets: {
                     external: externalAssets,
-                    found: foundAssets
+                    found: foundAssets,
+                    missing: missingAssets,
                 },
                 summary: {
                     totalAssets: externalAssets.length + foundAssets.length,
                     externalCount: externalAssets.length,
-                    foundCount: foundAssets.length
+                    foundCount: foundAssets.length,
+                    missingCount: missingAssets.length,
                 }
             }
         } catch (error) {

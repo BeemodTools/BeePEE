@@ -812,7 +812,7 @@ No Python is needed anywhere in BeePEE.
 
 ## Autopacking
 
-When an instance is added to an item, `backend/utils/autopacker.js` copies the files it uses that aren't part of the game into the package's `resources/` (same paths). The instance asset check (`check-vmf-external-assets`) sorts files the same way.
+When an instance is added to an item (or replaced), `backend/utils/autopacker.js` copies the files it uses that aren't part of the game into the package's `resources/` (same paths). The instance asset check (`check-vmf-external-assets`) sorts files the same way; the Instances tab runs it on the VMFs the user picks and, when files are missing, shows the **Missing Files** dialog ("These files don't exist or aren't mounted properly") with Add Anyway / Cancel. A replaced instance shows it too, after packing.
 
 **What the instance needs** (`vmfAssetExtractor.js` reads the VMF with the KeyValues parser):
 
@@ -827,7 +827,7 @@ When an instance is added to an item, `backend/utils/autopacker.js` copies the f
 - **BEE2's, never packed**: `bee2/`, the DLC folder BEE2 puts its generated VPK in (marked with `bee2_vpk_autogen_marker.txt`), and `bee2/` content paths that don't exist yet (made when BEE2 exports)
 - **In the package already**: nothing to do
 - **Custom, packed**: everything else - custom content folders, files added to `Portal 2/portal2` later, other VPKs (extracted)
-- **Missing**: warned about when the instance names the file; missing files that models and materials name (like gibs the game itself lacks) only in the debug log
+- **Missing**: reported (dialog and log) when the instance names the file, or when custom content needs it (a custom material's texture, a custom model's materials), with what needs it; missing files the original game's content names (like gibs the game itself lacks) only go to the debug log
 
 ## VMF to OBJ Conversion (VMF2OBJ port)
 

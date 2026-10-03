@@ -217,12 +217,13 @@ function gameFolderInfo(portal2Root) {
  * @param {string} portal2Root - Portal 2's install folder
  * @param {string} [packageDir] - The package the instance is added to: its
  *   files count as packed already
- * @returns {Promise<{references: Object, needed: string[], custom: {file: string, source: string, fromVpk: boolean, read: () => Promise<Buffer>}[], inPackage: string[], baseGame: string[], bee2: string[], missing: string[], missingDependencies: string[]}>}
+ * @returns {Promise<{references: Object, needed: string[], neededBy: Object<string, string>, custom: {file: string, source: string, fromVpk: boolean, read: () => Promise<Buffer>}[], inPackage: string[], baseGame: string[], bee2: string[], missing: string[], missingDependencies: string[]}>}
  *   Content paths ("materials/x.vmt"); custom ones with where they are (a
  *   loose file or a VPK) and how to read them.
- *   missing: files the instance names that aren't anywhere;
- *   missingDependencies: files they need that aren't anywhere (like gibs
- *   the game's own models name but the game doesn't have)
+ *   missing: files the instance or its custom content needs that aren't
+ *   anywhere (neededBy: what needs those that the instance doesn't name);
+ *   missingDependencies: files the game's own content names that aren't
+ *   anywhere (like gibs its models name but the game doesn't have)
  */
 async function sortInstanceFiles(vmfPath, portal2Root, packageDir) {
     const references = extractAssetsFromVMF(vmfPath)
@@ -250,12 +251,11 @@ async function sortInstanceFiles(vmfPath, portal2Root, packageDir) {
         return "custom"
     }
 
-    const needed = new Set(
-        await findDependencies(index, {
-            models: references.MODEL,
-            materials: references.MATERIAL.map((m) => `materials/${m}`),
-        }),
-    )
+    const dependencies = await findDependencies(index, {
+        models: references.MODEL,
+        materials: references.MATERIAL.map((m) => `materials/${m}`),
+    })
+    const needed = new Set(dependencies.files)
     for (const sound of references.SOUND) needed.add(`sound/${sound}`)
     for (const script of references.SCRIPT) needed.add(`scripts/${script}`)
 
@@ -316,9 +316,19 @@ async function sortInstanceFiles(vmfPath, portal2Root, packageDir) {
         return where(file)
     }
 
+    // Missing files of custom content (a custom material's texture, a custom
+    // model's materials, ...) are reported with what needs them; those of
+    // the game's own content aren't the instance's problem
+    const neededBy = {}
     for (const file of [...needed].sort()) {
         let kind = kindOf(file)
-        if (kind === "missing" && !named.has(file)) kind = "missingDependencies"
+        if (kind === "missing" && !named.has(file)) {
+            const by = dependencies.requiredBy.get(file)
+            const byKind = by && kindOf(by)
+            if (byKind === "custom" || byKind === "inPackage")
+                neededBy[file] = by
+            else kind = "missingDependencies"
+        }
         if (kind !== "custom") {
             sorted[kind].push(file)
             continue
@@ -331,7 +341,7 @@ async function sortInstanceFiles(vmfPath, portal2Root, packageDir) {
             read: () => index.read(file),
         })
     }
-    return { references, needed: [...needed].sort(), ...sorted }
+    return { references, needed: [...needed].sort(), neededBy, ...sorted }
 }
 
 /**
@@ -373,8 +383,17 @@ async function autopackInstance(instancePath, packageDir, itemName) {
                 `They need ${plural(files.needed.length, "file")}: ${files.custom.length} to pack, ${files.inPackage.length} already in the package, ${files.baseGame.length} from the original game, ${files.bee2.length} from BEE2`,
             )
             if (files.missing.length > 0) {
+                const described = files.missing.map((file) =>
+                    files.neededBy[file]
+                        ? `${file} (used by ${files.neededBy[file]})`
+                        : file,
+                )
+                const these =
+                    files.missing.length === 1
+                        ? "This file doesn't exist or isn't"
+                        : `These ${files.missing.length} files don't exist or aren't`
                 console.warn(
-                    `${plural(files.missing.length, "file")} the instance uses weren't found anywhere: ${listSome(files.missing)}`,
+                    `${these} mounted properly: ${listSome(described)}`,
                 )
             }
             if (files.missingDependencies.length > 0) {
@@ -421,6 +440,8 @@ async function autopackInstance(instancePath, packageDir, itemName) {
                 verificationResults,
                 totalAssets: files.custom.length,
                 packedAssets: files.custom.length - notPacked.length,
+                missingFiles: files.missing,
+                neededBy: files.neededBy,
             }
         } catch (error) {
             console.error("Autopacking failed:", error)

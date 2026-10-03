@@ -557,18 +557,24 @@ async function materialParams(index, file, parents, depth = 0) {
  * materials it includes or names
  * @param {Object} index - A file index (see getIndex)
  */
-function dependencyCollector(index) {
+function dependencyCollector(index, { missingModelMaterials = false } = {}) {
     const materials = new Set()
     const models = new Set()
     const visitedMaterials = new Set()
+    // Which file needs each file (the first one found)
+    const requiredBy = new Map()
+    const noteNeed = (file, by) => {
+        if (file && by && !requiredBy.has(file)) requiredBy.set(file, by)
+    }
 
-    const addMaterial = async (file) => {
+    const addMaterial = async (file, by) => {
         if (!file || visitedMaterials.has(file)) return
         visitedMaterials.add(file)
         materials.add(file)
+        noteNeed(file, by)
         const parents = []
         const params = await materialParams(index, file, parents)
-        for (const parent of parents) await addMaterial(parent)
+        for (const parent of parents) await addMaterial(parent, file)
         for (const [rawKey, rawValue] of params ?? []) {
             // Conditional parameters ("gpu>=2?$basetexture") count too
             const key = rawKey.slice(rawKey.indexOf("?") + 1).replace(/^\$/, "")
@@ -577,42 +583,55 @@ function dependencyCollector(index) {
                 if (value === "env_cubemap" || value.startsWith("_rt_"))
                     continue
                 const texture = texturePath(value)
-                if (texture) materials.add(texture)
+                if (texture) {
+                    materials.add(texture)
+                    noteNeed(texture, file)
+                }
             } else if (MATERIAL_PARAMS.has(key)) {
-                await addMaterial(materialPath(value))
+                await addMaterial(materialPath(value), file)
             }
         }
     }
 
-    const addModel = async (file) => {
+    const addModel = async (file, by) => {
         if (!file || models.has(file)) return
         models.add(file)
+        noteNeed(file, by)
         const data = await index.read(file)
         if (!data) return
         const stem = file.slice(0, -".mdl".length)
         for (const extension of MODEL_FILE_EXTENSIONS) {
-            if (index.has(stem + extension)) models.add(stem + extension)
+            if (index.has(stem + extension)) {
+                models.add(stem + extension)
+                noteNeed(stem + extension, file)
+            }
         }
         const mdl = readMdl(data)
         for (const name of mdl.textures) {
-            for (const folder of mdl.cdmaterials) {
-                const vmt = materialPath(`${folder}${name}`)
-                if (vmt && index.has(vmt)) {
-                    await addMaterial(vmt)
-                    break
-                }
+            const candidates = mdl.cdmaterials
+                .map((folder) => materialPath(`${folder}${name}`))
+                .filter(Boolean)
+            const vmt = candidates.find((candidate) => index.has(candidate))
+            if (vmt) {
+                await addMaterial(vmt, file)
+            } else if (missingModelMaterials && candidates.length) {
+                // Not anywhere: listed (as in its first folder) so it can
+                // be reported missing
+                await addMaterial(candidates[0], file)
             }
         }
-        for (const include of mdl.includes) await addModel(modelPath(include))
+        for (const include of mdl.includes) {
+            await addModel(modelPath(include), file)
+        }
         const phy = await index.read(file.replace(/\.mdl$/, ".phy"))
         if (phy) {
             for (const gib of readPhyBreakModels(phy)) {
-                await addModel(modelPath(gib))
+                await addModel(modelPath(gib), file)
             }
         }
     }
 
-    return { materials, models, addMaterial, addModel }
+    return { materials, models, requiredBy, addMaterial, addModel }
 }
 
 /**
@@ -649,10 +668,15 @@ async function findMdlDependencies(mdlPath, options) {
  * @param {Object} index - The game's file index (see gameIndex)
  * @param {{models?: string[], materials?: string[]}} start - Model and
  *   material paths ("models/" or "materials/" and the extension optional)
- * @returns {Promise<string[]>} Content paths with extensions, sorted
+ * @returns {Promise<{files: string[], requiredBy: Map<string, string>}>}
+ *   Content paths with extensions, sorted, and which file needs each (for
+ *   those another file needs). Model materials that aren't anywhere are
+ *   listed too, as in the model's first materials folder.
  */
 async function findDependencies(index, { models = [], materials = [] }) {
-    const collector = dependencyCollector(index)
+    const collector = dependencyCollector(index, {
+        missingModelMaterials: true,
+    })
     for (const model of models) {
         try {
             await collector.addModel(modelPath(model))
@@ -664,7 +688,10 @@ async function findDependencies(index, { models = [], materials = [] }) {
     for (const material of materials) {
         await collector.addMaterial(materialPath(material))
     }
-    return [...collector.models, ...collector.materials].sort()
+    return {
+        files: [...collector.models, ...collector.materials].sort(),
+        requiredBy: collector.requiredBy,
+    }
 }
 
 module.exports = {

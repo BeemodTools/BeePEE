@@ -11,6 +11,7 @@ const os = require("os")
 const path = require("path")
 const { extractAssetsFromVMF } = require("../utils/vmfAssetExtractor")
 const { autopackInstance, sortInstanceFiles } = require("../utils/autopacker")
+const { buildMdl } = require("./helpers/buildMdl")
 
 /** A VPK (version 1) with every file stored in the directory file */
 function writeVpk(file, files) {
@@ -223,6 +224,18 @@ entity
     "classname" "prop_static"
     "model" "models/props/base_prop.mdl"
 }
+entity
+{
+    "id" "31"
+    "classname" "info_overlay"
+    "material" "metal/base2"
+}
+entity
+{
+    "id" "32"
+    "classname" "prop_static"
+    "model" "models/props/textured.mdl"
+}
 `
 
 describe("autopacking", () => {
@@ -256,6 +269,9 @@ describe("autopacking", () => {
             "materials/metal/base.vmt":
                 '"LightmappedGeneric" { "$basetexture" "metal/base" }',
             "materials/metal/base.vtf": "vtf",
+            // The game's material, its texture missing: not the instance's problem
+            "materials/metal/base2.vmt":
+                '"LightmappedGeneric" { "$basetexture" "metal/gone" }',
             "scripts/game_sounds_base.txt":
                 '"Portal.button_down" { "wave" "buttons/down.wav" }',
             "sound/buttons/down.wav": "wav",
@@ -344,6 +360,11 @@ describe("autopacking", () => {
         )
         write(path.join(custom, "scripts/vscripts/custom/logic.nut"))
         write(path.join(custom, "scripts/vscripts/custom/other.nut"))
+        // A custom model whose material isn't anywhere
+        write(
+            path.join(custom, "models/props/textured.mdl"),
+            buildMdl("textured_skin", "models/props/"),
+        )
         // A stray file of the game's model next to custom content
         write(path.join(custom, "models/props/base_prop.dx80.vtx"))
         // BEE2's own content
@@ -372,6 +393,7 @@ describe("autopacking", () => {
             MODEL: [
                 "models/props/base_prop.mdl",
                 "models/props/missing.mdl",
+                "models/props/textured.mdl",
                 "models/props/thing.mdl",
             ],
             MATERIAL: [
@@ -381,6 +403,7 @@ describe("autopacking", () => {
                 "custom/loose",
                 "dlc2/panel",
                 "metal/base",
+                "metal/base2",
                 "pkg/existing",
                 "props/broken",
                 "props/thing",
@@ -407,6 +430,7 @@ describe("autopacking", () => {
                 "materials/props/broken.vmt",
                 "materials/props/thing.vmt",
                 "materials/props/thing_diffuse.vtf",
+                "models/props/textured.mdl",
                 "models/props/thing.ani",
                 "models/props/thing.dx90.vtx",
                 "models/props/thing.mdl",
@@ -426,6 +450,7 @@ describe("autopacking", () => {
             "materials/dlc2/panel.vmt",
             "materials/metal/base.vmt",
             "materials/metal/base.vtf",
+            "materials/metal/base2.vmt",
             "models/props/base_prop.dx80.vtx",
             "models/props/base_prop.dx90.vtx",
             "models/props/base_prop.mdl",
@@ -443,16 +468,29 @@ describe("autopacking", () => {
             "materials/pkg/existing.vmt",
             "materials/pkg/existing.vtf",
         ])
-        expect(files.missing).toEqual(["models/props/missing.mdl"])
-        expect(files.missingDependencies).toEqual([
+        // Missing: what the instance names, and what its custom content needs
+        expect(files.missing).toEqual([
+            "materials/models/props/textured_skin.vmt",
             "materials/props/nonexistent.vtf",
+            "models/props/missing.mdl",
         ])
+        expect(files.neededBy).toEqual({
+            "materials/models/props/textured_skin.vmt":
+                "models/props/textured.mdl",
+            "materials/props/nonexistent.vtf": "materials/props/broken.vmt",
+        })
+        expect(files.missingDependencies).toEqual(["materials/metal/gone.vtf"])
     })
 
     test("copies the custom files into the package", async () => {
         const result = await autopackInstance(vmfPath, packageDir, "Thing")
         expect(result.success).toBe(true)
-        expect(result.packedAssets).toBe(18)
+        expect(result.missingFiles).toEqual([
+            "materials/models/props/textured_skin.vmt",
+            "materials/props/nonexistent.vtf",
+            "models/props/missing.mdl",
+        ])
+        expect(result.packedAssets).toBe(19)
         // Extracted from the VPK
         expect(
             fs.readFileSync(
