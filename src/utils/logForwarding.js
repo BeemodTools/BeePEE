@@ -19,6 +19,13 @@ const MAX_LENGTH = 2000
 /** Longest object (as JSON) in a message */
 const MAX_OBJECT_LENGTH = 300
 
+/**
+ * Development chatter left out of the log: the Vite client's messages
+ * ("[vite] connected.", "[vite] hot updated: ...") and React's DevTools tip.
+ * Only info and debug lines: Vite's errors and warnings still go in.
+ */
+const DEV_NOISE = /^\[vite\] |^Download the React DevTools/
+
 function shorten(text, max) {
     if (text.length <= max) return text
     return `${text.slice(0, max)}... (${text.length - max} more characters)`
@@ -97,7 +104,11 @@ export function forwardLogs() {
         const original = console[method]
         console[method] = (...args) => {
             original.apply(console, args)
-            forward(level, formatLogArgs(args))
+            const text = formatLogArgs(args)
+            if ((level === "info" || level === "debug") && DEV_NOISE.test(text)) {
+                return
+            }
+            forward(level, text)
         }
     }
 

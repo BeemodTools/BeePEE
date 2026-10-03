@@ -1,11 +1,23 @@
-import { defineConfig } from "vite"
+import { createLogger, defineConfig } from "vite"
 import react from "@vitejs/plugin-react"
+
+// Vite's line for every edit ("hmr update /src/...", "page reload ...") is
+// left out of the dev terminal, where BeePEE's own log goes too. Everything
+// else (errors, warnings, the server address) still shows.
+const logger = createLogger()
+const logInfo = logger.info
+logger.info = (message, options) => {
+    if (/hmr update|hmr invalidate|page reload/.test(message)) return
+    logInfo(message, options)
+}
 
 // https://vite.dev/config/
 export default defineConfig(({ command }) => {
     const isServe = command === "serve"
 
-    const debugEnvPlugin = isServe
+    // Logs the requests for Vite's client files, to debug them loading:
+    // set BEEPEE_DEBUG_VITE=1 to turn it on
+    const debugEnvPlugin = isServe && process.env.BEEPEE_DEBUG_VITE
         ? {
               name: "beepee-debug-env-requests",
               configureServer(server) {
@@ -25,6 +37,7 @@ export default defineConfig(({ command }) => {
         : null
 
     return {
+        customLogger: logger,
         plugins: [react(), ...(debugEnvPlugin ? [debugEnvPlugin] : [])],
         // Use absolute paths during dev so Vite's client assets load via HTTP,
         // but switch to relative paths for the packaged file:// protocol.
