@@ -31,10 +31,10 @@ describe("logger sections", () => {
             "├─ Converting 2 instances to OBJ",
             "│  ├─ my_item_0: 2285 faces",
             "│  ├─ Warning: Missing texture: metal/foo",
-            "│  └─ ✓ Done in <time>",
+            "│  └─ [✓] Done in <time>",
             "│",
             "├─ Compiling MDL",
-            "└─ ✓ Done in <time>",
+            "└─ [✓] Done in <time>",
             "",
         ])
     })
@@ -46,7 +46,7 @@ describe("logger sections", () => {
             }),
         ).rejects.toThrow("studiomdl exited with code 1")
         expect(withoutTimes()).toEqual([
-            "✗ Compiling MDL failed after <time>: studiomdl exited with code 1",
+            "[✗] Compiling MDL failed after <time>: studiomdl exited with code 1",
         ])
     })
 
@@ -72,14 +72,14 @@ describe("logger sections", () => {
             "├─ Model a",
             "│  ├─ a step 1",
             "│  ├─ a step 2",
-            "│  └─ ✓ Done in <time>",
+            "│  └─ [✓] Done in <time>",
             "│",
             "├─ Model b",
             "│  ├─ b step 1",
             "│  ├─ b step 2",
-            "│  └─ ✓ Done in <time>",
+            "│  └─ [✓] Done in <time>",
             "│",
-            "└─ ✓ Done in <time>",
+            "└─ [✓] Done in <time>",
             "",
         ])
     })
@@ -107,13 +107,13 @@ describe("logger sections", () => {
             "Compiling 2 models",
             "├─ Model slow",
             "│  ├─ slow compiled",
-            "│  └─ ✓ Done in <time>",
+            "│  └─ [✓] Done in <time>",
             "│",
             "├─ Model fast",
             "│  ├─ fast compiled",
-            "│  └─ ✓ Done in <time>",
+            "│  └─ [✓] Done in <time>",
             "│",
-            "└─ ✓ Done in <time>",
+            "└─ [✓] Done in <time>",
             "",
         ])
     })
@@ -141,7 +141,7 @@ describe("logger sections", () => {
             error: "No valid VMF files found",
         }))
         expect(withoutTimes()).toEqual([
-            "✗ Converting failed after <time>: No valid VMF files found",
+            "[✗] Converting failed after <time>: No valid VMF files found",
         ])
     })
 
@@ -157,7 +157,7 @@ describe("logger sections", () => {
         })
         await late
         expect(withoutTimes()).toEqual([
-            "✓ Startup in <time>",
+            "[✓] Startup in <time>",
             "Update check finished",
         ])
     })
@@ -173,10 +173,10 @@ describe("logger sections", () => {
         })
         expect(withoutTimes()).toEqual([
             "Loading package",
-            "├─ ✓ Converting VDF files to JSON in <time>",
-            "├─ ✗ Checking signs failed after <time>: signs.json is missing",
+            "├─ [✓] Converting VDF files to JSON in <time>",
+            "├─ [✗] Checking signs failed after <time>: signs.json is missing",
             "├─ Loaded 3 items",
-            "└─ ✓ Done in <time>",
+            "└─ [✓] Done in <time>",
             "",
         ])
     })
@@ -193,9 +193,9 @@ describe("logger sections", () => {
         })
         expect(withoutTimes()).toEqual([
             "Compiling 2 models",
-            "├─ ✓ Model a in <time>",
-            "├─ ✓ Model b in <time>",
-            "└─ ✓ Done in <time>",
+            "├─ [✓] Model a in <time>",
+            "├─ [✓] Model b in <time>",
+            "└─ [✓] Done in <time>",
             "",
         ])
     })
@@ -243,7 +243,7 @@ describe("logger file", () => {
             "├─ Warning: Icon not found",
             "├─ (repeated 3 more times)",
             "├─ Loaded 12 icons",
-            "└─ ✓ Done in <time>",
+            "└─ [✓] Done in <time>",
             "",
         ])
     })

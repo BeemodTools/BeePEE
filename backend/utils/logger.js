@@ -12,8 +12,8 @@ const { app } = require("electron")
  *   Model generation for "Laser Catcher" (TIMER DELAY)
  *   ├─ Converting 2 instances to OBJ
  *   │  ├─ laser_catcher_0: 2285 faces, 3 props, 12 materials
- *   │  └─ ✓ Done in 1.2 s
- *   └─ ✓ Done in 4.8 s
+ *   │  └─ [✓] Done in 1.2 s
+ *   └─ [✓] Done in 4.8 s
  *
  * The windows' console output is logged too (see logHandlers.js), marked with
  * the window it came from: "[Item Editor] Saved item ...".
@@ -45,8 +45,8 @@ function currentSectionFrom(section) {
 const LABELS = { warn: "Warning: ", error: "Error: " }
 
 /** How steps end (plain Unicode symbols, not emoji) */
-const DONE = "✓"
-const FAILED = "✗"
+const DONE = "[✓]"
+const FAILED = "[✗]"
 
 /** How objects in log messages are printed */
 const INSPECT_OPTIONS = {
@@ -64,7 +64,7 @@ const MAX_FILE_BYTES = 5 * 1024 * 1024
 
 const MAX_LOG_FILES = 10
 
-/** How long since `start`, for "✓ Done in ..." lines */
+/** How long since `start`, for "[✓] Done in ..." lines */
 function elapsed(start) {
     const ms = Date.now() - start
     return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`
@@ -92,7 +92,7 @@ function formatText(args) {
 function formatLine(level, args, section = currentSection()) {
     const text = formatText(args)
     const depth = section?.depth ?? 0
-    // No label on how steps end ("✓ Done in", "✗ ... failed after"), or when
+    // No label on how steps end ("[✓] Done in", "[✗] ... failed after"), or when
     // the text already says it ("Error: ENOENT ...", "Warning ...")
     const label =
         section?.closing ||
@@ -372,10 +372,10 @@ class Logger {
 
     /**
      * Run `fn` as a step: its title is logged, everything logged while it
-     * runs is drawn as a tree under it, and it ends with "✓ Done in ..." or,
+     * runs is drawn as a tree under it, and it ends with "[✓] Done in ..." or,
      * when it throws or returns { success: false, error }, with
-     * "✗ Failed after ...: <reason>" (thrown errors are re-thrown). A step
-     * that logs nothing is one line: "✓ <title> in ...".
+     * "[✗] Failed after ...: <reason>" (thrown errors are re-thrown). A step
+     * that logs nothing is one line: "[✓] <title> in ...".
      * @param {string} title
      * @param {() => any} fn
      * @param {{buffered?: boolean}} [options] - buffered: for steps that run

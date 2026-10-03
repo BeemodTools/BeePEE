@@ -263,7 +263,7 @@ Standard editor windows use `width: 960, height: 1024` in `backend/items/itemEdi
 ### Logging
 
 - **Logger** (`backend/utils/logger.js`): all `console.*` output of the main process goes through it, as plain text (no emojis), to the terminal and `userData/logs/beepee-<time>.log` (Help > Open Logs Folder). Warnings and errors get a `Warning: ` / `Error: ` label automatically.
-- **Steps drawn as a tree**: wrap multi-step work in `await logger.section("Model generation for \"X\"", async () => {...})`. Everything logged while it runs (also in the functions it calls, across awaits) is drawn under the title with `├─ │ └─`, and the step ends with `✓ Done in 1.2 s` or `✗ Failed after 1.2 s: <reason>` and a spacer line (thrown errors are re-thrown; returning `{ success: false, error }` also counts as failed). Steps run in parallel (`Promise.all`) use `{ buffered: true }`, so each keeps its lines together, in the order they started. Don't wrap code that leaves timers or listeners running.
+- **Steps drawn as a tree**: wrap multi-step work in `await logger.section("Model generation for \"X\"", async () => {...})`. Everything logged while it runs (also in the functions it calls, across awaits) is drawn under the title with `├─ │ └─`, and the step ends with `[✓] Done in 1.2 s` or `[✗] Failed after 1.2 s: <reason>` and a spacer line (thrown errors are re-thrown; returning `{ success: false, error }` also counts as failed). Steps run in parallel (`Promise.all`) use `{ buffered: true }`, so each keeps its lines together, in the order they started. Don't wrap code that leaves timers or listeners running.
 - **Windows' logs**: `src/utils/logForwarding.js` (imported first in `src/main.jsx`) sends each window's console output and uncaught errors over `renderer:log` to `backend/handlers/logHandlers.js`, which logs them as `[Item Editor] ...` (the window name comes from its `?route=`).
 - **Keeping logs small**: log one summary line with counts instead of a line per file, use `logger.debug` for per-file detail (only written in development or with verbose logging), and never dump whole objects. The logger also cuts messages at 4000 characters, writes a line repeated many times in a row once with a count, continues in a new file after 5 MB and keeps the 10 newest files.
 
@@ -275,20 +275,20 @@ Model generation for "Better Floor Button" (BUTTON TYPE variants)
 ├─ Converting 3 instances to OBJ
 │  ├─ better_floor_button_0: instances/beepkg/better_floor_button/better_floor_button_0.vmf
 │  │  ├─ 41 brushes (6147 faces), 1 prop, 7 materials
-│  │  └─ ✓ Done in 645 ms
+│  │  └─ [✓] Done in 645 ms
 │  │
 │  ├─ Applied the cartoon style to 12 textures in 571 ms
-│  └─ ✓ Done in 2.4 s
+│  └─ [✓] Done in 2.4 s
 │
 ├─ Compiling 3 models
 │  ├─ Making better_floor_button_0.mdl
 │  │  ├─ Compiled better_floor_button_0.mdl with studiomdl
-│  │  └─ ✓ Done in 7.2 s
+│  │  └─ [✓] Done in 7.2 s
 │  │
-│  └─ ✓ Done in 7.2 s
+│  └─ [✓] Done in 7.2 s
 │
 ├─ Made 3 of 3 models, staged as 3 subtypes (applied on Save)
-└─ ✓ Done in 10.1 s
+└─ [✓] Done in 10.1 s
 ```
 
 ### React State Management
