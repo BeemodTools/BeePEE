@@ -201,6 +201,13 @@ contextBridge.exposeInMainWorld("package", {
             itemId,
             instanceIndex,
         }),
+    // Packs the custom files an instance uses that aren't in the package yet:
+    // { success, error, skipped, packed, custom, missingFiles, neededBy, fileName }
+    autopackInstanceAgain: (itemId, instanceIndex) =>
+        ipcRenderer.invoke("autopack-instance-again", {
+            itemId,
+            instanceIndex,
+        }),
     removeInstance: (itemId, instanceIndex) =>
         ipcRenderer.invoke("remove-instance", { itemId, instanceIndex }),
     getInstanceMetadata: (itemId, instanceIndex) =>

@@ -21,6 +21,7 @@ import {
     ListItem,
     ListItemIcon,
     ListItemText,
+    Snackbar,
 } from "@mui/material"
 import EditIcon from "@mui/icons-material/Edit"
 import DeleteIcon from "@mui/icons-material/Delete"
@@ -37,6 +38,7 @@ import ImageIcon from "@mui/icons-material/Image"
 import ViewInArIcon from "@mui/icons-material/ViewInAr"
 import MusicNoteIcon from "@mui/icons-material/MusicNote"
 import DescriptionIcon from "@mui/icons-material/Description"
+import RefreshIcon from "@mui/icons-material/Refresh"
 import { useState } from "react"
 import ViewInAr from "@mui/icons-material/ViewInAr"
 
@@ -58,6 +60,13 @@ function Instances({
         files: [], // Array of { fileName, missingAssets }
         pendingFiles: [], // Files to add after user acknowledges warning
         mode: "add", // "add": Add Anyway / Cancel, "replace": already replaced, OK
+    })
+    // Instances being autopacked again, and how the last one went
+    const [autopacking, setAutopacking] = useState(new Set())
+    const [autopackNotice, setAutopackNotice] = useState({
+        open: false,
+        severity: "success",
+        text: "",
     })
 
     // Convert formData instances to array format for rendering
@@ -208,6 +217,75 @@ function Instances({
         }
     }
 
+    // Show the files an instance uses that aren't on this machine (after
+    // it was replaced or autopacked again: nothing to cancel)
+    const showMissingFiles = (fileName, missingFiles, neededBy) => {
+        setExternalAssetsDialog({
+            open: true,
+            files: [
+                {
+                    fileName,
+                    missingAssets: missingFiles.map((path) => ({
+                        type: assetType(path),
+                        path,
+                        neededBy: neededBy?.[path] ?? null,
+                    })),
+                },
+            ],
+            pendingFiles: [],
+            mode: "replace",
+        })
+    }
+
+    // Autopack an instance again: pack the custom files it uses that aren't
+    // in the package yet (new ones after editing it in Hammer, or ones that
+    // weren't found or mounted before)
+    const handleAutopackAgain = async (instanceIndex) => {
+        setAutopacking((prev) => new Set(prev).add(instanceIndex))
+        const notify = (severity, text) =>
+            setAutopackNotice({ open: true, severity, text })
+        try {
+            const result = await window.package.autopackInstanceAgain(
+                item.id,
+                instanceIndex,
+            )
+            if (result.skipped) {
+                notify("warning", "Portal 2 wasn't found, so nothing was packed")
+            } else if (!result.success) {
+                notify("error", `Autopacking failed: ${result.error}`)
+            } else if (result.packed > 0) {
+                const files = result.packed === 1 ? "file" : "files"
+                notify("success", `Packed ${result.packed} new ${files}`)
+            } else {
+                notify(
+                    "info",
+                    result.custom > 0
+                        ? "Nothing new to pack: its custom files are in the package"
+                        : "Nothing to pack: it only uses the game's files",
+                )
+            }
+            if (result.missingFiles?.length > 0) {
+                showMissingFiles(
+                    result.fileName,
+                    result.missingFiles,
+                    result.neededBy,
+                )
+            }
+        } catch (error) {
+            console.error(
+                `Failed to autopack instance ${instanceIndex} of item "${item?.name}" again:`,
+                error,
+            )
+            notify("error", `Autopacking failed: ${error.message}`)
+        } finally {
+            setAutopacking((prev) => {
+                const next = new Set(prev)
+                next.delete(instanceIndex)
+                return next
+            })
+        }
+    }
+
     const handleReplaceInstance = async (instanceIndex) => {
         try {
             const result = await window.package.replaceInstanceFileDialog(
@@ -234,21 +312,11 @@ function Instances({
 
                 // The replacement uses files that aren't on this machine
                 if (result.missingFiles?.length > 0) {
-                    setExternalAssetsDialog({
-                        open: true,
-                        files: [
-                            {
-                                fileName: result.fileName,
-                                missingAssets: result.missingFiles.map((path) => ({
-                                    type: assetType(path),
-                                    path,
-                                    neededBy: result.neededBy?.[path] ?? null,
-                                })),
-                            },
-                        ],
-                        pendingFiles: [],
-                        mode: "replace",
-                    })
+                    showMissingFiles(
+                        result.fileName,
+                        result.missingFiles,
+                        result.neededBy,
+                    )
                 }
             } else if (!result.canceled) {
                 console.error(
@@ -594,6 +662,42 @@ function Instances({
                                                 </span>
                                             </Tooltip>
 
+                                            {/* Pending instances are autopacked when the item is saved */}
+                                            {!isPending && (
+                                                <Tooltip
+                                                    title={
+                                                        isDisabled
+                                                            ? "Cannot autopack - file is missing"
+                                                            : "Autopack again: pack the custom files this instance uses that aren't in the package yet"
+                                                    }>
+                                                    <span>
+                                                        <IconButton
+                                                            size="small"
+                                                            onClick={() =>
+                                                                handleAutopackAgain(
+                                                                    instance.index,
+                                                                )
+                                                            }
+                                                            disabled={
+                                                                isDisabled ||
+                                                                autopacking.has(
+                                                                    instance.index,
+                                                                )
+                                                            }>
+                                                            {autopacking.has(
+                                                                instance.index,
+                                                            ) ? (
+                                                                <CircularProgress
+                                                                    size={16}
+                                                                />
+                                                            ) : (
+                                                                <RefreshIcon fontSize="small" />
+                                                            )}
+                                                        </IconButton>
+                                                    </span>
+                                                </Tooltip>
+                                            )}
+
                                             {!isVBSP && (
                                                 <Tooltip
                                                     title={
@@ -852,6 +956,24 @@ function Instances({
                     <Typography>Checking for external assets...</Typography>
                 </Box>
             </Dialog>
+
+            {/* How autopacking an instance again went */}
+            <Snackbar
+                open={autopackNotice.open}
+                autoHideDuration={5000}
+                onClose={() =>
+                    setAutopackNotice((notice) => ({ ...notice, open: false }))
+                }
+                anchorOrigin={{ vertical: "bottom", horizontal: "center" }}>
+                <Alert
+                    severity={autopackNotice.severity}
+                    variant="filled"
+                    onClose={() =>
+                        setAutopackNotice((notice) => ({ ...notice, open: false }))
+                    }>
+                    {autopackNotice.text}
+                </Alert>
+            </Snackbar>
         </Box>
     )
 }

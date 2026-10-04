@@ -477,6 +477,61 @@ function register(ipcMain, mainWindow) {
         },
     )
 
+    // Autopack an instance again: pack the custom files it uses that aren't
+    // in the package yet (new ones after editing it, or ones that weren't
+    // found or mounted before). Files already in the package are kept.
+    ipcMain.handle(
+        "autopack-instance-again",
+        async (event, { itemId, instanceIndex }) => {
+            try {
+                const item = packages
+                    .flatMap((p) => p.items)
+                    .find((i) => i.id === itemId)
+                if (!item) {
+                    throw new Error("Item not found")
+                }
+                const instanceData = item.instances[instanceIndex]
+                if (!instanceData) {
+                    throw new Error(`Instance ${instanceIndex} not found`)
+                }
+                const vmfPath = Instance.getCleanPath(
+                    item.packagePath,
+                    fixInstancePath(instanceData.Name),
+                )
+                if (!fs.existsSync(vmfPath)) {
+                    throw new Error("The instance's VMF file doesn't exist")
+                }
+
+                const { autopackInstance } = require("../utils/autopacker")
+                const result = await autopackInstance(
+                    vmfPath,
+                    item.packagePath,
+                    item.name,
+                )
+                const packed = result.packedFiles?.length ?? 0
+                // The package has new files its .bpee doesn't
+                if (packed > 0) global.titleManager?.setUnsavedChanges(true)
+
+                return {
+                    success: result.success,
+                    error: result.error ?? null,
+                    skipped: result.skipped === true,
+                    packed,
+                    custom: result.totalAssets ?? 0,
+                    missingFiles: result.missingFiles ?? [],
+                    neededBy: result.neededBy ?? {},
+                    fileName: path.basename(instanceData.Name),
+                }
+            } catch (error) {
+                console.error(
+                    `Failed to autopack instance ${instanceIndex} again:`,
+                    error,
+                )
+                return { success: false, error: error.message }
+            }
+        },
+    )
+
     // Remove instance
     ipcMain.handle(
         "remove-instance",
