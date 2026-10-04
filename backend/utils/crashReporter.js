@@ -12,10 +12,28 @@ const MAX_LOG_LINES = 500 // Only upload last 500 lines
 const MAX_PACKAGE_SIZE = 50 * 1024 * 1024 // 50MB
 const REQUEST_TIMEOUT = 30000 // 30 seconds
 
-/** What the user's folder name in a path becomes in a report */
+/** What the user's and the PC's names become in a report */
 const USER = "<user>"
+const PC = "<pc>"
 
-/** Files of the package read to take the user's name out: up to this big */
+/**
+ * Account and PC names many people have: they don't say who the user is, and
+ * replacing them as words would garble the logs ("run as admin")
+ */
+const GENERIC_NAMES = new Set([
+    "user",
+    "users",
+    "admin",
+    "administrator",
+    "owner",
+    "default",
+    "public",
+    "guest",
+    "pc",
+    "home",
+])
+
+/** Files of the package read to take personal details out: up to this big */
 const MAX_REDACT_BYTES = 10 * 1024 * 1024
 
 function escapeRegExp(text) {
@@ -43,15 +61,45 @@ function userFolderNames() {
     return [...names]
 }
 
+/** The names this PC goes by (Dropbox's folder has it: "My PC (<name>)") */
+function pcNames() {
+    const names = new Set()
+    for (const value of [os.hostname(), process.env.COMPUTERNAME]) {
+        if (!value) continue
+        names.add(value)
+        // "jane-laptop.local": "jane-laptop" too
+        names.add(value.split(".")[0])
+    }
+    return [...names]
+}
+
+/** Whether a name says who the user is, so it's taken out where it's a word */
+function isPersonal(name) {
+    return name.length > 2 && !GENERIC_NAMES.has(name.toLowerCase())
+}
+
+/** `name` as a whole word (not part of a longer one), in any case */
+function wholeWord(name) {
+    return new RegExp(
+        String.raw`(?<![\w-])` + escapeRegExp(name) + String.raw`(?![\w-])`,
+        "gi",
+    )
+}
+
 /**
- * Take the user's name out of the paths in a report's text: "C:\Users\Jane\
- * Desktop" becomes "C:\Users\<user>\Desktop", with any slashes (also as
- * escaped in JSON) and in any case. Other users' folders too, and the home
- * folders of Linux and macOS (/home/<name>, /Users/<name>).
+ * Take personal details out of a report's text:
+ * - the user's name in paths: "C:\Users\Jane\Desktop" becomes
+ *   "C:\Users\<user>\Desktop", with any slashes (also as escaped in JSON)
+ *   and in any case. Other users' folders too, and the home folders of Linux
+ *   and macOS (/home/<name>, /Users/<name>).
+ * - the account's and the PC's names anywhere else (<user>, <pc>), unless
+ *   they're names many people have, like "admin"
+ * - Steam IDs (<steamid>), email addresses (<email>) and the organization in
+ *   a OneDrive folder's name (<org>)
  * @param {string} text
  * @returns {string}
  */
-function redactUserName(text) {
+function redactPersonalInfo(text) {
     if (!text) return text
     let redacted = String(text)
     // This user's folder, whole even when its name has spaces
@@ -73,11 +121,26 @@ function redactUserName(text) {
         /((?:^|[^\w.])\/(?:Users|home)\/)(?!<user>)[^/"'<>|:*?\s]+/gm,
         `$1${USER}`,
     )
-    return redacted
+    // The names anywhere else
+    for (const name of userFolderNames().filter(isPersonal)) {
+        redacted = redacted.replace(wholeWord(name), USER)
+    }
+    for (const name of pcNames().filter(isPersonal)) {
+        redacted = redacted.replace(wholeWord(name), PC)
+    }
+    return (
+        redacted
+            // Steam accounts: 64-bit IDs (also PeTI's puzzles folders), and
+            // the account folders in Steam's userdata
+            .replace(/\b7656119\d{10}\b/g, "<steamid>")
+            .replace(/(userdata[\\/]+)\d{3,}/gi, "$1<steamid>")
+            .replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)*\.[a-z]{2,}\b/gi, "<email>")
+            .replace(/(OneDrive - )[^\\/\r\n"]+/g, "$1<org>")
+    )
 }
 
 /**
- * Take the user's name out of the text files in a folder (paths in JSON
+ * Take personal details out of the text files in a folder (paths in JSON
  * stamps, logs, configs). Binary files are left as they are. Read and
  * written byte for byte (latin1), so other text isn't changed.
  * @param {string} folder
@@ -96,7 +159,7 @@ function redactFolder(folder) {
         // Text has no NUL bytes
         if (data.subarray(0, 8000).includes(0)) continue
         const text = data.toString("latin1")
-        const redacted = redactUserName(text)
+        const redacted = redactPersonalInfo(text)
         if (redacted !== text) fs.writeFileSync(file, redacted, "latin1")
     }
 }
@@ -156,8 +219,8 @@ function getDirectorySize(dirPath) {
 }
 
 /**
- * Create a temporary .bpee ZIP of the current package, from a copy with the
- * user's name taken out of its files' paths
+ * Create a temporary .bpee ZIP of the current package, from a copy with
+ * personal details taken out of its files
  * @returns {Promise<{filePath: string|null, skipped: boolean, reason?: string}>}
  */
 async function createTempPackageZip() {
@@ -215,8 +278,8 @@ async function submitCrashReport({ userDescription, errorDetails, contact }) {
         let tempBpeePath = null
 
         try {
-            // Collect all report data, without the user's name in paths
-            const logs = redactUserName(collectLogs())
+            // Collect all report data, without personal details
+            const logs = redactPersonalInfo(collectLogs())
             const packageJson = require("../../package.json")
 
             const packageResult = await createTempPackageZip()
@@ -227,12 +290,12 @@ async function submitCrashReport({ userDescription, errorDetails, contact }) {
             formData.append("logs", logs)
             formData.append(
                 "userDescription",
-                redactUserName(userDescription || ""),
+                redactPersonalInfo(userDescription || ""),
             )
             formData.append("contact", (contact || "").trim())
             formData.append(
                 "errorDetails",
-                redactUserName(JSON.stringify(errorDetails || null)),
+                redactPersonalInfo(JSON.stringify(errorDetails || null)),
             )
             formData.append("appVersion", packageJson.version)
             formData.append("channel", isBeta() ? "beta" : "stable")
@@ -247,7 +310,7 @@ async function submitCrashReport({ userDescription, errorDetails, contact }) {
                 )
                 formData.append(
                     "packageSkipped",
-                    redactUserName(packageResult.reason),
+                    redactPersonalInfo(packageResult.reason),
                 )
             }
 
@@ -322,6 +385,6 @@ async function submitCrashReport({ userDescription, errorDetails, contact }) {
 module.exports = {
     submitCrashReport,
     collectLogs,
-    redactUserName,
+    redactPersonalInfo,
     redactFolder,
 }
