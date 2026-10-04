@@ -200,6 +200,61 @@ describe("logger sections", () => {
         ])
     })
 
+    test("names a step again where its tree goes on after other lines", async () => {
+        let finishUpdate
+        const update = logger.section("Checking for updates", async () => {
+            log("info", "Checking for update")
+            await new Promise((resolve) => (finishUpdate = resolve))
+            log("info", "No update")
+        })
+        await logger.section("Loading package", async () => {
+            log("info", "Loaded 1 item")
+        })
+        log("info", "[Main window] Loaded item list")
+        finishUpdate()
+        await update
+        expect(withoutTimes()).toEqual([
+            "Checking for updates",
+            "├─ Checking for update",
+            "Loading package",
+            "├─ Loaded 1 item",
+            "└─ [✓] Done in <time>",
+            "",
+            "[Main window] Loaded item list",
+            "Checking for updates (continued)",
+            "├─ No update",
+            "└─ [✓] Done in <time>",
+            "",
+        ])
+    })
+
+    test("names every step a continued line is in", async () => {
+        let resume
+        const making = logger.section("Making model", async () => {
+            await logger.section("Compiling MDL", async () => {
+                log("info", "studiomdl started")
+                await new Promise((resolve) => (resume = resolve))
+                log("info", "studiomdl finished")
+            })
+        })
+        log("info", "[Item Editor] Saved item")
+        resume()
+        await making
+        expect(withoutTimes()).toEqual([
+            "Making model",
+            "├─ Compiling MDL",
+            "│  ├─ studiomdl started",
+            "[Item Editor] Saved item",
+            "Making model (continued)",
+            "├─ Compiling MDL (continued)",
+            "│  ├─ studiomdl finished",
+            "│  └─ [✓] Done in <time>",
+            "│",
+            "└─ [✓] Done in <time>",
+            "",
+        ])
+    })
+
     test("cuts very long messages short", () => {
         const line = formatLine("info", ["x".repeat(5000)])
         expect(line).toMatch(/^x{4000}\.\.\. \(1000 more characters\)$/)

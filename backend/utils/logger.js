@@ -15,6 +15,10 @@ const { app } = require("electron")
  *   │  └─ [✓] Done in 1.2 s
  *   └─ [✓] Done in 4.8 s
  *
+ * Steps that run at the same time (an update check while a package loads)
+ * take turns in the log: when a step's tree goes on after lines of others,
+ * the titles of the steps the line is in come again, marked "(continued)".
+ *
  * The windows' console output is logged too (see logHandlers.js), marked with
  * the window it came from: "[Item Editor] Saved item ...".
  *
@@ -25,7 +29,7 @@ const { app } = require("electron")
  */
 
 /**
- * The section code runs in: { depth, closing, closed, buffer, parent }.
+ * The section code runs in: { name, depth, closing, closed, buffer, parent }.
  * Work a section starts (timers, events) keeps its section, even after the
  * section ended, so lines are logged in the innermost section still running.
  */
@@ -40,6 +44,19 @@ function currentSection() {
 function currentSectionFrom(section) {
     while (section?.closed) section = section.parent
     return section ?? null
+}
+
+/** The step at the top of the tree `section` is in (null: none) */
+function topOf(section) {
+    while (section?.parent) section = section.parent
+    return section ?? null
+}
+
+/** `section` and the sections around it, outermost first */
+function stepsTo(section) {
+    const steps = []
+    for (let s = section; s; s = s.parent) steps.unshift(s)
+    return steps
 }
 
 const LABELS = { warn: "Warning: ", error: "Error: " }
@@ -271,7 +288,7 @@ class Logger {
         const section = currentSection()
         const line = formatLine(level, args, section)
         this.route(
-            { level, line, consoleMethod, time: timestamp() },
+            { level, line, consoleMethod, time: timestamp(), in: section },
             section?.buffer ?? null,
             section,
         )
@@ -288,7 +305,7 @@ class Logger {
     route(entry, buffer, section = null) {
         this.writeTitles(section)
         if (buffer) buffer.push(entry)
-        else this.emit(entry)
+        else this.write(entry)
     }
 
     /**
@@ -305,8 +322,33 @@ class Logger {
             // Stamped now, so the log's times keep going forward
             title.time = timestamp()
             if (s.buffer) s.buffer.push(title)
-            else this.emit(title)
+            else this.write(title)
         }
+    }
+
+    /**
+     * Write an entry now. When it goes on a step's tree after lines of other
+     * trees (steps running at the same time, lines outside steps), the
+     * titles of the steps it's in come first again, marked "(continued)",
+     * so it isn't read as part of what's above it.
+     * @param {Object} entry - in: the section the line is drawn in; opens:
+     *   the step whose title it is
+     */
+    write(entry) {
+        const tree = topOf(entry.opens ?? entry.in)
+        if (tree && tree !== this.lastTree && entry.opens !== tree) {
+            for (const step of stepsTo(entry.in)) {
+                const title = `${step.name} (continued)`
+                this.emit({
+                    level: "info",
+                    line: formatLine("info", [title], step.parent),
+                    consoleMethod: entry.consoleMethod && "log",
+                    time: entry.time,
+                })
+            }
+        }
+        this.lastTree = tree
+        this.emit(entry)
     }
 
     /**
@@ -391,21 +433,30 @@ class Logger {
             this.blocksOf(parent).push(block)
         }
         const buffer = block ? block.entries : (parent?.buffer ?? null)
-        const entry = (level, line) => ({
+        // in: the section the line is drawn in (see write)
+        const entry = (level, line, drawnIn, opens = null) => ({
             level,
             line,
             consoleMethod: level === "error" ? "error" : "log",
             time: timestamp(),
+            in: drawnIn,
+            opens,
         })
         const store = {
+            name: title,
             depth: (parent?.depth ?? 0) + 1,
             closing: false,
             closed: false,
             buffer,
             parent,
-            // Written with the step's first line (see writeTitles)
-            title: entry("info", formatLine("info", [title], parent)),
         }
+        // Written with the step's first line (see writeTitles)
+        store.title = entry(
+            "info",
+            formatLine("info", [title], parent),
+            parent,
+            store,
+        )
         const close = (failed, text) => {
             const level = failed ? "error" : "info"
             const mark = failed ? FAILED : DONE
@@ -414,7 +465,7 @@ class Logger {
                 store.title = null
                 const line = `${mark} ${title} ${text}`
                 this.route(
-                    entry(level, formatLine(level, [line], parent)),
+                    entry(level, formatLine(level, [line], parent), parent),
                     buffer,
                     parent,
                 )
@@ -424,7 +475,7 @@ class Logger {
                     ...store,
                     closing: true,
                 })
-                this.route(entry(level, line), buffer)
+                this.route(entry(level, line, store), buffer)
             }
         }
 
