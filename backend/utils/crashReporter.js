@@ -12,6 +12,95 @@ const MAX_LOG_LINES = 500 // Only upload last 500 lines
 const MAX_PACKAGE_SIZE = 50 * 1024 * 1024 // 50MB
 const REQUEST_TIMEOUT = 30000 // 30 seconds
 
+/** What the user's folder name in a path becomes in a report */
+const USER = "<user>"
+
+/** Files of the package read to take the user's name out: up to this big */
+const MAX_REDACT_BYTES = 10 * 1024 * 1024
+
+function escapeRegExp(text) {
+    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+}
+
+/**
+ * The names this user's folder can have in paths: the home folder's
+ * (C:\Users\<name>) and the account's
+ */
+function userFolderNames() {
+    const names = new Set()
+    const add = (value) => {
+        const name = value ? path.basename(String(value)) : ""
+        if (name.length > 1) names.add(name)
+    }
+    add(os.homedir())
+    add(process.env.USERPROFILE)
+    add(process.env.USERNAME)
+    try {
+        add(os.userInfo().username)
+    } catch {
+        // No account info on this system
+    }
+    return [...names]
+}
+
+/**
+ * Take the user's name out of the paths in a report's text: "C:\Users\Jane\
+ * Desktop" becomes "C:\Users\<user>\Desktop", with any slashes (also as
+ * escaped in JSON) and in any case. Other users' folders too, and the home
+ * folders of Linux and macOS (/home/<name>, /Users/<name>).
+ * @param {string} text
+ * @returns {string}
+ */
+function redactUserName(text) {
+    if (!text) return text
+    let redacted = String(text)
+    // This user's folder, whole even when its name has spaces
+    for (const name of userFolderNames()) {
+        const folder = new RegExp(
+            String.raw`(\b[A-Za-z]:[\\/]+Users[\\/]+|/(?:Users|home)/)` +
+                escapeRegExp(name) +
+                String.raw`(?=[\\/"'\s:]|$)`,
+            "gi",
+        )
+        redacted = redacted.replace(folder, `$1${USER}`)
+    }
+    // Anyone else's, up to the next separator (short names like JANE~1 too)
+    redacted = redacted.replace(
+        /(\b[A-Za-z]:[\\/]+Users[\\/]+)(?!<user>)[^\\/"'<>|:*?\s]+/gi,
+        `$1${USER}`,
+    )
+    redacted = redacted.replace(
+        /((?:^|[^\w.])\/(?:Users|home)\/)(?!<user>)[^/"'<>|:*?\s]+/gm,
+        `$1${USER}`,
+    )
+    return redacted
+}
+
+/**
+ * Take the user's name out of the text files in a folder (paths in JSON
+ * stamps, logs, configs). Binary files are left as they are. Read and
+ * written byte for byte (latin1), so other text isn't changed.
+ * @param {string} folder
+ */
+function redactFolder(folder) {
+    for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+        const file = path.join(folder, entry.name)
+        if (entry.isDirectory()) {
+            redactFolder(file)
+            continue
+        }
+        if (!entry.isFile() || fs.statSync(file).size > MAX_REDACT_BYTES) {
+            continue
+        }
+        const data = fs.readFileSync(file)
+        // Text has no NUL bytes
+        if (data.subarray(0, 8000).includes(0)) continue
+        const text = data.toString("latin1")
+        const redacted = redactUserName(text)
+        if (redacted !== text) fs.writeFileSync(file, redacted, "latin1")
+    }
+}
+
 /**
  * Read the current log file, capped at MAX_LOG_LINES from the end
  * @returns {string} Log contents
@@ -67,7 +156,8 @@ function getDirectorySize(dirPath) {
 }
 
 /**
- * Create a temporary .bpee ZIP of the current package
+ * Create a temporary .bpee ZIP of the current package, from a copy with the
+ * user's name taken out of its files' paths
  * @returns {Promise<{filePath: string|null, skipped: boolean, reason?: string}>}
  */
 async function createTempPackageZip() {
@@ -87,11 +177,16 @@ async function createTempPackageZip() {
             }
         }
 
-        const tempPath = path.join(
-            app.getPath("temp"),
-            `beepee-crash-report-${Date.now()}.bpee`,
-        )
-        await savePackageAsBpee(packageDir, tempPath)
+        const name = `beepee-crash-report-${Date.now()}`
+        const tempPath = path.join(app.getPath("temp"), `${name}.bpee`)
+        const copy = path.join(app.getPath("temp"), name)
+        try {
+            fs.cpSync(packageDir, copy, { recursive: true })
+            redactFolder(copy)
+            await savePackageAsBpee(copy, tempPath)
+        } finally {
+            fs.rmSync(copy, { recursive: true, force: true })
+        }
         return { filePath: tempPath, skipped: false }
     } catch (err) {
         return {
@@ -120,8 +215,8 @@ async function submitCrashReport({ userDescription, errorDetails, contact }) {
         let tempBpeePath = null
 
         try {
-            // Collect all report data
-            const logs = collectLogs()
+            // Collect all report data, without the user's name in paths
+            const logs = redactUserName(collectLogs())
             const packageJson = require("../../package.json")
 
             const packageResult = await createTempPackageZip()
@@ -130,11 +225,14 @@ async function submitCrashReport({ userDescription, errorDetails, contact }) {
             // Build FormData
             const formData = new FormData()
             formData.append("logs", logs)
-            formData.append("userDescription", userDescription || "")
+            formData.append(
+                "userDescription",
+                redactUserName(userDescription || ""),
+            )
             formData.append("contact", (contact || "").trim())
             formData.append(
                 "errorDetails",
-                JSON.stringify(errorDetails || null),
+                redactUserName(JSON.stringify(errorDetails || null)),
             )
             formData.append("appVersion", packageJson.version)
             formData.append("channel", isBeta() ? "beta" : "stable")
@@ -147,7 +245,10 @@ async function submitCrashReport({ userDescription, errorDetails, contact }) {
                 console.log(
                     `Skipped attaching the package: ${packageResult.reason}`,
                 )
-                formData.append("packageSkipped", packageResult.reason)
+                formData.append(
+                    "packageSkipped",
+                    redactUserName(packageResult.reason),
+                )
             }
 
             // Attach .bpee file if available
@@ -218,4 +319,9 @@ async function submitCrashReport({ userDescription, errorDetails, contact }) {
     })
 }
 
-module.exports = { submitCrashReport, collectLogs }
+module.exports = {
+    submitCrashReport,
+    collectLogs,
+    redactUserName,
+    redactFolder,
+}

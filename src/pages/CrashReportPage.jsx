@@ -238,7 +238,7 @@ export default function CrashReportPage() {
                     variant="caption"
                     sx={{ color: "rgba(255,255,255,0.5)" }}
                 >
-                    Please be as descriptive as possible - it helps a lot! Your logs and current package will be included automatically.
+                    Please be as descriptive as possible - it helps a lot! Your logs and current package will be included automatically (with your user name taken out of file paths).
                 </Typography>
 
                 {/* Submission result feedback */}
