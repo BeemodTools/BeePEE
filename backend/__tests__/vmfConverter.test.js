@@ -694,13 +694,21 @@ describe("convertVmf: empty results, model entities and tints", () => {
         expect(obj).not.toMatch(/error/)
         expect(
             readPngPixel(
-                path.join(root, "out", "materials", "bpee_colors", "bpee_gel_2.png"),
+                path.join(
+                    root,
+                    "out",
+                    "materials",
+                    "bpee_colors",
+                    "bpee_gel_2.png",
+                ),
                 0,
                 0,
             ),
         ).toEqual([255, 106, 0])
         // A ball around the entity's origin
-        const heights = [...obj.matchAll(/^v \S+ \S+ (\S+)$/gm)].map((m) => Number(m[1]))
+        const heights = [...obj.matchAll(/^v \S+ \S+ (\S+)$/gm)].map((m) =>
+            Number(m[1]),
+        )
         expect(Math.min(...heights)).toBeCloseTo(104)
         expect(Math.max(...heights)).toBeCloseTo(152)
     })
@@ -1256,7 +1264,10 @@ describe("convertVmf: glass and entities hidden at the start", () => {
 
     test("draws Refract glass see-through in its tint", () => {
         expect(
-            describeMaterial("refract", new Map([["refracttint", "{235 247 247}"]])),
+            describeMaterial(
+                "refract",
+                new Map([["refracttint", "{235 247 247}"]]),
+            ),
         ).toMatchObject({
             basetexture: null,
             translucent: true,
@@ -1278,7 +1289,9 @@ describe("convertVmf: glass and entities hidden at the start", () => {
         const png = fs.readFileSync(path.join(root, "out", texture[1]))
         // RGBA, partly see-through (the alpha is the 4th byte of the pixel)
         expect(png[25]).toBe(6)
-        const raw = zlib.inflateSync(png.subarray(41, 41 + png.readUInt32BE(33)))
+        const raw = zlib.inflateSync(
+            png.subarray(41, 41 + png.readUInt32BE(33)),
+        )
         expect(raw[1 + 3]).toBeGreaterThan(0)
         expect(raw[1 + 3]).toBeLessThan(255)
     })
@@ -1321,7 +1334,9 @@ describe("convertVmf: glass and entities hidden at the start", () => {
         )
         expect(result.stats.faces).toBe(6)
         expect(result.stats.toolFaces).toBe(6)
-        expect(fs.readFileSync(result.objPath, "utf8")).not.toMatch(/dev_measure/i)
+        expect(fs.readFileSync(result.objPath, "utf8")).not.toMatch(
+            /dev_measure/i,
+        )
     })
 
     test("leaves out entities that can't be seen at the start", async () => {
@@ -1342,5 +1357,70 @@ describe("convertVmf: glass and entities hidden at the start", () => {
         expect(result.stats.faces).toBe(12)
         expect(result.stats.hiddenEntities).toBe(4)
         expect(result.stats.modelEntities).toBe(0)
+    })
+})
+
+describe("weighted cubes", () => {
+    // modelOf doesn't need a session
+    const converter = Object.create(VmfConverter.prototype)
+    const cube = (keyvalues) =>
+        converter.modelOf(
+            parseVmf(
+                `entity { "id" "1" "classname" "prop_weighted_cube" ${keyvalues} }`,
+            ).entities[0],
+        )
+
+    test("pick their model by cube type, not the model shown in Hammer", () => {
+        expect(
+            cube(
+                `"model" "models/props/cubes/standard_cube_rusty.mdl" "skintype" "0" "newskins" "2"`,
+            ),
+        ).toEqual({ path: "models/props/metal_box.mdl", skin: 0 })
+        expect(
+            cube(`"CubeType" "2" "model" "models/props/metal_box.mdl"`),
+        ).toEqual({
+            path: "models/props/reflection_cube.mdl",
+            skin: 0,
+        })
+    })
+
+    test("are rusted by their skin type, where the cube has a rusted skin", () => {
+        expect(cube(`"CubeType" "0" "SkinType" "1"`)).toEqual({
+            path: "models/props/metal_box.mdl",
+            skin: 3,
+        })
+        expect(cube(`"CubeType" "2" "SkinType" "1"`)).toEqual({
+            path: "models/props/reflection_cube.mdl",
+            skin: 1,
+        })
+        // No rusted companion cube
+        expect(cube(`"CubeType" "1" "SkinType" "1"`)).toEqual({
+            path: "models/props/metal_box.mdl",
+            skin: 1,
+        })
+        // Older maps set the skin themselves
+        expect(cube(`"CubeType" "0" "SkinType" "1" "newskins" "0"`)).toEqual({
+            path: "models/props/metal_box.mdl",
+            skin: null,
+        })
+    })
+
+    test("use their model keyvalue when it's a custom model", () => {
+        expect(
+            cube(
+                `"CubeType" "6" "model" "models/BEE2/cube_color/clean_standard.mdl"`,
+            ),
+        ).toEqual({
+            path: "models/bee2/cube_color/clean_standard.mdl",
+            skin: null,
+        })
+        expect(
+            cube(
+                `"comp_custom_model_type" "1" "model" "models/custom/cube.mdl"`,
+            ),
+        ).toEqual({
+            path: "models/custom/cube.mdl",
+            skin: null,
+        })
     })
 })

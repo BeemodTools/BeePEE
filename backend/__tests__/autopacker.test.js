@@ -529,3 +529,34 @@ describe("autopacking", () => {
         expect(again.packedFiles).toEqual([])
     })
 })
+
+describe("models only shown in Hammer", () => {
+    test("leaves out cubes' and turrets' Hammer models, keeps custom ones", () => {
+        const dir = fs.mkdtempSync(
+            path.join(os.tmpdir(), "beepee-hammer-models-"),
+        )
+        try {
+            const vmfPath = path.join(dir, "cubes.vmf")
+            fs.writeFileSync(
+                vmfPath,
+                [
+                    // Picks its model by its cube type (0): the model is stale
+                    `entity { "id" "1" "classname" "prop_weighted_cube" "model" "models/props/cubes/standard_cube_rusty.mdl" "skintype" "0" "newskins" "2" }`,
+                    `entity { "id" "2" "classname" "prop_weighted_cube" "CubeType" "6" "model" "models/custom/my_cube.mdl" }`,
+                    `entity { "id" "3" "classname" "prop_weighted_cube" "comp_custom_model_type" "1" "model" "models/custom/script_cube.mdl" }`,
+                    `entity { "id" "4" "classname" "npc_portal_turret_floor" "ModelIndex" "0" "model" "models/custom/unused_turret.mdl" }`,
+                    `entity { "id" "5" "classname" "npc_portal_turret_floor" "ModelIndex" "1" "model" "models/custom/my_turret.mdl" }`,
+                    `entity { "id" "6" "classname" "prop_dynamic" "model" "models/custom/prop.mdl" }`,
+                ].join("\n"),
+            )
+            expect(extractAssetsFromVMF(vmfPath).MODEL).toEqual([
+                "models/custom/my_cube.mdl",
+                "models/custom/my_turret.mdl",
+                "models/custom/prop.mdl",
+                "models/custom/script_cube.mdl",
+            ])
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true })
+        }
+    })
+})

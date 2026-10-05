@@ -101,11 +101,14 @@ const TURRET_MODELS = {
     4: "models/npcs/turret/turret_skeleton.mdl",
 }
 
-/** prop_weighted_cube's model (and skin) by its "CubeType" */
+/**
+ * prop_weighted_cube's model (and skin) by its "CubeType". Storage and
+ * reflection cubes have a rusted skin, for "SkinType" 1.
+ */
 const CUBE_TYPES = [
-    { path: "models/props/metal_box.mdl", skin: 0 }, // storage cube
+    { path: "models/props/metal_box.mdl", skin: 0, rustedSkin: 3 }, // storage cube
     { path: "models/props/metal_box.mdl", skin: 1 }, // companion cube
-    { path: "models/props/reflection_cube.mdl", skin: 0 },
+    { path: "models/props/reflection_cube.mdl", skin: 0, rustedSkin: 1 },
     { path: "models/props_gameplay/mp_ball.mdl", skin: 0 }, // edgeless safety cube
     { path: "models/props_underground/underground_weighted_cube.mdl", skin: 0 },
 ]
@@ -1114,12 +1117,31 @@ class VmfConverter {
                 skin: Number.parseInt(entity.get("skinnumber") ?? "0", 10) || 0,
             }
         }
+        if (classname === "prop_weighted_cube") {
+            // The cube type picks the model and the skin type the rusted
+            // skin, like the game does. The "model" keyvalue is only shown in
+            // Hammer, unless the cube has a custom model (cube type 6, or a
+            // HammerAddons custom model type).
+            const type = Number.parseInt(entity.get("cubetype") ?? "0", 10)
+            const customType = Number.parseInt(
+                entity.get("comp_custom_model_type") ?? "0",
+                10,
+            )
+            const custom = entity.get("model")
+            if ((type === 6 || customType > 0) && custom) {
+                return { path: normalizeContentPath(custom), skin: null }
+            }
+            const cube = CUBE_TYPES[type] ?? CUBE_TYPES[0]
+            // Older maps ("newskins" 0) set the skin themselves
+            if (entity.get("newskins") === "0") {
+                return { path: cube.path, skin: null }
+            }
+            const rusted =
+                entity.get("skintype") === "1" && cube.rustedSkin !== undefined
+            return { path: cube.path, skin: rusted ? cube.rustedSkin : cube.skin }
+        }
         const model = entity.get("model")
         if (model) return { path: normalizeContentPath(model), skin: null }
-        if (classname === "prop_weighted_cube") {
-            const type = Number.parseInt(entity.get("cubetype") ?? "0", 10)
-            return CUBE_TYPES[type] ?? CUBE_TYPES[0]
-        }
         const builtIn = BUILT_IN_MODELS[classname]
         return builtIn ? { path: builtIn, skin: null } : null
     }

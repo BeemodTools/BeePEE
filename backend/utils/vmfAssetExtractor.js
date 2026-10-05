@@ -53,6 +53,27 @@ function cleanValue(value) {
 const slashes = (value) => value.replace(/\\/g, "/").toLowerCase()
 
 /**
+ * Whether an entity's "model" keyvalue is the model it has in game. Weighted
+ * cubes and floor turrets pick theirs by their type: their "model" is only
+ * shown in Hammer, unless they have a custom model (a cube's type 6 or
+ * HammerAddons custom model type, a turret's model index 1).
+ * @param {string} classname - Lowercase
+ * @param {Object<string, string>} keyvalues - By lowercase key
+ */
+function usesModelKeyvalue(classname, keyvalues) {
+    if (classname === "prop_weighted_cube") {
+        return (
+            keyvalues.cubetype === "6" ||
+            Number.parseInt(keyvalues.comp_custom_model_type ?? "0", 10) > 0
+        )
+    }
+    if (classname === "npc_portal_turret_floor") {
+        return keyvalues.modelindex === "1"
+    }
+    return true
+}
+
+/**
  * Extract the assets a VMF uses: the models, materials, sounds and scripts its
  * entities and brushes name
  * @param {string} vmfPath - Path to the VMF file
@@ -124,12 +145,18 @@ function extractAssetsFromVMF(vmfPath) {
                 leaves.find((c) => c.key.toLowerCase() === "classname")
                     ?.value ?? "",
             )
+            const keyvalues = Object.fromEntries(
+                leaves.map(({ key, value }) => [
+                    key.toLowerCase(),
+                    String(value ?? "").trim(),
+                ]),
+            )
             for (const { key, value } of leaves) {
                 const name = key.toLowerCase()
                 const text = cleanValue(value)
                 if (!text) continue
                 if (name === "model") {
-                    addModel(text)
+                    if (usesModelKeyvalue(classname, keyvalues)) addModel(text)
                 } else if (
                     MATERIAL_KEYS.has(name) ||
                     /^overlayname\d+$/.test(name)
