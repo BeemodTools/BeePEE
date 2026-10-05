@@ -2,6 +2,7 @@ import { Button, Box, Tooltip, Typography } from "@mui/material"
 import { Edit, Warning } from "@mui/icons-material"
 import { useState, useEffect, useMemo } from "react"
 import missingIcon from "../assets/missing.png"
+import { descriptionText } from "../utils/descriptionText"
 
 // Check what required fields are missing from an item
 function getMissingFields(item, hasIconError) {
@@ -22,18 +23,10 @@ function getMissingFields(item, hasIconError) {
         missing.push("Icon")
     }
 
-    // Check description (can be string or object with desc_ keys)
-    const desc = item.details?.Description
-    let hasDescription = false
-    if (desc) {
-        if (typeof desc === "string") {
-            hasDescription = desc.trim() !== ""
-        } else if (typeof desc === "object") {
-            hasDescription = Object.keys(desc)
-                .filter((key) => key.startsWith("desc_"))
-                .some((key) => desc[key] && desc[key].trim() !== "")
-        }
-    }
+    // Check description: properties.txt's, or info.txt's (for all styles)
+    const hasDescription =
+        descriptionText(item.details?.Description).trim() !== "" ||
+        descriptionText(item.infoDescription).trim() !== ""
     if (!hasDescription) {
         missing.push("Description")
     }

@@ -320,6 +320,8 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                         }}>
                         <Typography variant="body2" color="text.secondary">
                             Description
+                            {formData.descriptionSource === "info" &&
+                                " (from the package's info.txt, for all of the item's styles)"}
                         </Typography>
                         <IconButton
                             size="small"
@@ -365,6 +367,25 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                                 },
                             }}
                         />
+                    )}
+
+                    {/* info.txt's description (BEE2 shows it too) */}
+                    {formData.sharedDescription && (
+                        <Box sx={{ mt: 1 }}>
+                            <Typography
+                                variant="caption"
+                                color="text.secondary">
+                                BEE2 also shows this description, from the
+                                package's info.txt (for all of the item's
+                                styles):
+                            </Typography>
+                            <Typography
+                                variant="body2"
+                                color="text.secondary"
+                                sx={{ whiteSpace: "pre-wrap", mt: 0.5 }}>
+                                {formData.sharedDescription}
+                            </Typography>
+                        </Box>
                     )}
                 </Box>
 

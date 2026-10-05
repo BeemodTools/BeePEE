@@ -61,6 +61,45 @@ async function handleVTFConversion(
     }
 }
 
+/**
+ * A description as VDF JSON keeps it: a string, or with several lines,
+ * "desc_N" keys (properties.txt's and info.txt's repeated "" keys). A raw
+ * string containing newlines would produce invalid VDF on export, which
+ * hangs BEEmod on startup.
+ */
+function descriptionValue(description) {
+    if (typeof description !== "string" || !/\r?\n/.test(description)) {
+        return description
+    }
+    const lines = {}
+    description.split(/\r?\n/).forEach((line, index) => {
+        lines[`desc_${index}`] = line
+    })
+    return lines
+}
+
+/**
+ * Save the item's description in info.json, where info.txt's is: its "Item"
+ * block's "Description" (for all of its styles)
+ */
+function saveInfoDescription(packagePath, itemId, description) {
+    const infoPath = path.join(packagePath, "info.json")
+    const info = JSON.parse(fs.readFileSync(infoPath, "utf-8"))
+    const keyOf = (object, key) =>
+        Object.keys(object).find((k) => k.toLowerCase() === key.toLowerCase())
+    const itemsKey = keyOf(info, "Item")
+    const block = itemsKey
+        ? [info[itemsKey]]
+              .flat()
+              .find((each) => each && each[keyOf(each, "ID")] === itemId)
+        : null
+    if (!block) throw new Error(`info.json has no item ${itemId}`)
+    const value = descriptionValue(description)
+    block[keyOf(block, "Description") ?? "Description"] = value
+    fs.writeFileSync(infoPath, JSON.stringify(info, null, 4))
+    return value
+}
+
 async function saveItem(item) {
     // Get the item's editor items and properties files
     const editorItemsPath = path.join(item.fullItemPath, "editoritems.json")
@@ -116,17 +155,12 @@ async function saveItem(item) {
         ...item.details,
     }
 
-    // The editor sends Description as a plain (possibly multiline) string,
-    // but properties.txt stores multiline descriptions as repeated ""-keyed
-    // lines (loaded as desc_N keys). A raw string containing newlines would
-    // produce invalid VDF on export, which hangs BEEmod on startup.
-    const description = properties.Properties.Description
-    if (typeof description === "string" && /\r?\n/.test(description)) {
-        const descriptionLines = {}
-        description.split(/\r?\n/).forEach((line, index) => {
-            descriptionLines[`desc_${index}`] = line
-        })
-        properties.Properties.Description = descriptionLines
+    // The editor sends Description as a plain (possibly multiline) string
+    properties.Properties.Description = descriptionValue(
+        properties.Properties.Description,
+    )
+    if (properties.Properties.Description === undefined) {
+        delete properties.Properties.Description
     }
 
     // Handle staged icon if provided
@@ -246,9 +280,19 @@ async function saveItem(item) {
     }
 
     // Save the files
+    let infoDescription
     try {
         fs.writeFileSync(editorItemsPath, JSON.stringify(editorItems, null, 4))
         fs.writeFileSync(propertiesPath, JSON.stringify(properties, null, 4))
+        // The description the editor showed from info.txt
+        if (typeof item.infoDescription === "string") {
+            infoDescription = saveInfoDescription(
+                item.packagePath ||
+                    path.dirname(path.dirname(item.fullItemPath)),
+                item.id,
+                item.infoDescription,
+            )
+        }
 
         // Update metadata lastModified timestamp if item has metadata
         if (item.metadata) {
@@ -275,7 +319,7 @@ async function saveItem(item) {
         throw new Error(`Failed to write files: ${error.message}`)
     }
 
-    return { editorItems, properties }
+    return { editorItems, properties, infoDescription }
 }
 
 module.exports = { saveItem }

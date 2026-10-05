@@ -53,6 +53,41 @@ function instanceName(instance) {
     return typeof instance === "string" ? instance : getKey(instance, "Name")
 }
 
+/** Whether there's a file at the path */
+function isFile(file) {
+    try {
+        return fs.statSync(file).isFile()
+    } catch {
+        return false
+    }
+}
+
+/**
+ * An item's icon: properties' "Icon" (in resources/BEE2/items), or else
+ * editoritems' palette image. That's an icon BeePEE saved (in
+ * resources/BEE2/items, without its first folder, "palette/"), or the
+ * texture Portal 2's editor shows: a VTF in materials/models/props_map_editor.
+ */
+function iconPathOf(packagePath, properties, subType) {
+    const icon = properties?.Icon?.["0"]
+    if (icon) return path.join(packagePath, "resources/BEE2/items", icon)
+
+    const image = getKey(getKey(subType, "Palette"), "Image")
+    if (typeof image !== "string" || !image.trim()) return null
+    const imagePath = image.trim().replace(/\\/g, "/")
+    const saved = path.join(
+        packagePath,
+        "resources/BEE2/items",
+        imagePath.split("/").slice(1).join("/"),
+    )
+    const texture = path.join(
+        packagePath,
+        "resources/materials/models/props_map_editor",
+        `${imagePath.replace(/\.[^./]*$/, "")}.vtf`,
+    )
+    return !isFile(saved) && isFile(texture) ? texture : saved
+}
+
 /** "ITEM_PLACEMENT_HELPER" -> "Placement Helper" */
 function nameFromId(id) {
     return String(id ?? "")
@@ -176,27 +211,11 @@ class Item {
         }
 
         this.details = parsedProperties["Properties"]
+        // BEE2 shows two descriptions one after the other: info.txt's, for
+        // all of the item's styles, and properties.txt's (details)
+        this.infoDescription = getKey(itemJSON, "Description") ?? null
 
-        //Get icon
-        //Since the icon is only half :( we need to merge with full path
-        const iconPath = parsedProperties.Properties?.Icon?.["0"]
-        this.icon = iconPath
-            ? path.join(packagePath, "resources/BEE2/items", iconPath)
-            : null
-
-        if (!this.icon) {
-            //Icon isnt defined in properties, get it from editoritems
-            const rawIconPath = subType?.Palette?.Image
-            if (rawIconPath) {
-                // Remove "palette/" prefix and build full path
-                const cleanIconPath = rawIconPath.split("/").slice(1).join("/")
-                this.icon = path.join(
-                    packagePath,
-                    "resources/BEE2/items",
-                    cleanIconPath,
-                )
-            }
-        }
+        this.icon = iconPathOf(packagePath, parsedProperties.Properties, subType)
 
         this.itemFolder = folder.toLowerCase()
         this.fullItemPath = fullItemPath
@@ -511,31 +530,11 @@ class Item {
                 this.details = parsedProperties["Properties"]
 
                 // Update icon path
-                const iconPath = parsedProperties.Properties?.Icon?.["0"]
-                this.icon = iconPath
-                    ? path.join(
-                          this.packagePath,
-                          "resources/BEE2/items",
-                          iconPath,
-                      )
-                    : null
-
-                if (!this.icon) {
-                    // Icon isn't defined in properties, get it from editoritems
-                    const rawIconPath = subType?.Palette?.Image
-                    if (rawIconPath) {
-                        // Remove "palette/" prefix and build full path
-                        const cleanIconPath = rawIconPath
-                            .split("/")
-                            .slice(1)
-                            .join("/")
-                        this.icon = path.join(
-                            this.packagePath,
-                            "resources/BEE2/items",
-                            cleanIconPath,
-                        )
-                    }
-                }
+                this.icon = iconPathOf(
+                    this.packagePath,
+                    parsedProperties.Properties,
+                    subType,
+                )
             }
 
             // Also reload instances
@@ -2464,6 +2463,7 @@ class Item {
             name: this.name,
             movementHandle: this.movementHandle,
             details: this.details,
+            infoDescription: this.infoDescription,
             icon: this.icon,
             paths: this.paths,
             itemFolder: this.itemFolder,
@@ -2482,6 +2482,7 @@ class Item {
             name: this.name,
             movementHandle: this.movementHandle,
             details: this.details,
+            infoDescription: this.infoDescription,
             icon: this.icon,
             paths: this.paths,
             itemFolder: this.itemFolder,

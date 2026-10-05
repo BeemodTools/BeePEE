@@ -42,6 +42,7 @@ import Conditions from "./items/Conditions"
 import Other from "./items/Other"
 import Metadata from "./items/Metadata"
 import { useItemContext } from "../contexts/ItemContext"
+import { descriptionText } from "../utils/descriptionText"
 
 function ItemEditor() {
     const { item, reloadItem } = useItemContext()
@@ -172,6 +173,11 @@ function ItemEditor() {
         name: "",
         author: "",
         description: "",
+        // Where the description is saved: "properties" (properties.txt, for
+        // this style) or "info" (info.txt, for all the item's styles)
+        descriptionSource: "properties",
+        // info.txt's, when the item has both (shown under the description)
+        sharedDescription: "",
         movementHandle: "HANDLE_4_DIRECTIONS",
         modelName: "",
         // Icon staging
@@ -216,25 +222,17 @@ function ItemEditor() {
         if (item) {
             document.title = `Edit ${item.name}`
 
-            // Initialize form data with loaded item
-            const desc = item.details?.Description
-            let description = ""
-
-            if (desc && typeof desc === "object") {
-                const descValues = Object.keys(desc)
-                    .filter((key) => key.startsWith("desc_"))
-                    .sort(
-                        (a, b) =>
-                            parseInt(a.slice(5), 10) - parseInt(b.slice(5), 10),
-                    )
-                    .map((key) => desc[key])
-                    .filter((value) => value && value.trim() !== "")
-                    .join("\n")
-                    .trim()
-                description = descValues
-            } else {
-                description = desc || ""
-            }
+            // BEE2 shows two descriptions: info.txt's (for all the item's
+            // styles) and properties.txt's. The Description field edits the
+            // one the item has, properties.txt's when it has both (or none)
+            const styleDescription = descriptionText(item.details?.Description)
+            const infoDescription = descriptionText(item.infoDescription)
+            const descriptionSource =
+                !styleDescription && infoDescription ? "info" : "properties"
+            const description =
+                descriptionSource === "info" ? infoDescription : styleDescription
+            const sharedDescription =
+                descriptionSource === "info" ? "" : infoDescription
 
             // Load inputs, outputs, variables, and conditions
             const loadData = async () => {
@@ -266,6 +264,8 @@ function ItemEditor() {
                         name: item.name || "",
                         author: item.details?.Authors || "",
                         description: description,
+                        descriptionSource,
+                        sharedDescription,
                         movementHandle:
                             item.movementHandle || "HANDLE_4_DIRECTIONS",
                         modelName: modelNameResult.success ? modelNameResult.modelName : "",
@@ -306,6 +306,8 @@ function ItemEditor() {
                         name: item.name || "",
                         author: item.details?.Authors || "",
                         description: description,
+                        descriptionSource,
+                        sharedDescription,
                         movementHandle:
                             item.movementHandle || "HANDLE_4_DIRECTIONS",
                         inputs: {},
@@ -542,8 +544,14 @@ function ItemEditor() {
                     details: {
                         ...item.details,
                         Authors: formData.author,
-                        Description: formData.description,
+                        ...(formData.descriptionSource !== "info" && {
+                            Description: formData.description,
+                        }),
                     },
+                    // The description, when it's info.txt's
+                    ...(formData.descriptionSource === "info" && {
+                        infoDescription: formData.description,
+                    }),
                     // Include staged icon data if changed
                     iconData: formData.iconChanged
                         ? {

@@ -139,7 +139,8 @@ async function handleItemSave(item, event, mainWindow) {
             }
 
             // Use the new saveItem function to handle file operations
-            const { editorItems, properties } = await saveItem(item)
+            const { editorItems, properties, infoDescription } =
+                await saveItem(item)
 
             // Find the current item instance in memory to get the most up-to-date data
             const packagePath =
@@ -153,6 +154,9 @@ async function handleItemSave(item, event, mainWindow) {
             if (updatedItemInstance) {
                 // Reload the item's data from disk to get the latest changes
                 updatedItemInstance.reloadItemData()
+                if (infoDescription !== undefined) {
+                    updatedItemInstance.infoDescription = infoDescription
+                }
 
                 // Update the icon path if it was changed during save
                 if (item.iconData && item.iconData.stagedIconPath) {

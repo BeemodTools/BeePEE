@@ -251,4 +251,75 @@ describe("loading a package's items", () => {
         expect(saved.Item[0].Editor.SubType.Name).toBe("Renamed")
         expect(saved.Item[1].Editor.SubType.Name).toBe("Helper")
     })
+
+    test("uses the palette texture as the icon of an item with no BEE2 icon", async () => {
+        const block = itemBlock("Reclined Fizzler", "fizzler.vmf")
+        block.Editor.SubType.Palette = {
+            Image: "palette/lautaro/reclined_fizzler/clean.vtf",
+        }
+        writeItem("reclined_fizzler", { Item: block })
+        const texture = path.join(
+            dir,
+            "resources/materials/models/props_map_editor/palette/lautaro/reclined_fizzler/clean.vtf",
+        )
+        fs.mkdirSync(path.dirname(texture), { recursive: true })
+        fs.writeFileSync(texture, "VTF\0")
+        const items = [
+            {
+                ID: "ITEM_RECLINED_FIZZLER",
+                Version: { Styles: { BEE2_CLEAN: "reclined_fizzler" } },
+            },
+        ]
+        let [item] = (await loadPackage(items)).items
+        expect(item.icon).toBe(texture)
+
+        // An icon BeePEE saved for it comes first
+        const saved = path.join(
+            dir,
+            "resources/BEE2/items/lautaro/reclined_fizzler/clean.vtf",
+        )
+        fs.mkdirSync(path.dirname(saved), { recursive: true })
+        fs.writeFileSync(saved, "VTF\0")
+        ;[item] = (await loadPackage(items)).items
+        expect(item.icon).toBe(saved)
+    })
+
+    test("reads the description in info.txt, and saves it there", async () => {
+        writeItem("neuro_timer", { Item: itemBlock("Neurotoxin Timer", "t.vmf") })
+        const [item] = (
+            await loadPackage([
+                {
+                    ID: "ITEM_NEUROTOXIN_TIMER",
+                    Description: { desc_0: "Displays the time.", desc_1: "" },
+                    Version: { Styles: { BEE2_CLEAN: "neuro_timer" } },
+                },
+            ])
+        ).items
+        expect(item.infoDescription).toEqual({
+            desc_0: "Displays the time.",
+            desc_1: "",
+        })
+        expect(item.toJSONWithExistence().infoDescription).toEqual(
+            item.infoDescription,
+        )
+
+        const { saveItem } = require("../saveItem")
+        const { infoDescription } = await saveItem({
+            id: item.id,
+            name: item.name,
+            fullItemPath: item.fullItemPath,
+            details: { ...item.details },
+            infoDescription: "Line one\nLine two",
+        })
+        expect(infoDescription).toEqual({ desc_0: "Line one", desc_1: "Line two" })
+        const info = JSON.parse(
+            fs.readFileSync(path.join(dir, "info.json"), "utf8"),
+        )
+        expect(info.Item[0].Description).toEqual(infoDescription)
+        // properties.txt gets none (BEE2 would show it twice)
+        const properties = JSON.parse(
+            fs.readFileSync(item.paths.properties, "utf8"),
+        )
+        expect(properties.Properties.Description).toBeUndefined()
+    })
 })

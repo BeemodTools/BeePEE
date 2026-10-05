@@ -118,8 +118,20 @@ const createWindow = () => {
 ipcMain.handle("api:loadImage", async (event, filePath) => {
     try {
         const imageBuffer = fs.readFileSync(filePath)
-        const base64 = imageBuffer.toString("base64")
         const ext = path.extname(filePath).toLowerCase()
+
+        // A texture (like an item's palette image): as a PNG
+        if (ext === ".vtf") {
+            const {
+                decodeVtf,
+                encodePng,
+            } = require("./utils/vmfConverter/textures")
+            const { width, height, rgba } = decodeVtf(imageBuffer)
+            const png = encodePng(width, height, rgba, true)
+            return `data:image/png;base64,${png.toString("base64")}`
+        }
+
+        const base64 = imageBuffer.toString("base64")
 
         // Determine MIME type
         let mimeType = "image/png"
