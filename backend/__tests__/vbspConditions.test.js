@@ -182,11 +182,9 @@ describe("VBSP conditions", () => {
             .toBe(CONFIG.slice(0, CONFIG.indexOf('"Conditions"')))
         const conditions = conditionsIn(text)
         expect(sameEntries([conditions[0]], parse(second.vdf))).toBe(true)
-        expect(
-            conditions[1].children.map(({ key, value }) => [key, value]),
-        ).toEqual([
+        expect(keyvalues(conditions[1].children)).toEqual([
             ["Instance", "<ITEM_BOMB>"],
-            ["changeInstance", "instances/new.vmf"],
+            ["Result", [["changeInstance", "instances/new.vmf"]]],
         ])
 
         // ... and BeePEE's blocks come back, for the editor
@@ -287,6 +285,154 @@ describe("VBSP conditions", () => {
             "aren't a list of blocks",
         )
         expect(fs.readFileSync(cfg, "utf8")).toBe(CONFIG)
+    })
+
+    /** Entries as [key, value or entries] */
+    const keyvalues = (entries) =>
+        entries.map(({ key, value, children }) => [
+            key,
+            children ? keyvalues(children) : value,
+        ])
+
+    test("from the editor's blocks are what BEE2 reads", async () => {
+        const item = await loadItem(null)
+        const block = (type, fields = {}) => ({ id: type, type, ...fields })
+        item.saveConditions({
+            blocks: [
+                block("setInstVar", { variable: "$start_open", newValue: "1" }),
+                block("randomSelection", {
+                    options: ["instances/a.vmf", "Option 2", "instances/b.vmf"],
+                }),
+                block("addGlobalEnt", { instanceName: "instances/global.vmf" }),
+                block("offsetInstance", { offset: "0 0 64" }),
+                // No instance picked: changeInstance "" would remove it
+                block("changeInstance"),
+                block("if", {
+                    variable: "$start_open",
+                    operator: "==",
+                    value: "1",
+                    thenBlocks: [
+                        block("addOverlay", { overlayName: "instances/o1.vmf" }),
+                        block("addOverlay", { overlayName: "instances/o2.vmf" }),
+                    ],
+                }),
+            ],
+        })
+        const instance = ["Instance", "<ITEM_BOMB>"]
+        expect(keyvalues(conditionsIn(fs.readFileSync(cfg, "utf8")))).toEqual([
+            // Results go in a Result block (BEE2 reads the rest as tests)
+            ["Condition", [instance, ["Result", [["setInstVar", "$start_open 1"]]]]],
+            [
+                "Condition",
+                [
+                    instance,
+                    [
+                        "Result",
+                        [
+                            [
+                                "random",
+                                [
+                                    ["changeInstance", "instances/a.vmf"],
+                                    ["changeInstance", "instances/b.vmf"],
+                                ],
+                            ],
+                        ],
+                    ],
+                ],
+            ],
+            [
+                "Condition",
+                [instance, ["Result", [["addGlobal", [["file", "instances/global.vmf"]]]]]],
+            ],
+            ["Condition", [instance, ["Result", [["offsetInstance", "0 0 64"]]]]],
+            ["Condition", [instance]],
+            [
+                "Condition",
+                [
+                    instance,
+                    ["instVar", "$start_open == 1"],
+                    [
+                        "Result",
+                        [
+                            ["addOverlay", "instances/o1.vmf"],
+                            ["addOverlay", "instances/o2.vmf"],
+                        ],
+                    ],
+                ],
+            ],
+        ])
+    })
+
+    test("written before blocks were fixed stay the editor's blocks, and are fixed when saved", async () => {
+        const fixup = {
+            id: "fixup",
+            type: "setInstVar",
+            variable: "$start_open",
+            newValue: "1",
+        }
+        // As BeePEE wrote a Change Fixup before
+        const old = [
+            '"Conditions"',
+            "{",
+            '\t"Condition"',
+            "\t{",
+            '\t\t"Instance" "<ITEM_BOMB>"',
+            '\t\t"unknown"',
+            "\t\t{",
+            '\t\t\t"type" "setInstVar"',
+            '\t\t\t"data"',
+            "\t\t\t{",
+            '\t\t\t\t"id" "fixup"',
+            '\t\t\t\t"type" "setInstVar"',
+            '\t\t\t\t"variable" "$start_open"',
+            '\t\t\t\t"newValue" "1"',
+            "\t\t\t}",
+            "\t\t}",
+            "\t}",
+            "}",
+            "",
+        ].join("\n")
+        const item = await loadItem(old)
+        fs.writeFileSync(
+            path.join(itemDir, "meta.json"),
+            JSON.stringify({ vbsp_blocks: [fixup] }),
+        )
+        expect(item.getConditions().blocks).toEqual([fixup])
+
+        item.saveConditions({ blocks: [fixup] })
+        expect(keyvalues(conditionsIn(fs.readFileSync(cfg, "utf8")))).toEqual([
+            [
+                "Condition",
+                [
+                    ["Instance", "<ITEM_BOMB>"],
+                    ["Result", [["setInstVar", "$start_open 1"]]],
+                ],
+            ],
+        ])
+        expect(item.getConditions().blocks).toEqual([fixup])
+    })
+
+    test("ButtonType's switch changes each case to its instance", async () => {
+        const item = await loadItem(null)
+        item.autoGenerateButtonTypeConditions({
+            Item: {
+                Exporting: {
+                    Instances: {
+                        0: { Name: "instances/weighted.vmf" },
+                        // BEE2's short form
+                        1: "instances/cube.vmf",
+                    },
+                },
+            },
+        })
+        const [condition] = conditionsIn(fs.readFileSync(cfg, "utf8"))
+        const cases = condition.children
+            .find((entry) => entry.key === "Switch")
+            .children.filter((entry) => entry.children)
+        expect(keyvalues(cases)).toEqual([
+            ["$button_type = 0", [["changeInstance", "instances/weighted.vmf"]]],
+            ["$button_type = 1", [["changeInstance", "instances/cube.vmf"]]],
+        ])
     })
 
     test("tell model making which instance each value of a switch uses", () => {

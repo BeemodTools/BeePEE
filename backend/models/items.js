@@ -53,6 +53,25 @@ function instanceName(instance) {
     return typeof instance === "string" ? instance : getKey(instance, "Name")
 }
 
+/**
+ * Blocks that are results (BEE2 runs them), rather than tests. Not debug:
+ * BEE2 has it as a test too (it prints and passes)
+ */
+const RESULT_BLOCKS = new Set([
+    "changeInstance",
+    "addOverlay",
+    "addGlobalEnt",
+    "offsetInstance",
+    "mapInstVar",
+    "setInstVar",
+    "randomSelection",
+])
+
+/** A block BeePEE can't write, as it writes it */
+function unknownBlock(block) {
+    return { unknown: { type: block.type, data: block } }
+}
+
 /** Whether there's a file at the path */
 function isFile(file) {
     try {
@@ -1366,6 +1385,7 @@ class Item {
                             id: `changeInstance_${instanceIndex}`,
                             type: "changeInstance",
                             instanceIndex: instanceIndex,
+                            instanceName: instanceName(instanceData),
                         },
                     ],
                 })
@@ -1651,23 +1671,32 @@ class Item {
         }
     }
 
-    /** Whether saving `blocks` would write the conditions `text` has */
+    /**
+     * Whether saving `blocks` would write the conditions `text` has, or did
+     * before some blocks were fixed (those stay the editor's blocks, and are
+     * written right when saved)
+     */
     writesConditionsOf(text, blocks) {
-        try {
-            const written = this.vbspTextWith(text, blocks)
-            return sameEntries(conditionEntries(written), conditionEntries(text))
-        } catch {
-            return false
-        }
+        return [false, true].some((legacy) => {
+            try {
+                const written = this.vbspTextWith(text, blocks, { legacy })
+                return sameEntries(
+                    conditionEntries(written),
+                    conditionEntries(text),
+                )
+            } catch {
+                return false
+            }
+        })
     }
 
     /**
      * The VBSP config's text with its conditions replaced by `blocks`': raw
      * blocks as their text was, the others written from their blocks
      */
-    vbspTextWith(text, blocks) {
+    vbspTextWith(text, blocks, options = {}) {
         const eol = lineEnd(text)
-        const written = this.blockConditions(blocks)
+        const written = this.blockConditions(blocks, options)
         const objects = new Map(blocks.map((block, i) => [block, written[i]]))
         return withConditions(text, blocks, (block) => {
             const condition = { Condition: objects.get(block) }
@@ -1728,9 +1757,10 @@ class Item {
     /**
      * Each top-level block as the VBSP condition it writes (with an Instance
      * test for this item), and null for a raw block (its text is its
-     * condition)
+     * condition). With legacy, as BeePEE wrote them before some blocks were
+     * fixed (see writesConditionsOf).
      */
-    blockConditions(blockList) {
+    blockConditions(blockList, { legacy = false } = {}) {
         const applyTimerLogic = (variableName, value) => {
             if (!variableName) return value
             const cleanVariableName = variableName.replace(/^\\$/, "")
@@ -1833,8 +1863,15 @@ class Item {
                         return
                     }
 
-                    // Merge direct result-type blocks
-                    Object.assign(result, childVbsp)
+                    // Merge direct result-type blocks. A repeated one keeps
+                    // each (before, only the last was written)
+                    if (legacy) {
+                        Object.assign(result, childVbsp)
+                        return
+                    }
+                    for (const [key, value] of Object.entries(childVbsp)) {
+                        addMulti(result, key, value)
+                    }
                 })
                 return result
             }
@@ -2051,6 +2088,9 @@ class Item {
                     return caseResult
 
                 case "changeInstance":
+                    // Without an instance picked, nothing: changeInstance ""
+                    // removes the item's instance
+                    if (!block.instanceName && !legacy) return {}
                     return {
                         changeInstance: block.instanceName || "",
                     }
@@ -2061,14 +2101,56 @@ class Item {
                     }
 
                 case "addGlobalEnt":
-                    return {
-                        addGlobalEnt: block.instanceName || "",
+                    if (legacy) {
+                        return { addGlobalEnt: block.instanceName || "" }
                     }
+                    // BEE2's addGlobal (it has no addGlobalEnt): the instance,
+                    // once, in a room of its own
+                    return block.instanceName
+                        ? { addGlobal: { file: block.instanceName } }
+                        : {}
 
                 case "offsetInstance":
-                    return {
-                        offsetInstance: `${block.instanceName || ""} ${block.offset || "0 0 0"}`,
+                    if (legacy) {
+                        return {
+                            offsetInstance: `${block.instanceName || ""} ${block.offset || "0 0 0"}`,
+                        }
                     }
+                    // The offset alone ("0 0 64")
+                    return {
+                        offsetInstance: String(block.offset || "0 0 0").trim(),
+                    }
+
+                case "setInstVar": {
+                    if (legacy) return unknownBlock(block)
+                    // "$variable value" (BEE2 adds a missing "$")
+                    const variable = String(block.variable ?? "").trim()
+                    if (!variable) return {}
+                    const value = String(block.newValue ?? "").trim()
+                    return {
+                        setInstVar: value ? `${variable} ${value}` : variable,
+                    }
+                }
+
+                case "randomSelection": {
+                    if (legacy) return unknownBlock(block)
+                    // One of the instances at random: each one a result in
+                    // BEE2's random (an older import named the options it
+                    // couldn't read "Option N")
+                    const options = (block.options ?? []).filter(
+                        (option) =>
+                            typeof option === "string" &&
+                            option.trim() &&
+                            !/^Option \d+$/.test(option),
+                    )
+                    if (options.length === 0) return {}
+                    return {
+                        random: {
+                            changeInstance:
+                                options.length === 1 ? options[0] : options,
+                        },
+                    }
+                }
 
                 case "mapInstVar":
                     const mapResult = {}
@@ -2089,22 +2171,26 @@ class Item {
                     }
 
                 default:
-                    return {
-                        unknown: {
-                            type: block.type,
-                            data: block,
-                        },
-                    }
+                    return unknownBlock(block)
             }
         }
 
         // Attach instance filter to ensure condition targets this item's instances only
         const topLevelInstanceTest = { Instance: `<${this.id}>` }
-        return blockList.map((block) =>
-            block.type === RAW_BLOCK
-                ? null
-                : { ...topLevelInstanceTest, ...convertBlockToVbsp(block) },
-        )
+        return blockList.map((block) => {
+            if (block.type === RAW_BLOCK) return null
+            const vbsp = convertBlockToVbsp(block)
+            // A result goes in a Result block: on a condition's own level,
+            // BEE2 reads everything but Condition and Switch as a test
+            const result =
+                !legacy &&
+                RESULT_BLOCKS.has(block.type) &&
+                Object.keys(vbsp).length > 0
+            return {
+                ...topLevelInstanceTest,
+                ...(result ? { Result: vbsp } : vbsp),
+            }
+        })
     }
 
     // Convert blocks to VBSP format
