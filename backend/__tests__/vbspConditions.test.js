@@ -435,6 +435,36 @@ describe("VBSP conditions", () => {
         ])
     })
 
+    test("name their instances in changeInstance, in any case", async () => {
+        const item = await loadItem(
+            [
+                '"Conditions"',
+                "{",
+                '\t"Condition"',
+                "\t{",
+                '\t\t"Result"',
+                "\t\t{",
+                '\t\t\t"changeInstance" "instances/a.vmf"',
+                '\t\t\t"ChangeInstance" "instances/b.vmf"',
+                '\t\t\t"Changeinstance" "instances/c.vmf"',
+                "\t\t}",
+                "\t}",
+                "}",
+            ].join("\n"),
+        )
+        const found = []
+        item.extractChangeInstances(item.readVbspObject(), found)
+        expect(found).toEqual([
+            "instances/a.vmf",
+            "instances/b.vmf",
+            "instances/c.vmf",
+        ])
+        // The load registered them as the item's
+        expect(Object.values(item.instances).map(({ Name }) => Name)).toEqual(
+            expect.arrayContaining(found),
+        )
+    })
+
     test("tell model making which instance each value of a switch uses", () => {
         const [, block] = rawBlocks(CONFIG)
         const [switchBlock] = switchBlocksOf(block, {

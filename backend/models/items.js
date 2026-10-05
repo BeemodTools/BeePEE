@@ -269,10 +269,11 @@ class Item {
     }
 
     extractChangeInstances(obj, result) {
-        // Recursively search for "Changeinstance" keys in the JSON structure
+        // Recursively search for "Changeinstance" keys in the JSON
+        // structure, in any case (as BEE2 reads them: "changeInstance" too)
         if (typeof obj === "object" && obj !== null) {
             for (const [key, value] of Object.entries(obj)) {
-                if (key === "Changeinstance") {
+                if (key.toLowerCase() === "changeinstance") {
                     // Not "" (which removes the instance) or "<ITEM_ID:name>"
                     // (an item's own instance, listed with it): not files
                     for (const instance of [value].flat()) {
