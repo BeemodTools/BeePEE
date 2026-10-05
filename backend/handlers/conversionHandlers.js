@@ -10,7 +10,7 @@ const { convertVmfToObj, convertVmfsToObj } = require("../utils/vmf2obj")
 const { Instance } = require("../items/Instance")
 const { fixInstancePath } = require("./instanceHandlers")
 const { closeAllModelPreviewWindows } = require("../items/itemEditor")
-const { instanceModel, findItem } = require("./iconHandlers")
+const { instanceModel, keepMadeModels, findItem } = require("./iconHandlers")
 const { logger } = require("../utils/logger")
 
 /** "1 model", "3 models" */
@@ -183,6 +183,12 @@ async function convertInstance(event, item, instanceKey, options) {
     const fileBase = path.basename(vmfPath, path.extname(vmfPath))
     const objPath = path.join(tempDir, `${fileBase}.obj`)
     const mtlPath = path.join(tempDir, `${fileBase}.mtl`)
+    // The icon maker uses it too
+    keepMadeModels(
+        item,
+        [{ vmfPath, objPath, mtlPath }],
+        options.textureStyle || "cartoon",
+    )
 
     // Convert OBJ to MDL
     const mdlResult = await makeModel(item, objPath, options)
@@ -340,6 +346,12 @@ async function handleDefaultConversion(event, item, options) {
     const fileBase = path.basename(vmfPath, path.extname(vmfPath))
     const objPath = path.join(tempDir, `${fileBase}.obj`)
     const mtlPath = path.join(tempDir, `${fileBase}.mtl`)
+    // The icon maker uses it too
+    keepMadeModels(
+        item,
+        [{ vmfPath, objPath, mtlPath }],
+        options.textureStyle || "cartoon",
+    )
 
     const mdlResult = await makeModel(item, objPath, options)
 
@@ -440,6 +452,13 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
             textureStyle: options.textureStyle || "cartoon",
             timeoutMs: 600000,
         },
+    )
+
+    // The icon maker uses them too
+    keepMadeModels(
+        item,
+        objResults.filter((result) => !result.error),
+        options.textureStyle || "cartoon",
     )
 
     const variantResults = []

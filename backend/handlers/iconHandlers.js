@@ -8,7 +8,8 @@
  *
  * Each instance's model is kept in .bpee/<item>/icon/models/<instance>/ with
  * a stamp of the VMF it was made from, so it's only made again when the VMF
- * changes. The Model Chooser can use these models as the item's model too.
+ * changes. The models Make Model makes are kept there too (keepMadeModels).
+ * The Model Chooser can use these models as the item's model too.
  */
 
 const fs = require("fs")
@@ -137,6 +138,95 @@ function instanceModel(item, instanceKey) {
         )
     }
     return making.get(folder)
+}
+
+/** Whether two paths are the same file (Windows' paths are in any case) */
+function samePath(a, b) {
+    return path.resolve(a).toLowerCase() === path.resolve(b).toLowerCase()
+}
+
+/**
+ * Keep a model Make Model made of the item's instance, for the icon maker to
+ * use instead of making it again: its OBJ, and the materials it uses with
+ * their textures. Copied: Make Model's folder is shared by the item's
+ * models, and its next ones replace files in it.
+ */
+function keepMadeModel(item, instanceKey, { objPath, mtlPath }, textureStyle) {
+    const folder = instanceModelFolder(item, instanceKey)
+    // Being made by the icon maker right now: it keeps its own
+    if (making.has(folder)) return false
+    const source = instanceSource(item, instanceKey)
+    if (source.size === undefined) return false
+
+    // The MTL of variants made together lists all of their materials
+    const obj = fs.readFileSync(objPath, "utf8")
+    const used = new Set(
+        [...obj.matchAll(/^usemtl\s+(.+)$/gm)].map(([, name]) => name.trim()),
+    )
+    const mtl = fs
+        .readFileSync(mtlPath, "utf8")
+        .split(/\n(?=newmtl )/)
+        .filter(
+            (block, index) =>
+                index === 0 ||
+                used.has(block.slice("newmtl ".length).split("\n")[0].trim()),
+        )
+        .join("\n")
+
+    fs.rmSync(folder, { recursive: true, force: true })
+    fs.mkdirSync(folder, { recursive: true })
+    const from = path.dirname(objPath)
+    for (const [, name] of mtl.matchAll(/^map_\w+\s+(.+)$/gm)) {
+        const relative = name.trim()
+        const file = path.resolve(from, relative)
+        if (path.relative(from, file).startsWith("..")) continue
+        if (!fs.existsSync(file)) continue
+        const copy = path.join(folder, relative)
+        fs.mkdirSync(path.dirname(copy), { recursive: true })
+        fs.copyFileSync(file, copy)
+    }
+    fs.writeFileSync(path.join(folder, path.basename(objPath)), obj)
+    fs.writeFileSync(path.join(folder, path.basename(mtlPath)), mtl)
+    fs.writeFileSync(
+        path.join(folder, STAMP),
+        JSON.stringify({
+            ...source,
+            format: MODEL_FORMAT,
+            textureStyle,
+            obj: path.basename(objPath),
+            mtl: path.basename(mtlPath),
+        }),
+    )
+    return true
+}
+
+/**
+ * Keep the models Make Model made ({ vmfPath, objPath, mtlPath }) for each of
+ * the item's instances with their VMF (see keepMadeModel). Make Model goes
+ * on when one can't be kept.
+ */
+function keepMadeModels(item, models, textureStyle) {
+    let kept = 0
+    for (const { vmfPath, objPath, mtlPath } of models) {
+        if (!vmfPath || !objPath || !mtlPath) continue
+        for (const key of instanceKeys(item)) {
+            try {
+                if (!samePath(instanceSource(item, key).vmf, vmfPath)) continue
+                if (keepMadeModel(item, key, { objPath, mtlPath }, textureStyle)) {
+                    kept++
+                }
+            } catch (error) {
+                console.warn(
+                    `Couldn't keep the model of instance ${key} for the icon maker: ${error.message}`,
+                )
+            }
+        }
+    }
+    if (kept > 0) {
+        console.log(
+            `Kept ${kept === 1 ? "the model" : `${kept} models`} for the icon maker`,
+        )
+    }
 }
 
 /**
@@ -351,5 +441,6 @@ module.exports = {
     iconFolder,
     instanceModel,
     keptInstanceModel,
+    keepMadeModels,
     findItem,
 }

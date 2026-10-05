@@ -39,7 +39,7 @@ jest.mock("../utils/vmf2obj", () => ({
 const fs = require("fs")
 const os = require("os")
 const path = require("path")
-const { register } = require("../handlers/iconHandlers")
+const { register, keepMadeModels } = require("../handlers/iconHandlers")
 const { convertVmfToObj } = require("../utils/vmf2obj")
 
 /** A VMF with something to draw: a prop */
@@ -230,6 +230,66 @@ describe("icon maker handlers", () => {
                 instanceKey: "7",
             }),
         ).toEqual({ success: false, error: "Instance not found" })
+    })
+
+    test("uses the models Make Model made instead of making them again", async () => {
+        const vmfs = [0, 1].map((i) =>
+            writeVmf(packagePath, `instances/my_item/item_${i}.vmf`),
+        )
+        mockItems[0].instances[1] = { Name: "instances/my_item/item_1.vmf" }
+        // Make Model's folder: two variants made together share an MTL
+        const made = path.join(packagePath, ".bpee/my_item/models")
+        fs.mkdirSync(path.join(made, "materials/metal"), { recursive: true })
+        fs.writeFileSync(path.join(made, "materials/metal/wall.png"), "wall")
+        fs.writeFileSync(path.join(made, "materials/metal/floor.png"), "floor")
+        const mtl = [
+            "# Materials shared by all variants",
+            "",
+            "newmtl metal/wall",
+            "map_Kd materials/metal/wall.png",
+            "",
+            "newmtl metal/floor",
+            "map_Kd materials/metal/floor.png",
+            "",
+        ].join("\n")
+        const models = vmfs.map((vmfPath, i) => {
+            const objPath = path.join(made, `my_item_${i}.obj`)
+            const mtlPath = path.join(made, `my_item_${i}.mtl`)
+            const material = i ? "metal/floor" : "metal/wall"
+            fs.writeFileSync(
+                objPath,
+                `mtllib my_item_${i}.mtl\nusemtl ${material}\nv 0 0 0\n`,
+            )
+            fs.writeFileSync(mtlPath, mtl)
+            return { vmfPath, objPath, mtlPath }
+        })
+        keepMadeModels(mockItems[0], models, "cartoon")
+
+        const generate = (instanceKey) =>
+            handlers["icon-maker-generate-model"](null, {
+                itemId: "my_item",
+                instanceKey,
+            })
+        const second = await generate("1")
+        expect(second.obj).toContain("usemtl metal/floor")
+        // Its own material and texture only
+        expect(second.mtl).toContain("newmtl metal/floor")
+        expect(second.mtl).not.toContain("metal/wall")
+        expect(Object.keys(second.textures)).toEqual([
+            "materials/metal/floor.png",
+        ])
+        const all = await handlers["icon-maker-generate-all"](null, {
+            itemId: "my_item",
+        })
+        expect(all.made).toBe(0)
+        expect(convertVmfToObj).not.toHaveBeenCalled()
+
+        // Make Model's next models replace its files: these were copied
+        fs.rmSync(made, { recursive: true, force: true })
+        expect(Object.keys((await generate("0")).textures)).toEqual([
+            "materials/metal/wall.png",
+        ])
+        expect(convertVmfToObj).not.toHaveBeenCalled()
     })
 
     test("saves the icon, replacing the one made before", async () => {
