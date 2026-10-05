@@ -21,6 +21,8 @@
                     "Glass, invisible and hidden stuff showing up wrong in generated models",
                     "Make Model failing on big models",
                     "Item editor saying it saved when it didnt",
+                    "Conditions BeePEE can't edit getting deleted when opening an item (they show as Raw VBSP blocks now and are kept exactly as they are)",
+                    "Exporting a package rewriting vbsp_config.cfg files, which could break items (like MapInstVar mappings and repeated keys)",
                     "Autopacking missing custom files",
                     "Signage designer export size, text shifting and double click to edit",
                     "Uploading PNGs for signage doing nothing",

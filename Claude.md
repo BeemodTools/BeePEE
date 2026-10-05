@@ -185,15 +185,16 @@ Standard editor windows use `width: 960, height: 1024` in `backend/items/itemEdi
     - Updates in-memory package data
     - Refreshes UI automatically
 
-### VBSP Conditions - Random Array Support
+### VBSP Conditions (vbsp_config.cfg)
 
-- **Implemented**: Support for "random" arrays in VBSP conditions
-- **Features**:
-    - Parses random selection structures from condition results
-    - Visual block editor with "Random Selection" block type
-    - Displays options as numbered list in the UI
-    - Validates random selection blocks
-    - Uses `Hive` icon for visual representation
+- **Kept as the package has it**: the import leaves each `vbsp_config.cfg` as it is (it's not turned into JSON), and the export copies it as it is. A JS object can't hold VBSP exactly: it groups a key that repeats with other keys between them (`Condition`, `Result`, `Condition` - an order BEE2 runs them in) and puts number keys first (MapInstVar's `"0" "3"` mappings before its `"$cube_type" "$bomb_time"` pair, which BEE2 reads as the first line).
+- **Raw blocks**: the Conditions tab shows each condition in the file as a "Raw VBSP" block, `{ id, type: "rawVbsp", key, vdf }`, where `vdf` is the condition's exact text (with the comments above it). They're read-only; they can be moved (at the top level only - they're whole conditions), duplicated and deleted.
+- **The editor's blocks** (`vbsp_blocks` in meta.json) are used while saving them would write the conditions the file has (`Item.getConditions`). When the file changed since (or a package made with BeePEE ships stale blocks), the file's conditions show as raw blocks instead.
+- **Saving** (`Item.saveConditions`) replaces only what's inside the file's `"Conditions"` block: raw blocks as their text was, BeePEE's blocks written from their blocks. Other sections (DropperItems, Replacements, Fizzlers, ...), comments, line ends and the encoding stay; BeePEE's header goes on the first line. With no conditions left, the Conditions block goes (and the file, if nothing else is in it). A config that can't be read isn't saved over: the tab shows why and its add buttons are disabled.
+- **Older imports** kept `vbsp_config.json` (already JSON, so already changed): it's read as before, and replaced by `vbsp_config.cfg` the first time its conditions are saved.
+- **Model making** reads the Switch blocks in raw blocks (`switchBlocksOf`) to know which instance each value of a variable (like `$cube_type`) uses.
+- **Files**: `backend/utils/keyvalues.js` (VDF read in order, with where each entry is in the text), `backend/utils/vbspConditions.js` (raw blocks, writing conditions back), `backend/__tests__/vbspConditions.test.js`.
+- Random Selection blocks (made by imports before this) still show; imports no longer make them.
 
 ### Item Metadata Tracking
 
@@ -345,6 +346,8 @@ onPackageLoaded: (callback) => {
 - `backend/models/items.js` - Item class and data management
 - `backend/models/package.js` - Package class managing item collections
 - `backend/packageManager.js` - Package loading and conversion (VDF/JSON)
+- `backend/utils/keyvalues.js` - VDF read in order (with where each entry is), VDF to JS objects and back
+- `backend/utils/vbspConditions.js` - Items' VBSP conditions as raw blocks, and writing them back
 - `backend/saveItem.js` - File system operations for saving items
 - `backend/preload.js` - Secure API exposure to renderer
 

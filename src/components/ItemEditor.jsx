@@ -185,7 +185,9 @@ function ItemEditor() {
         instances: {},
         // Variables and Conditions data
         variables: {},
-        conditions: {},
+        blocks: [],
+        // Why the conditions can't be edited (their VBSP config can't be read)
+        conditionsError: undefined,
         // Other tab data
         other: {},
         // Track what has been modified
@@ -251,13 +253,13 @@ function ItemEditor() {
                         window.package.getModelName(item.id),
                     ])
 
-                    // Handle conditions - can be either blocks or VBSP format
+                    // The condition blocks (raw blocks for the VBSP
+                    // config's conditions), or why there are none
                     const conditionsData = conditionsResult.success
                         ? conditionsResult.conditions
-                        : {}
-                    const hasBlocks =
-                        conditionsData.blocks &&
-                        Array.isArray(conditionsData.blocks)
+                        : {
+                              error: `The conditions couldn't be loaded (${conditionsResult.error})`,
+                          }
 
                     setFormData((prev) => ({
                         ...prev,
@@ -278,9 +280,10 @@ function ItemEditor() {
                         variables: variablesResult.success
                             ? variablesResult.variables
                             : {},
-                        // If blocks are present, use them directly, otherwise use VBSP format
-                        blocks: hasBlocks ? conditionsData.blocks : undefined,
-                        conditions: hasBlocks ? {} : conditionsData,
+                        blocks: Array.isArray(conditionsData.blocks)
+                            ? conditionsData.blocks
+                            : [],
+                        conditionsError: conditionsData.error,
                         other: item.other || {},
                         _modified: {
                             basicInfo: false,
@@ -312,8 +315,8 @@ function ItemEditor() {
                             ? prev.instances
                             : item.instances || {},
                         variables: {},
-                        blocks: undefined,
-                        conditions: {},
+                        blocks: [],
+                        conditionsError: "The conditions couldn't be loaded",
                         other: item.other || {},
                         _modified: {
                             basicInfo: false,
@@ -490,37 +493,6 @@ function ItemEditor() {
                 conditions: true,
             },
         }))
-    }
-
-    const importConditionsData = (blocks) => {
-        // Import conditions and save immediately to meta.json
-        // This happens when auto-converting from VBSP format to blocks
-        setFormData((prev) => ({
-            ...prev,
-            blocks, // Store as blocks instead of conditions
-            _modified: {
-                ...prev._modified,
-                conditions: false, // Don't mark as modified - we'll save immediately
-            },
-        }))
-
-        // Auto-save the converted blocks immediately to meta.json
-        // This prevents "unsaved changes" from appearing on first open
-        if (item?.id && blocks) {
-            console.log(
-                `Auto-saving the converted VBSP conditions of item "${item.name}"`,
-            )
-            window.package
-                .saveConditions(item.id, { blocks })
-                .catch((error) => {
-                    console.error(
-                        `Failed to auto-save the converted VBSP conditions of item "${item.name}":`,
-                        error,
-                    )
-                })
-        }
-
-        // Don't set unsaved changes or add to undo stack since this is automatic
     }
 
     const updateOtherData = (other) => {
@@ -851,8 +823,9 @@ function ItemEditor() {
                 }
             }
 
-            // Save Conditions data if modified
-            if (formData._modified.conditions) {
+            // Save Conditions data if modified (not when they couldn't be
+            // read: that would replace them)
+            if (formData._modified.conditions && !formData.conditionsError) {
                 try {
                     // Save blocks format - the backend will handle conversion and logging
                     assertSaved(
@@ -1250,7 +1223,6 @@ function ItemEditor() {
                             formData={formData}
                             onUpdate={updateFormData}
                             onUpdateConditions={updateConditionsData}
-                            onImportConditions={importConditionsData}
                             editingNames={editingNames}
                         />
                     </Box>

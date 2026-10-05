@@ -1969,6 +1969,74 @@ function SetInstVarBlock({ block, onUpdateProperty }) {
     )
 }
 
+/**
+ * A raw block's text as it reads best: without the blank lines around it, or
+ * the indent all its lines share
+ */
+function rawVbspText(vdf = "") {
+    const lines = vdf
+        .replace(/\r\n?/g, "\n")
+        .replace(/^\s*\n/, "")
+        .trimEnd()
+        .split("\n")
+    const indents = lines
+        .filter((line) => line.trim())
+        .map((line) => line.match(/^[ \t]*/)[0])
+    const common = indents.reduce((shared, indent) => {
+        let i = 0
+        while (i < shared.length && shared[i] === indent[i]) i++
+        return shared.slice(0, i)
+    }, indents[0] ?? "")
+    return lines.map((line) => line.slice(common.length)).join("\n")
+}
+
+/** How many lines of a raw block show before "Show all" */
+const RAW_VBSP_LINES = 12
+
+// A condition from the VBSP config that BeePEE has no blocks for, shown as
+// the file has it (it's written back as it was)
+function RawVbspBlock({ block }) {
+    const [expanded, setExpanded] = useState(false)
+    const lines = rawVbspText(block.vdf).split("\n")
+    const long = lines.length > RAW_VBSP_LINES + 2
+    return (
+        <Box sx={{ p: 2 }}>
+            <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                Raw VBSP{block.key ? ` (${block.key})` : ""}
+            </Typography>
+            <Box
+                component="pre"
+                sx={{
+                    m: 0,
+                    mt: 1,
+                    p: 1.5,
+                    borderRadius: 1,
+                    backgroundColor: "#1e1f22",
+                    color: "#d4d4d4",
+                    fontFamily: "monospace",
+                    fontSize: "0.8rem",
+                    lineHeight: 1.5,
+                    tabSize: 4,
+                    whiteSpace: "pre",
+                    overflowX: "auto",
+                }}>
+                {(expanded || !long
+                    ? lines
+                    : lines.slice(0, RAW_VBSP_LINES)
+                ).join("\n")}
+            </Box>
+            {long && (
+                <Button
+                    size="small"
+                    sx={{ mt: 1 }}
+                    onClick={() => setExpanded(!expanded)}>
+                    {expanded ? "Show less" : `Show all ${lines.length} lines`}
+                </Button>
+            )}
+        </Box>
+    )
+}
+
 // Sortable Block Component - Generic for all block types
 function SortableBlock({
     block,
@@ -2101,9 +2169,15 @@ function SortableBlock({
             setInstVar: "#9C27B0", // Purple - Change fixup action
         }
 
+        // Conditions kept as the VBSP config has them
+        const rawColors = {
+            rawVbsp: "#607D8B",
+        }
+
         return (
             logicColors[blockType] ||
             actionColors[blockType] ||
+            rawColors[blockType] ||
             "#555"
         )
     }
@@ -3181,6 +3255,9 @@ function SortableBlock({
                     </Box>
                 )
 
+            case "rawVbsp":
+                return <RawVbspBlock block={block} />
+
             default:
                 return (
                     <Box sx={{ p: 2 }}>
@@ -3493,13 +3570,21 @@ const BLOCK_DEFINITIONS = {
         canContainChildren: false,
         childContainers: [],
     },
+    // Not in the Add Block list: these come from the item's VBSP config
+    rawVbsp: {
+        displayName: "Raw VBSP",
+        description:
+            "A condition from the item's vbsp_config.cfg that BeePEE has no blocks for. It's written back exactly as it was.",
+        category: "Raw",
+        canContainChildren: false,
+        childContainers: [],
+    },
 }
 
 function Conditions({
     item,
     formData,
     onUpdateConditions,
-    onImportConditions,
     editingNames = {},
 }) {
     const [addDialogOpen, setAddDialogOpen] = useState(false)
@@ -3576,7 +3661,7 @@ function Conditions({
         // Add the new blocks to the existing blocks
         const updatedBlocks = [...blocks, ...newBlocks]
         setBlocks(updatedBlocks)
-        onUpdateConditions({ blocks: updatedBlocks })
+        onUpdateConditions(updatedBlocks)
         setPrefabDialogOpen(false)
     }
 
@@ -4021,40 +4106,10 @@ function Conditions({
     // Combine user variables with BEE2 system variables (BEE2 variables come last)
     const availableVariables = [...userVariables, ...bee2SystemVariables]
 
+    // The item's blocks (its VBSP config's conditions are raw blocks)
     useEffect(() => {
-        // Initialize blocks from formData if available
-        if (formData.blocks && Array.isArray(formData.blocks)) {
-            setBlocks(formData.blocks)
-        } else if (
-            formData.conditions &&
-            Object.keys(formData.conditions).length > 0
-        ) {
-            // Check for _vbsp_conditions_imported flag to prevent re-importing on every load
-            const vbspAlreadyImported =
-                formData.conditions._vbsp_conditions_imported === true
-
-            if (vbspAlreadyImported) {
-                console.warn(
-                    `Skipped importing VBSP conditions for "${item?.name}": marked as imported, but meta.json has no saved blocks`,
-                )
-                // Do NOT convert or set blocks - they should already be in formData.blocks
-                // If we reach here, it means blocks were imported but not saved to meta.json properly
-                return
-            }
-
-            const result = convertVbspToBlocks(formData.conditions)
-            if (result.success) {
-                setBlocks(result.blocks)
-                // Auto-import and save to meta.json on first conversion
-                onImportConditions(result.blocks)
-            } else {
-                console.error(
-                    `Failed to import VBSP conditions for "${item?.name}":`,
-                    result.error,
-                )
-            }
-        }
-    }, [formData.blocks, formData.conditions])
+        setBlocks(Array.isArray(formData.blocks) ? formData.blocks : [])
+    }, [formData.blocks])
 
     const handleAddBlock = (blockType) => {
         const blockDef = BLOCK_DEFINITIONS[blockType]
@@ -4158,6 +4213,9 @@ function Conditions({
                 .replace("-else", "")
                 .replace("-cases", "")
             const draggedBlockId = active.id
+            // A raw block is a whole condition: it stays at the top
+            const dragged = findBlockRecursive(blocks, draggedBlockId)
+            if (dragged?.type === "rawVbsp") return
             let containerType = "then"
             if (over.id.includes("-else")) {
                 containerType = "else"
@@ -4300,584 +4358,6 @@ function Conditions({
         }
     }
 
-    // Convert VBSP conditions to new block format
-    const convertVbspToBlocks = (vbspConditions) => {
-        const convertedBlocks = []
-
-        // Generate UUID for this conversion to prevent duplicate keys
-        const generateUniqueId = () =>
-            `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-
-        // Helper function to find instance by path
-        const findInstanceByPath = (instancePath) => {
-            if (!formData.instances || typeof formData.instances !== "object") {
-                return null
-            }
-
-            // Normalize the path for comparison
-            const normalizedPath = instancePath
-                .replace(/\\/g, "/")
-                .toLowerCase()
-
-            // Convert instances object to array format for searching
-            const instancesArray = Object.entries(formData.instances)
-                .filter(([index, instance]) => !instance._toRemove)
-                .map(([index, instance]) => ({
-                    ...instance,
-                    index,
-                }))
-
-            // First try exact match
-            let foundInstance = instancesArray.find((instance) => {
-                const instancePath = instance.Name.replace(
-                    /\\/g,
-                    "/",
-                ).toLowerCase()
-                return instancePath === normalizedPath
-            })
-
-            if (foundInstance) {
-                return foundInstance
-            }
-
-            // If no exact match, try partial match (in case of path differences)
-            foundInstance = instancesArray.find((instance) => {
-                const instancePath = instance.Name.replace(
-                    /\\/g,
-                    "/",
-                ).toLowerCase()
-                return (
-                    instancePath.includes(normalizedPath) ||
-                    normalizedPath.includes(instancePath)
-                )
-            })
-
-            return foundInstance
-        }
-
-        // Helper function to find variable by name
-        const findVariableByName = (varName) => {
-            // First check BEE2 system variables
-            const bee2SystemVariables = [
-                {
-                    displayName: "Connection Count",
-                    fixupName: "$connectioncount",
-                    type: "number",
-                },
-                {
-                    displayName: "Rotation",
-                    fixupName: "$rotation",
-                    type: "number",
-                },
-                { displayName: "Angle", fixupName: "$angle", type: "number" },
-                {
-                    displayName: "Is Coop",
-                    fixupName: "$is_coop",
-                    type: "boolean",
-                },
-                {
-                    displayName: "Is Preview",
-                    fixupName: "$is_preview",
-                    type: "boolean",
-                },
-                {
-                    displayName: "Portal Gun On/Off",
-                    fixupName: "$portalgun_onoff",
-                    type: "boolean",
-                },
-                {
-                    displayName: "Needs Portal Manager",
-                    fixupName: "$needs_portalman",
-                    type: "boolean",
-                },
-                {
-                    displayName: "Dual Portal",
-                    fixupName: "$dual_portal",
-                    type: "boolean",
-                },
-            ]
-
-            // Try to find in BEE2 system variables first
-            const withDollar = `$${varName}`
-            let foundVariable = bee2SystemVariables.find(
-                (variable) => variable.fixupName === withDollar,
-            )
-
-            if (!foundVariable) {
-                foundVariable = bee2SystemVariables.find(
-                    (variable) => variable.fixupName === varName,
-                )
-            }
-
-            // If not found in system variables, check user variables
-            if (
-                !foundVariable &&
-                formData.variables &&
-                Array.isArray(formData.variables)
-            ) {
-                foundVariable = formData.variables.find(
-                    (variable) => variable.fixupName === withDollar,
-                )
-
-                if (!foundVariable) {
-                    foundVariable = formData.variables.find(
-                        (variable) => variable.fixupName === varName,
-                    )
-                }
-            }
-
-            return foundVariable
-        }
-
-        try {
-            // Check if we have the expected VBSP structure
-            if (!vbspConditions.Conditions) {
-                throw new Error("Invalid VBSP structure: Missing Conditions")
-            }
-
-            // Handle different VBSP structure patterns
-            let conditions = []
-
-            if (vbspConditions.Conditions.Condition) {
-                // Standard structure with Condition key
-                conditions = Array.isArray(vbspConditions.Conditions.Condition)
-                    ? vbspConditions.Conditions.Condition
-                    : [vbspConditions.Conditions.Condition]
-            } else {
-                // Check for UUID-prefixed Condition keys or other condition patterns
-                const allKeys = Object.keys(vbspConditions.Conditions)
-
-                // Look for UUID-prefixed Condition keys (like Condition_uuid)
-                const conditionKeys = allKeys.filter(
-                    (key) =>
-                        key === "Condition" || key.startsWith("Condition_"),
-                )
-
-                if (conditionKeys.length > 0) {
-                    conditions = conditionKeys.map(
-                        (key) => vbspConditions.Conditions[key],
-                    )
-                } else {
-                    // Look for any keys that contain condition-like structures
-                    const structureKeys = allKeys.filter((key) => {
-                        const obj = vbspConditions.Conditions[key]
-                        return (
-                            obj &&
-                            typeof obj === "object" &&
-                            (obj.Switch ||
-                                obj.MapInstVar ||
-                                obj.Result ||
-                                key.startsWith("Switch_") ||
-                                key.startsWith("MapInstVar_"))
-                        )
-                    })
-
-                    if (structureKeys.length > 0) {
-                        conditions = structureKeys.map(
-                            (key) => vbspConditions.Conditions[key],
-                        )
-                    } else {
-                        // Treat the entire Conditions object as a single condition
-                        conditions = [vbspConditions.Conditions]
-                    }
-                }
-            }
-
-            if (conditions.length === 0) {
-                console.warn(
-                    `Found no VBSP conditions to convert for "${item?.name}"`,
-                )
-                return { success: true, blocks: [] }
-            }
-
-            // Process each top-level condition
-            conditions.forEach((condition, index) => {
-                if (condition) {
-                    const processedBlocks = processCondition(condition)
-                    convertedBlocks.push(...processedBlocks)
-                } else {
-                    console.warn(
-                        `Skipped empty VBSP condition at index ${index}`,
-                    )
-                }
-            })
-
-            // Recursive function to process any condition structure
-            function processCondition(condition) {
-                const blocks = []
-
-                // Check if condition is valid
-                if (!condition || typeof condition !== "object") {
-                    console.warn(
-                        `Skipped VBSP condition with invalid value "${condition}" (expected an object)`,
-                    )
-                    return blocks
-                }
-
-                // Process MapInstVar blocks
-                const mapInstVarKeys = Object.keys(condition).filter(
-                    (key) =>
-                        key === "MapInstVar" || key.startsWith("MapInstVar_"),
-                )
-                mapInstVarKeys.forEach((key) => {
-                    if (condition[key]) {
-                        const mapInstVarBlocks = createMapInstVarBlock(
-                            condition[key],
-                        )
-                        blocks.push(...mapInstVarBlocks)
-                    }
-                })
-
-                // Process Switch blocks
-                const switchKeys = Object.keys(condition).filter(
-                    (key) => key === "Switch" || key.startsWith("Switch_"),
-                )
-                switchKeys.forEach((key) => {
-                    if (condition[key]) {
-                        const switchBlock = createSwitchBlock(condition[key])
-                        if (switchBlock) {
-                            blocks.push(switchBlock)
-                        }
-                    }
-                })
-
-                // Process nested Condition blocks (for If-Else logic)
-                const conditionKeys = Object.keys(condition).filter(
-                    (key) =>
-                        key === "Condition" || key.startsWith("Condition_"),
-                )
-                conditionKeys.forEach((key) => {
-                    const nestedCondition = condition[key]
-
-                    if (
-                        !nestedCondition ||
-                        typeof nestedCondition !== "object"
-                    ) {
-                        console.warn(
-                            `Skipped nested VBSP condition "${key}" (expected an object)`,
-                        )
-                        return
-                    }
-
-                    // Check if this is an If-Else structure
-                    if (
-                        nestedCondition.InstVar &&
-                        (nestedCondition.Result || nestedCondition.Else)
-                    ) {
-                        const ifElseBlock = createIfElseBlock(nestedCondition)
-                        blocks.push(ifElseBlock)
-                    } else {
-                        // Regular nested condition
-                        const nestedBlocks = processCondition(nestedCondition)
-                        blocks.push(...nestedBlocks)
-                    }
-                })
-
-                // Process Result blocks
-                if (condition.Result && typeof condition.Result === "object") {
-                    const resultBlocks = processCondition(condition.Result)
-                    blocks.push(...resultBlocks)
-                }
-
-                // Process "random" blocks - randomly selects one option
-                if (condition.random && Array.isArray(condition.random)) {
-                    // Create a random selection group block
-                    const randomBlock = {
-                        id: `random_${generateUniqueId()}`,
-                        type: "randomSelection",
-                        displayName: "Random Selection",
-                        options: condition.random.map((item, index) => {
-                            // Each item in the random array might have a ChangeInstance
-                            if (typeof item === "string") {
-                                return item
-                            } else if (
-                                typeof item === "object" &&
-                                item.Changeinstance
-                            ) {
-                                return (
-                                    item.Changeinstance || item.changeInstance
-                                )
-                            }
-                            return `Option ${index + 1}`
-                        }),
-                        thenBlocks: [], // For nested actions if any
-                    }
-                    blocks.push(randomBlock)
-                }
-
-                // Process setInstVar (Change Fixup) blocks
-                if (condition.setInstVar) {
-                    // Format: "$variable value" or just "$variable"
-                    const parts = condition.setInstVar.trim().split(/\s+/)
-                    const variable = parts[0] || ""
-                    const newValue = parts.slice(1).join(" ") || ""
-                    const setInstVarBlock = {
-                        id: `setInstVar_${generateUniqueId()}`,
-                        type: "setInstVar",
-                        displayName: "Change Fixup",
-                        variable: variable,
-                        newValue: newValue,
-                    }
-                    blocks.push(setInstVarBlock)
-                }
-
-                return blocks
-            }
-
-            // Helper function to create MapInstVar blocks
-            function createMapInstVarBlock(mapInstVarData) {
-                // Check if this is a timer structure
-                const keys = Object.keys(mapInstVarData)
-                const timerBlocks = []
-
-                keys.forEach((key) => {
-                    const value = mapInstVarData[key]
-                    if (typeof value === "object" && value !== null) {
-                        // Check for timer-related variables
-                        const valueKeys = Object.keys(value)
-                        const timerVar = valueKeys.find(
-                            (k) => k.startsWith("$") && k.includes("timer"),
-                        )
-                        const delayVar = valueKeys.find(
-                            (k) => k.startsWith("$") && k.includes("delay"),
-                        )
-
-                        if (timerVar || delayVar) {
-                            // This is a timer structure
-                            const timerBlock = {
-                                id: `timer_${generateUniqueId()}`,
-                                type: "timer",
-                                displayName: "Timer",
-                                variable: timerVar || delayVar || "Unknown",
-                                delay: "0",
-                                mappings: value,
-                            }
-                            timerBlocks.push(timerBlock)
-                        } else {
-                            // Check for other variable mappings
-                            const varKeys = valueKeys.filter((k) =>
-                                k.startsWith("$"),
-                            )
-                            if (varKeys.length > 0) {
-                                const mapInstVarBlock = {
-                                    id: `mapInstVar_${generateUniqueId()}`,
-                                    type: "mapInstVar",
-                                    displayName: "Map Instance Variable",
-                                    sourceVariable: varKeys[0] || "Unknown",
-                                    targetVariable: "Unknown",
-                                    mappings: value,
-                                }
-                                timerBlocks.push(mapInstVarBlock)
-                            }
-                        }
-                    }
-                })
-
-                // If we found timer blocks, return them
-                if (timerBlocks.length > 0) {
-                    return timerBlocks
-                }
-
-                // Fallback to original logic for non-timer structures
-                let sourceVariable = "Unknown"
-                let targetVariable = "Unknown"
-
-                if (keys.length > 0) {
-                    const varKeys = keys.filter((key) => key.startsWith("$"))
-                    if (varKeys.length > 0) {
-                        sourceVariable = varKeys[0]
-                        const firstValue = mapInstVarData[varKeys[0]]
-                        if (
-                            typeof firstValue === "object" &&
-                            firstValue !== null
-                        ) {
-                            const valueKeys = Object.keys(firstValue)
-                            const targetVarKeys = valueKeys.filter((key) =>
-                                key.startsWith("$"),
-                            )
-                            if (targetVarKeys.length > 0) {
-                                targetVariable = targetVarKeys[0]
-                            }
-                        }
-                    } else {
-                        sourceVariable = keys[0]
-                    }
-                }
-
-                return [
-                    {
-                        id: `mapInstVar_${generateUniqueId()}`,
-                        type: "mapInstVar",
-                        displayName: "Map Instance Variable",
-                        sourceVariable: sourceVariable,
-                        targetVariable: targetVariable,
-                        mappings: mapInstVarData,
-                    },
-                ]
-            }
-
-            // Helper function to create If-Else blocks
-            function createIfElseBlock(conditionData) {
-                const ifElseBlock = {
-                    id: `ifElse_${generateUniqueId()}`,
-                    type: "ifElse",
-                    displayName: "If-Else",
-                    condition: conditionData.InstVar || "",
-                    thenBlocks: [],
-                    elseBlocks: [],
-                }
-
-                // Process Result (Then) blocks
-                if (conditionData.Result) {
-                    const thenBlocks = processCondition(conditionData.Result)
-                    ifElseBlock.thenBlocks = thenBlocks
-                }
-
-                // Process Else blocks
-                if (conditionData.Else) {
-                    const elseBlocks = processCondition(conditionData.Else)
-                    ifElseBlock.elseBlocks = elseBlocks
-                }
-
-                return ifElseBlock
-            }
-
-            // Helper function to create Switch blocks
-            function createSwitchBlock(switchData) {
-                if (!switchData || typeof switchData !== "object") {
-                    console.warn(
-                        `Skipped VBSP Switch with invalid value "${switchData}" (expected an object)`,
-                    )
-                    return null
-                }
-
-                const switchBlock = {
-                    id: `switch_${generateUniqueId()}`,
-                    type: "switchCase",
-                    displayName: "Switch Case",
-                    variable: "",
-                    cases: [],
-                }
-
-                const flag = switchData.Flag || "instvar"
-                const conditions = Object.keys(switchData).filter(
-                    (key) => key !== "Flag",
-                )
-
-                // Extract variable from conditions
-                if (conditions.length > 0) {
-                    const variableCounts = {}
-                    conditions.forEach((conditionKey) => {
-                        const match = conditionKey.match(/^\$([^\s]+)/)
-                        if (match) {
-                            const varName = match[1]
-                            variableCounts[varName] =
-                                (variableCounts[varName] || 0) + 1
-                        }
-                    })
-
-                    // Find the most common variable
-                    let maxCount = 0
-                    let mostCommonVariable = ""
-                    for (const [varName, count] of Object.entries(
-                        variableCounts,
-                    )) {
-                        if (count > maxCount) {
-                            maxCount = count
-                            mostCommonVariable = varName
-                        }
-                    }
-
-                    if (mostCommonVariable) {
-                        const foundVariable =
-                            findVariableByName(mostCommonVariable)
-                        switchBlock.variable = foundVariable
-                            ? foundVariable.fixupName
-                            : `$${mostCommonVariable}`
-                    }
-                }
-
-                // Convert each condition to a case block
-                conditions.forEach((conditionKey) => {
-                    const caseBlock = {
-                        id: `case_${generateUniqueId()}`,
-                        type: "case",
-                        displayName: "Case",
-                        value: "",
-                        thenBlocks: [],
-                    }
-
-                    // Extract value from condition
-                    const valueMatch = conditionKey.match(/[=\s]+(.+)$/)
-                    if (valueMatch) {
-                        caseBlock.value = valueMatch[1].trim()
-                    }
-
-                    // Process the condition data for actions
-                    const conditionData = switchData[conditionKey]
-                    if (conditionData && typeof conditionData === "object") {
-                        // Handle ChangeInstance
-                        if (conditionData.Changeinstance) {
-                            const foundInstance = findInstanceByPath(
-                                conditionData.Changeinstance,
-                            )
-                            const changeInstanceBlock = {
-                                id: `changeInstance_${generateUniqueId()}`,
-                                type: "changeInstance",
-                                displayName: "Change Instance",
-                                instanceName: foundInstance
-                                    ? foundInstance.Name
-                                    : conditionData.Changeinstance,
-                            }
-                            caseBlock.thenBlocks.push(changeInstanceBlock)
-                        }
-
-                        // Handle OffsetInst
-                        if (conditionData.OffsetInst) {
-                            const offsetBlock = {
-                                id: `offsetInst_${generateUniqueId()}`,
-                                type: "offsetInstance",
-                                displayName: "Offset Instance",
-                                offset: conditionData.OffsetInst,
-                            }
-                            caseBlock.thenBlocks.push(offsetBlock)
-                        }
-
-                        // Handle setInstVar (Change Fixup)
-                        if (conditionData.setInstVar) {
-                            // Format: "$variable value" or "$variable"
-                            const parts = conditionData.setInstVar.trim().split(/\s+/)
-                            const variable = parts[0] || ""
-                            const newValue = parts.slice(1).join(" ") || ""
-                            const setInstVarBlock = {
-                                id: `setInstVar_${generateUniqueId()}`,
-                                type: "setInstVar",
-                                displayName: "Change Fixup",
-                                variable: variable,
-                                newValue: newValue,
-                            }
-                            caseBlock.thenBlocks.push(setInstVarBlock)
-                        }
-                    }
-
-                    switchBlock.cases.push(caseBlock)
-                })
-
-                return switchBlock
-            }
-
-            const count = (n, noun) => `${n} ${noun}${n === 1 ? "" : "s"}`
-            console.log(
-                `Converted ${count(conditions.length, "VBSP condition")} to ${count(convertedBlocks.length, "block")} for "${item?.name}"`,
-            )
-
-            return { success: true, blocks: convertedBlocks }
-        } catch (error) {
-            console.error("Failed to convert VBSP conditions to blocks:", error)
-            return { success: false, error: error.message }
-        }
-    }
-
     return (
         <Box>
             <Box
@@ -4892,12 +4372,14 @@ function Conditions({
                     <Button
                         variant="contained"
                         startIcon={<Add />}
+                        disabled={Boolean(formData.conditionsError)}
                         onClick={() => setAddDialogOpen(true)}>
                         Add Block
                     </Button>
                     <Button
                         variant="outlined"
                         startIcon={<FileCopy />}
+                        disabled={Boolean(formData.conditionsError)}
                         onClick={() => {
                             loadPrefabs()
                             setPrefabDialogOpen(true)
@@ -4906,6 +4388,21 @@ function Conditions({
                     </Button>
                 </Box>
             </Box>
+
+            {formData.conditionsError && (
+                <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>
+                    {formData.conditionsError}
+                </Alert>
+            )}
+
+            {blocks.some((block) => block.type === "rawVbsp") && (
+                <Alert severity="info" sx={{ mb: 3, borderRadius: 2 }}>
+                    Raw VBSP blocks are conditions from the item's
+                    vbsp_config.cfg that BeePEE has no blocks for. They're
+                    written back exactly as they were, and you can move or
+                    delete them.
+                </Alert>
+            )}
 
             {/* Error Summary */}
             {(() => {
@@ -5162,6 +4659,7 @@ function Conditions({
                     <Button
                         variant="outlined"
                         startIcon={<Add />}
+                        disabled={Boolean(formData.conditionsError)}
                         onClick={() => setAddDialogOpen(true)}>
                         Create Your First Block
                     </Button>

@@ -2,6 +2,23 @@ const fs = require("fs")
 const path = require("path")
 const { Instance } = require("../items/Instance")
 const { vmfStatsCache } = require("../utils/vmfParser")
+const {
+    GENERATED_HEADER,
+    sameEntries,
+    stringify,
+    toObject,
+} = require("../utils/keyvalues")
+const {
+    RAW_BLOCK,
+    readText,
+    lineEnd,
+    conditionEntries,
+    rawBlocks,
+    withConditions,
+    isEmpty,
+    withHeader,
+    rawBlockObject,
+} = require("../utils/vbspConditions")
 
 /** "1 case", "3 cases" */
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
@@ -114,7 +131,10 @@ class Item {
             meta: path.join(fullItemPath, "meta.json"),
         }
 
-        // Always set vbsp_config path (now using .json instead of .cfg). Creation happens on save.
+        // The VBSP config: vbsp_config.cfg, as the package has it. Items
+        // imported before BeePEE kept it have vbsp_config.json instead (read,
+        // and replaced by the .cfg when their conditions are saved)
+        this.paths.vbsp_cfg = path.join(fullItemPath, "vbsp_config.cfg")
         this.paths.vbsp_config = path.join(fullItemPath, "vbsp_config.json")
 
         //parse editoritems file
@@ -241,15 +261,9 @@ class Item {
             return false
         }
 
-        // Check if VBSP config exists
-        if (!this.paths.vbsp_config || !fs.existsSync(this.paths.vbsp_config)) {
-            return false
-        }
-
         try {
-            const vbspData = JSON.parse(
-                fs.readFileSync(this.paths.vbsp_config, "utf-8"),
-            )
+            const vbspData = this.readVbspObject()
+            if (!vbspData) return false
 
             // Extract Changeinstance entries from the JSON structure
             const changeInstances = []
@@ -429,11 +443,9 @@ class Item {
         })
 
         // Re-add VBSP instances if they exist
-        if (this.paths.vbsp_config && fs.existsSync(this.paths.vbsp_config)) {
+        if (this.hasVbspConfig()) {
             try {
-                const vbspData = JSON.parse(
-                    fs.readFileSync(this.paths.vbsp_config, "utf-8"),
-                )
+                const vbspData = this.readVbspObject()
 
                 // Extract Changeinstance entries from the JSON structure
                 const changeInstances = []
@@ -1389,28 +1401,9 @@ class Item {
             )
 
             if (!hasButtonTypeSwitch) {
-                // Add the new switch block
+                // Add the new switch block, and save it with the others
                 existingBlocks.push(switchBlock)
-
-                // Save the blocks to meta.json
-                const metaData = fs.existsSync(this.paths.meta)
-                    ? JSON.parse(fs.readFileSync(this.paths.meta, "utf-8"))
-                    : {}
-
-                metaData.vbsp_blocks = existingBlocks
-                fs.writeFileSync(
-                    this.paths.meta,
-                    JSON.stringify(metaData, null, 4),
-                    "utf-8",
-                )
-
-                // Convert and save to vbsp_config.json
-                const vbspData = this.convertBlocksToVbsp(existingBlocks)
-                fs.writeFileSync(
-                    this.paths.vbsp_config,
-                    JSON.stringify(vbspData, null, 4),
-                    "utf-8",
-                )
+                this.saveConditions({ blocks: existingBlocks })
 
                 console.log(
                     `Generated ButtonType conditions for "${this.name}" with ${plural(cases.length, "case")}`,
@@ -1564,162 +1557,181 @@ class Item {
         return blocks.map(normalizeBlock)
     }
 
-    // Conditions management functions
+    /** Whether the item has a VBSP config */
+    hasVbspConfig() {
+        return (
+            fs.existsSync(this.paths.vbsp_cfg) ||
+            fs.existsSync(this.paths.vbsp_config)
+        )
+    }
+
+    /**
+     * The VBSP config's text and its encoding: vbsp_config.cfg, or one
+     * written from the vbsp_config.json of an older import. Null when the
+     * item has none.
+     */
+    readVbspText() {
+        if (fs.existsSync(this.paths.vbsp_cfg)) {
+            return readText(this.paths.vbsp_cfg)
+        }
+        if (fs.existsSync(this.paths.vbsp_config)) {
+            // Required here: packageManager requires this file
+            const {
+                convertJsonToVdf,
+                removeUuidsFromVbspConditions,
+            } = require("../packageManager")
+            const json = JSON.parse(
+                fs.readFileSync(this.paths.vbsp_config, "utf-8"),
+            )
+            return {
+                text: convertJsonToVdf(removeUuidsFromVbspConditions(json)),
+                encoding: "utf8",
+            }
+        }
+        return null
+    }
+
+    /** The VBSP config as a JS object (a repeated key's values in an array) */
+    readVbspObject() {
+        if (fs.existsSync(this.paths.vbsp_cfg)) {
+            return toObject(readText(this.paths.vbsp_cfg).text)
+        }
+        if (fs.existsSync(this.paths.vbsp_config)) {
+            return JSON.parse(fs.readFileSync(this.paths.vbsp_config, "utf-8"))
+        }
+        return null
+    }
+
+    /**
+     * The condition blocks: the ones the editor saved (meta.json), while
+     * saving them would write the conditions the VBSP config has. Otherwise
+     * (the file changed since, or was never saved by the editor) the file's
+     * conditions, each a raw block: its text, as it is in the file. With
+     * error when the VBSP config can't be read.
+     */
     getConditions() {
+        let saved = null
+        if (fs.existsSync(this.paths.meta)) {
+            try {
+                const metaData = JSON.parse(
+                    fs.readFileSync(this.paths.meta, "utf-8"),
+                )
+                if (Array.isArray(metaData.vbsp_blocks)) {
+                    // Normalize blocks to ensure all case blocks have a value property
+                    saved = this.normalizeBlocks(metaData.vbsp_blocks)
+                }
+            } catch (metaError) {
+                console.warn(
+                    `Failed to read the condition blocks in meta.json of "${this.name}", using its VBSP config:`,
+                    metaError,
+                )
+            }
+        }
+
         try {
-            // First try to load blocks from meta.json (preferred - preserves original structure)
-            if (fs.existsSync(this.paths.meta)) {
-                try {
-                    const metaData = JSON.parse(
-                        fs.readFileSync(this.paths.meta, "utf-8"),
-                    )
-                    if (
-                        metaData.vbsp_blocks &&
-                        Array.isArray(metaData.vbsp_blocks)
-                    ) {
-                        // Normalize blocks to ensure all case blocks have a value property
-                        const normalizedBlocks = this.normalizeBlocks(
-                            metaData.vbsp_blocks,
-                        )
-                        return { blocks: normalizedBlocks }
-                    }
-                } catch (metaError) {
-                    console.warn(
-                        `Failed to read the condition blocks in meta.json of "${this.name}", using its vbsp_config.json:`,
-                        metaError,
-                    )
-                }
+            const vbsp = this.readVbspText()
+            if (!vbsp) return { blocks: saved ?? [] }
+            if (saved && this.writesConditionsOf(vbsp.text, saved)) {
+                return { blocks: saved }
             }
-
-            // Fallback to VBSP format if no blocks in meta.json
-            // This will be auto-converted by the frontend and saved back with blocks
-            if (
-                this.paths.vbsp_config &&
-                fs.existsSync(this.paths.vbsp_config)
-            ) {
-                console.log(
-                    `Read the conditions of "${this.name}" from vbsp_config.json (the editor converts them to blocks)`,
+            if (saved) {
+                console.warn(
+                    `The VBSP config of "${this.name}" has other conditions than its saved blocks write (it changed since they were saved), so they're shown as the file has them`,
                 )
-                const vbspData = JSON.parse(
-                    fs.readFileSync(this.paths.vbsp_config, "utf-8"),
-                )
-
-                // Check if conditions have already been imported (flag is set in meta.json)
-                let vbspImported = false
-                if (fs.existsSync(this.paths.meta)) {
-                    try {
-                        const metaData = JSON.parse(
-                            fs.readFileSync(this.paths.meta, "utf-8"),
-                        )
-                        vbspImported =
-                            metaData._vbsp_conditions_imported === true
-                    } catch (error) {
-                        console.warn(
-                            `Failed to check in meta.json whether the conditions of "${this.name}" were imported:`,
-                            error,
-                        )
-                    }
-                }
-
-                // Return VBSP data with flag - frontend will convert and save it back with blocks (only if not already imported)
-                return { ...vbspData, _vbsp_conditions_imported: vbspImported }
             }
-
-            return {}
+            return { blocks: rawBlocks(vbsp.text) }
         } catch (error) {
             console.error(
-                `Failed to read the conditions of "${this.name}":`,
+                `Failed to read the VBSP config of "${this.name}":`,
                 error,
             )
-            return {}
+            return {
+                blocks: [],
+                error: `Its VBSP config can't be read (${error.message}), so BeePEE leaves it as it is`,
+            }
         }
     }
 
-    saveConditions(conditions) {
+    /** Whether saving `blocks` would write the conditions `text` has */
+    writesConditionsOf(text, blocks) {
         try {
-            // Ensure the vbsp_config directory exists
-            const vbspConfigDir = path.dirname(this.paths.vbsp_config)
-            if (!fs.existsSync(vbspConfigDir)) {
-                fs.mkdirSync(vbspConfigDir, { recursive: true })
-            }
-
-            // Convert blocks to VBSP format if needed
-            let vbspData = conditions
-            if (
-                conditions &&
-                conditions.blocks &&
-                Array.isArray(conditions.blocks)
-            ) {
-                // If there are no blocks, delete both files if they exist and return success
-                if (conditions.blocks.length === 0) {
-                    if (fs.existsSync(this.paths.vbsp_config)) {
-                        fs.unlinkSync(this.paths.vbsp_config)
-                    }
-                    if (fs.existsSync(this.paths.meta)) {
-                        const metaData = JSON.parse(
-                            fs.readFileSync(this.paths.meta, "utf-8"),
-                        )
-                        delete metaData.vbsp_blocks
-                        delete metaData._vbsp_conditions_imported
-                        fs.writeFileSync(
-                            this.paths.meta,
-                            JSON.stringify(metaData, null, 4),
-                            "utf-8",
-                        )
-                        // Sync in-memory metadata to prevent stale data
-                        this.metadata = metaData
-                    }
-                    return true
-                }
-                // Normalize blocks before converting/saving
-                const normalizedBlocks = this.normalizeBlocks(conditions.blocks)
-
-                // Convert blocks to VBSP format
-                vbspData = this.convertBlocksToVbsp(normalizedBlocks)
-
-                // Save the JSON block representation to meta.json
-                let metaData = {}
-                if (fs.existsSync(this.paths.meta)) {
-                    metaData = JSON.parse(
-                        fs.readFileSync(this.paths.meta, "utf-8"),
-                    )
-                }
-                metaData.vbsp_blocks = normalizedBlocks
-                // Mark as imported so frontend won't auto-convert again
-                metaData._vbsp_conditions_imported = true
-                fs.writeFileSync(
-                    this.paths.meta,
-                    JSON.stringify(metaData, null, 4),
-                    "utf-8",
-                )
-                // Sync in-memory metadata to prevent stale data
-                // (prevents updateMetadata() from overwriting vbsp_blocks)
-                this.metadata = metaData
-            }
-
-            // Save to vbsp_config.json
-            fs.writeFileSync(
-                this.paths.vbsp_config,
-                JSON.stringify(vbspData, null, 4),
-                "utf-8",
-            )
-
-            return true
-        } catch (error) {
-            console.error(
-                `Failed to save the conditions of "${this.name}":`,
-                error,
-            )
+            const written = this.vbspTextWith(text, blocks)
+            return sameEntries(conditionEntries(written), conditionEntries(text))
+        } catch {
             return false
         }
     }
 
-    // Convert blocks to VBSP format
-    convertBlocksToVbsp(blockList) {
-        const vbspConditions = {
-            Conditions: {},
+    /**
+     * The VBSP config's text with its conditions replaced by `blocks`': raw
+     * blocks as their text was, the others written from their blocks
+     */
+    vbspTextWith(text, blocks) {
+        const eol = lineEnd(text)
+        const written = this.blockConditions(blocks)
+        const objects = new Map(blocks.map((block, i) => [block, written[i]]))
+        return withConditions(text, blocks, (block) => {
+            const condition = { Condition: objects.get(block) }
+            return eol + stringify(condition, 1, eol).slice(0, -eol.length)
+        })
+    }
+
+    /**
+     * Save the condition blocks: in meta.json, and in the VBSP config, where
+     * they replace what's in "Conditions". A raw block is written as its text
+     * was; the rest of the file stays as it is. Throws if the VBSP config
+     * can't be read (and leaves it as it is).
+     */
+    saveConditions(conditions) {
+        if (!Array.isArray(conditions?.blocks)) {
+            throw new Error("The conditions to save aren't a list of blocks")
+        }
+        const blocks = this.normalizeBlocks(conditions.blocks)
+
+        const current = this.readVbspText()
+        const updated = this.vbspTextWith(current?.text ?? "", blocks)
+
+        if (isEmpty(updated)) {
+            for (const file of [this.paths.vbsp_cfg, this.paths.vbsp_config]) {
+                if (fs.existsSync(file)) fs.unlinkSync(file)
+            }
+        } else {
+            fs.mkdirSync(path.dirname(this.paths.vbsp_cfg), { recursive: true })
+            fs.writeFileSync(
+                this.paths.vbsp_cfg,
+                withHeader(updated, GENERATED_HEADER),
+                current?.encoding ?? "utf8",
+            )
+            // The .cfg has the conditions now (see readVbspText)
+            if (fs.existsSync(this.paths.vbsp_config)) {
+                fs.unlinkSync(this.paths.vbsp_config)
+            }
         }
 
+        // The blocks, for the editor
+        const metaData = fs.existsSync(this.paths.meta)
+            ? JSON.parse(fs.readFileSync(this.paths.meta, "utf-8"))
+            : {}
+        if (blocks.length > 0) metaData.vbsp_blocks = blocks
+        else delete metaData.vbsp_blocks
+        delete metaData._vbsp_conditions_imported
+        fs.writeFileSync(
+            this.paths.meta,
+            JSON.stringify(metaData, null, 4),
+            "utf-8",
+        )
+        // Sync in-memory metadata to prevent stale data
+        // (prevents updateMetadata() from overwriting vbsp_blocks)
+        this.metadata = metaData
+        return true
+    }
+
+    /**
+     * Each top-level block as the VBSP condition it writes (with an Instance
+     * test for this item), and null for a raw block (its text is its
+     * condition)
+     */
+    blockConditions(blockList) {
         const applyTimerLogic = (variableName, value) => {
             if (!variableName) return value
             const cleanVariableName = variableName.replace(/^\\$/, "")
@@ -1792,6 +1804,15 @@ class Item {
                 }
 
                 childBlocks.forEach((childBlock) => {
+                    if (childBlock.type === RAW_BLOCK) {
+                        const raw = rawBlockObject(childBlock)
+                        for (const [key, value] of Object.entries(raw)) {
+                            for (const each of [value].flat()) {
+                                addMulti(result, key, each)
+                            }
+                        }
+                        return
+                    }
                     const childVbsp = convertBlockToVbsp(childBlock)
 
                     // Wrap nested logical blocks under special result keys
@@ -2078,17 +2099,35 @@ class Item {
             }
         }
 
-        // Process each top-level block and create Condition objects
-        const conditions = []
+        // Attach instance filter to ensure condition targets this item's instances only
         const topLevelInstanceTest = { Instance: `<${this.id}>` }
+        return blockList.map((block) =>
+            block.type === RAW_BLOCK
+                ? null
+                : { ...topLevelInstanceTest, ...convertBlockToVbsp(block) },
+        )
+    }
+
+    // Convert blocks to VBSP format
+    convertBlocksToVbsp(blockList) {
+        const vbspConditions = {
+            Conditions: {},
+        }
+        const objects = this.blockConditions(blockList)
+        const conditions = []
         blockList.forEach((block, index) => {
-            const vbspBlock = convertBlockToVbsp(block)
-            // Attach instance filter to ensure condition targets this item's instances only
-            const withInstanceGuard = {
-                ...topLevelInstanceTest,
-                ...vbspBlock,
+            if (objects[index]) {
+                conditions.push(objects[index])
+                return
             }
-            conditions.push(withInstanceGuard)
+            // A raw block's condition, as a JS object
+            for (const [key, value] of Object.entries(rawBlockObject(block))) {
+                if (key.toLowerCase() === "condition") {
+                    conditions.push(...[value].flat())
+                } else {
+                    vbspConditions.Conditions[key] = value
+                }
+            }
         })
 
         // If there's only one condition, use a single object
@@ -2167,9 +2206,7 @@ class Item {
         const filesToCheck = [this.paths.editorItems, this.paths.properties]
 
         // Add VBSP config if it exists
-        if (this.paths.vbsp_config) {
-            filesToCheck.push(this.paths.vbsp_config)
-        }
+        filesToCheck.push(this.paths.vbsp_cfg, this.paths.vbsp_config)
 
         for (const filePath of filesToCheck) {
             if (fs.existsSync(filePath)) {

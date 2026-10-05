@@ -1,0 +1,273 @@
+/**
+ * An item's VBSP conditions (vbsp_config.cfg) as editor blocks.
+ *
+ * Every condition in the file is a "raw" block: its exact text, written back
+ * as it was. The file's other sections (DropperItems, Replacements, ...) and
+ * comments stay as they are; saving only replaces what's in "Conditions".
+ */
+const fs = require("fs")
+const { parse, toObject } = require("./keyvalues")
+
+const RAW_BLOCK = "rawVbsp"
+
+/**
+ * A file's text: as UTF-8 when it is that, else its bytes as Latin-1 (which
+ * writes them back unchanged)
+ */
+function readText(file) {
+    const bytes = fs.readFileSync(file)
+    const utf8 = bytes.toString("utf8")
+    return Buffer.from(utf8, "utf8").equals(bytes)
+        ? { text: utf8, encoding: "utf8" }
+        : { text: bytes.toString("latin1"), encoding: "latin1" }
+}
+
+/** The line end the text uses */
+function lineEnd(text) {
+    return text.includes("\r\n") ? "\r\n" : "\n"
+}
+
+/**
+ * Entries with the part of the text that's theirs: from the end of the one
+ * before (or `from`) to their own end, with any comment after them on the
+ * same line. A comment above an entry is in its part.
+ */
+function withParts(text, entries, from) {
+    let start = from
+    return entries.map((entry) => {
+        let end = entry.end
+        let i = end
+        while (text[i] === " " || text[i] === "\t") i++
+        if (text.startsWith("//", i)) {
+            while (i < text.length && text[i] !== "\n" && text[i] !== "\r") i++
+            end = i
+        }
+        const part = { entry, start, end }
+        start = end
+        return part
+    })
+}
+
+/**
+ * The text's "Conditions" blocks, each with its conditions' parts and where
+ * the text after them starts (up to the block's closing brace)
+ */
+function conditionsBlocks(text) {
+    return withParts(text, parse(text), 0)
+        .filter(
+            ({ entry }) =>
+                entry.children && entry.key.toLowerCase() === "conditions",
+        )
+        .map((block) => {
+            const conditions = withParts(
+                text,
+                block.entry.children,
+                block.entry.open + 1,
+            )
+            const tail = conditions.length
+                ? conditions[conditions.length - 1].end
+                : block.entry.open + 1
+            return { ...block, conditions, tail }
+        })
+}
+
+/** The conditions in a vbsp_config's text (all its "Conditions" blocks') */
+function conditionEntries(text) {
+    return conditionsBlocks(text).flatMap((block) =>
+        block.conditions.map(({ entry }) => entry),
+    )
+}
+
+/** The conditions in a vbsp_config's text, as raw blocks */
+function rawBlocks(text) {
+    return conditionsBlocks(text).flatMap((block, b) =>
+        block.conditions.map(({ entry, start, end }, c) => ({
+            id: `rawVbsp_${b}_${c}`,
+            type: RAW_BLOCK,
+            key: entry.key,
+            vdf: text.slice(start, end),
+        })),
+    )
+}
+
+/**
+ * The text with its conditions replaced by `blocks`: a raw block's own text,
+ * and the text `generated(block)` gives for the others. They go in the first
+ * "Conditions" block (a new one at the end when there's none) and any others
+ * are taken out; the rest of the text stays as it is.
+ */
+function withConditions(text, blocks, generated) {
+    const eol = lineEnd(text)
+    let body = ""
+    for (const block of blocks) {
+        const part =
+            block.type === RAW_BLOCK
+                ? String(block.vdf ?? "")
+                : generated(block)
+        // Keep tokens apart (a part can start right after a "{")
+        if (body && !/\s$/.test(body) && !/^\s/.test(part)) body += eol
+        body += part
+    }
+
+    const [first, ...others] = conditionsBlocks(text)
+    if (!first) {
+        if (!blocks.length) return text
+        const before = text && !/\n[ \t]*$/.test(text) ? text + eol : text
+        return `${before}"Conditions"${eol}{${body}${eol}}${eol}`
+    }
+
+    // The closing brace on a line of its own
+    const after = text.slice(first.tail, first.entry.close)
+    if (body && !/\n/.test(after) && !/\s$/.test(body)) body += eol
+
+    // Last to first, so the places of the earlier ones stay right
+    const edits = others.map(({ start, end }) => [start, end, ""]).reverse()
+    edits.push(
+        blocks.length
+            ? [first.entry.open + 1, first.tail, body]
+            : [first.start, first.end, ""],
+    )
+    return edits.reduce(
+        (result, [start, end, replacement]) =>
+            result.slice(0, start) + replacement + result.slice(end),
+        text,
+    )
+}
+
+/** Whether the text has no entries (only comments, if anything) */
+function isEmpty(text) {
+    return parse(text).length === 0
+}
+
+/** The text with `header` (BeePEE's mark) as its first line */
+function withHeader(text, header) {
+    const bom = text.startsWith("﻿") ? "﻿" : ""
+    const rest = text.slice(bom.length)
+    const firstLine = rest.match(/^[^\r\n]*/)[0]
+    if (/^\/\/\s*Generated by BeePEE/i.test(firstLine)) {
+        return bom + header + rest.slice(firstLine.length)
+    }
+    return bom + header + lineEnd(text) + rest
+}
+
+/** A raw block's condition as a JS object: { Condition: { ... } } */
+function rawBlockObject(block) {
+    return toObject(block.vdf)
+}
+
+/** `object`'s value for `key` in any case (VDF keys aren't case-sensitive) */
+function valueOf(object, key) {
+    const found = Object.keys(object).find(
+        (k) => k.toLowerCase() === key.toLowerCase(),
+    )
+    return found === undefined ? undefined : object[found]
+}
+
+/** Keys of a Switch block that set it up, rather than being cases */
+const SWITCH_SETTINGS = new Set(["flag", "test", "method", "seed"])
+
+/** The variable most of a Switch's cases test ("$cube_type 0": cube_type) */
+function mostTested(caseKeys) {
+    const counts = {}
+    for (const key of caseKeys) {
+        const variable = key.match(/^\$([^\s=]+)/)?.[1]?.toLowerCase()
+        if (variable) counts[variable] = (counts[variable] || 0) + 1
+    }
+    const [top] = Object.entries(counts).sort((a, b) => b[1] - a[1])
+    return top?.[0]
+}
+
+/**
+ * The Switch blocks over an instvar in a raw block's condition ("$cube_type
+ * 0" { "Changeinstance" "..." }), as switchCase blocks with a changeInstance
+ * in each case. Model making reads them to know which instance each value of
+ * a variable uses. `instances` (the item's) gives the names the item knows
+ * the instances by.
+ */
+function switchBlocksOf(block, instances = {}) {
+    let condition
+    try {
+        condition = rawBlockObject(block)
+    } catch {
+        return []
+    }
+
+    const names = Object.values(instances)
+        .filter((instance) => instance?.Name && !instance._toRemove)
+        .map((instance) => instance.Name)
+    const normalize = (file) => file.replace(/\\/g, "/").toLowerCase()
+    // The item's name for an instance file (the same file, else one whose
+    // path has the other's in it)
+    const instanceName = (file) => {
+        const wanted = normalize(file)
+        const overlaps = (name) =>
+            normalize(name).includes(wanted) || wanted.includes(normalize(name))
+        return (
+            names.find((name) => normalize(name) === wanted) ??
+            names.find(overlaps) ??
+            file
+        )
+    }
+
+    const switches = []
+    const addSwitch = (switchBlock) => {
+        const keys = Object.keys(switchBlock).filter(
+            (key) => !SWITCH_SETTINGS.has(key.toLowerCase()),
+        )
+        const variable = mostTested(keys)
+        if (!variable) return
+        const id = `${block.id}_switch_${switches.length}`
+        const caseBlock = (key, c) => {
+            const results = [switchBlock[key]].flat()[0]
+            const file =
+                results && typeof results === "object"
+                    ? [valueOf(results, "Changeinstance")].flat()[0]
+                    : undefined
+            const change = {
+                id: `${id}_change_${c}`,
+                type: "changeInstance",
+                instanceName: typeof file === "string" && instanceName(file),
+            }
+            return {
+                id: `${id}_case_${c}`,
+                type: "case",
+                value: key.match(/[=\s]+(.+)$/)?.[1]?.trim() ?? "",
+                thenBlocks: change.instanceName ? [change] : [],
+            }
+        }
+        switches.push({
+            id,
+            type: "switchCase",
+            variable: `$${variable}`,
+            cases: keys.map(caseBlock),
+        })
+    }
+
+    const visit = (value) => {
+        if (Array.isArray(value)) return value.forEach(visit)
+        if (!value || typeof value !== "object") return
+        for (const [key, inner] of Object.entries(value)) {
+            if (key.toLowerCase() === "switch") {
+                for (const each of [inner].flat()) {
+                    if (each && typeof each === "object") addSwitch(each)
+                }
+            }
+            visit(inner)
+        }
+    }
+    visit(condition)
+    return switches
+}
+
+module.exports = {
+    RAW_BLOCK,
+    readText,
+    lineEnd,
+    conditionEntries,
+    rawBlocks,
+    withConditions,
+    isEmpty,
+    withHeader,
+    rawBlockObject,
+    switchBlocksOf,
+}

@@ -10,6 +10,7 @@ const { findPortal2Resources } = require("../data")
 const { convertImageToVTF } = require("./vtfConverter")
 const { isDev } = require("./isDev.js")
 const { logger } = require("./logger")
+const { RAW_BLOCK, switchBlocksOf } = require("./vbspConditions")
 
 const execAsync = promisify(exec)
 
@@ -915,6 +916,14 @@ function mapVariableValuesToInstances(blocksOrVbsp, targetVariable, item = null)
         console.warn(`Could not read the item's VBSP conditions to find the instances of "${targetVariable}"`)
         return valueInstanceMap
     }
+
+    // Conditions kept as the VBSP config has them (raw blocks): their
+    // switches over a variable
+    blocks = blocks.flatMap((block) =>
+        block?.type === RAW_BLOCK
+            ? switchBlocksOf(block, item?.instances)
+            : [block],
+    )
 
     // Handle "DEFAULT" or "First Instance" specially
     const normalizedVariable = targetVariable.toUpperCase()
