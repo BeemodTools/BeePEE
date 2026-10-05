@@ -8,7 +8,7 @@ const fs = require("fs")
 const os = require("os")
 const path = require("path")
 const { parse, sameEntries, GENERATED_HEADER } = require("../utils/keyvalues")
-const { rawBlocks, switchBlocksOf } = require("../utils/vbspConditions")
+const { rawBlocks } = require("../utils/vbspConditions")
 const { processVdfFiles } = require("../packageManager")
 const { Package } = require("../models/package")
 
@@ -463,19 +463,5 @@ describe("VBSP conditions", () => {
         expect(Object.values(item.instances).map(({ Name }) => Name)).toEqual(
             expect.arrayContaining(found),
         )
-    })
-
-    test("tell model making which instance each value of a switch uses", () => {
-        const [, block] = rawBlocks(CONFIG)
-        const [switchBlock] = switchBlocksOf(block, {
-            0: { Name: "instances/cube1.vmf" },
-        })
-        expect(switchBlock.variable).toBe("$cube_type")
-        expect(
-            switchBlock.cases.map((c) => [c.value, c.thenBlocks[0]?.instanceName]),
-        ).toEqual([
-            ["0", "instances/cube0.vmf"],
-            ["1", "instances/cube1.vmf"],
-        ])
     })
 })

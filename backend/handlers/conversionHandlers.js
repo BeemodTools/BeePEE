@@ -248,71 +248,50 @@ async function makeModel(item, objPath, options) {
 }
 
 /**
- * Handle variable-based model conversion (multiple instances)
+ * Make Model for a variable: one model for each instance its values give,
+ * as BEE2's conditions give them (see variableValueInstances)
  */
 async function handleVariableConversion(event, item, instanceKey, options) {
-    const { mapVariableValuesToInstances } = require("../utils/mdlConverter")
-    const conditions = item.getConditions()
-
-    const valueInstanceMap = mapVariableValuesToInstances(conditions, instanceKey, item)
-
     // Handle DEFAULT or "First Instance"
     const normalizedKey = String(instanceKey).toUpperCase()
     if (normalizedKey === "DEFAULT" || normalizedKey === "FIRST INSTANCE") {
         return handleDefaultConversion(event, item, options)
     }
 
-    // Sort the map
-    const sortedEntries = [...valueInstanceMap.entries()].sort(([valA], [valB]) => {
-        const numA = Number(valA)
-        const numB = Number(valB)
-        if (numA === -1 && numB !== -1) return -1
-        if (numB === -1 && numA !== -1) return 1
-        return numA - numB
-    })
-    let sortedValueInstanceMap = new Map(sortedEntries)
+    const { variableValueInstances } = require("../utils/mdlConverter")
+    const plan = variableValueInstances(item, instanceKey)
 
-    if (sortedValueInstanceMap.size === 0) {
-        // For cubeType variables, fall back to using the first instance
-        if (String(instanceKey).toLowerCase().includes("cubetype")) {
-            const instanceKeys = Object.keys(item.instances).sort(
-                (a, b) => parseInt(a, 10) - parseInt(b, 10),
-            )
-            const firstKey = instanceKeys[0]
-            const firstInstance = firstKey ? item.instances[firstKey] : null
-
-            if (!firstInstance?.Name) {
-                return { success: false, error: "No instances available for fallback" }
-            }
-
-            console.log(
-                `No instances are set for "${instanceKey}" in the VBSP conditions, so every cube type uses the first instance`,
-            )
-            const cubeTypeMap = new Map()
-            for (let i = 0; i <= 4; i++) {
-                cubeTypeMap.set(String(i), firstInstance.Name)
-            }
-            sortedValueInstanceMap = cubeTypeMap
-        } else {
-            dialog.showMessageBox({
-                type: "warning",
-                title: "No Instances Found",
-                message: `No instances found for variable "${instanceKey}".`,
-                detail: "Make sure the VBSP blocks are configured correctly.",
-            })
-            return { success: false, error: `No instances found for variable "${instanceKey}"` }
-        }
+    // What the conditions give each value
+    const byFile = new Map()
+    for (const { value, file } of plan.values) {
+        const key = file ?? "(no instance)"
+        if (!byFile.has(key)) byFile.set(key, [])
+        byFile.get(key).push(value)
+    }
+    for (const [file, values] of byFile) {
+        console.log(`${plan.property} ${values.join(", ")}: ${file}`)
+    }
+    const uncertain = plan.values.filter((v) => v.uncertain)
+    if (uncertain.length > 0) {
+        console.warn(
+            `Conditions that test things BeePEE can't know (like style settings) can change the instance of ${plan.property} ${uncertain.map((v) => v.value).join(", ")}: their models may not be the ones BEE2 shows`,
+        )
     }
 
-    let finalInstanceMap = sortedValueInstanceMap
-
-    // Timer variable handling (0-30 fill)
-    if (String(instanceKey).toLowerCase().includes("timer")) {
-        finalInstanceMap = handleTimerVariable(sortedValueInstanceMap)
+    const finalInstanceMap = new Map(
+        plan.values.filter((v) => v.file).map((v) => [v.value, v.file]),
+    )
+    if (finalInstanceMap.size === 0) {
+        dialog.showMessageBox({
+            type: "warning",
+            title: "No Instances Found",
+            message: `No instances found for variable "${instanceKey}".`,
+            detail: "The item's VBSP conditions remove its instance for every value.",
+        })
+        return { success: false, error: `No instances found for variable "${instanceKey}"` }
     }
 
-    // VMF Atlas approach
-    return handleAtlasConversion(event, item, instanceKey, finalInstanceMap, options)
+    return handleAtlasConversion(event, item, plan, finalInstanceMap, options)
 }
 
 /**
@@ -367,43 +346,10 @@ async function handleDefaultConversion(event, item, options) {
 }
 
 /**
- * Handle timer variable (fill 0-30 range)
- */
-function handleTimerVariable(sortedValueInstanceMap) {
-
-    let baseInstance = null
-    if (sortedValueInstanceMap.has("0") || sortedValueInstanceMap.has(0)) {
-        const zeroKey = sortedValueInstanceMap.has("0") ? "0" : 0
-        baseInstance = sortedValueInstanceMap.get(zeroKey)
-    } else if (sortedValueInstanceMap.size > 0) {
-        const minKey = [...sortedValueInstanceMap.keys()]
-            .map((k) => Number(k))
-            .filter((n) => !isNaN(n))
-            .sort((a, b) => a - b)[0]
-        baseInstance = sortedValueInstanceMap.get(String(minKey))
-    }
-
-    if (!baseInstance) {
-        throw new Error("No timer instances found.")
-    }
-
-    const completeTimerMap = new Map()
-    for (let i = 0; i <= 30; i++) {
-        const keyStr = String(i)
-        if (sortedValueInstanceMap.has(keyStr)) {
-            completeTimerMap.set(keyStr, sortedValueInstanceMap.get(keyStr))
-        } else {
-            completeTimerMap.set(keyStr, baseInstance)
-        }
-    }
-
-    return completeTimerMap
-}
-
-/**
  * Handle multi-model conversion: one model per unique instance
  */
-async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap, options) {
+async function handleAtlasConversion(event, item, plan, finalInstanceMap, options) {
+    const instanceKey = plan.property
 
     const uniqueInstances = [...new Set(finalInstanceMap.values())]
     console.log(
@@ -561,21 +507,14 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
 
     const baseSubType = JSON.parse(JSON.stringify(editorItems.Item.Editor.SubType[0]))
 
-    // Add SubTypeProperty
-    const toPascalCase = (str) => {
-        return str
-            .split(/[\s_]+/)
-            .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-            .join("")
-    }
-    editorItems.Item.Editor.SubTypeProperty = toPascalCase(instanceKey)
+    // The property that picks the SubType
+    editorItems.Item.Editor.SubTypeProperty = plan.property
 
     const newSubTypes = buildSubTypes(
         baseSubType,
+        plan,
         finalInstanceMap,
         conversionResults,
-        instanceKey,
-        successfulResults[0].modelPath,
     )
 
     editorItems.Item.Editor.SubType = newSubTypes
@@ -603,88 +542,41 @@ async function handleAtlasConversion(event, item, instanceKey, finalInstanceMap,
 }
 
 /**
- * Build SubType array for editoritems.json
+ * The item's SubTypes, one for each value of the variable, in order (the
+ * editor shows SubType N for value N): each with the model of its value's
+ * instance, or of the default value's when its instance has none
  */
-function buildSubTypes(baseSubType, finalInstanceMap, conversionResults, instanceKey, defaultModelPath) {
-    const newSubTypes = []
-    let isFirstSubType = true
-    const isTimer = String(instanceKey).toLowerCase().includes("timer")
-
-    const valueToModelMap = new Map()
-    for (const [value, instancePath] of finalInstanceMap.entries()) {
-        if (isTimer) {
-            const numValue = Number(value)
-            if (isNaN(numValue) || numValue < 0 || numValue > 30) {
-                continue
-            }
-        }
-        const result = conversionResults.find((r) => r.instancePath === instancePath)
-        if (result && result.modelPath) {
-            valueToModelMap.set(String(value), result.modelPath)
-        }
+function buildSubTypes(baseSubType, plan, finalInstanceMap, conversionResults) {
+    const modelOf = (value) => {
+        const instancePath = finalInstanceMap.get(value)
+        const result = conversionResults.find(
+            (r) => r.instancePath === instancePath,
+        )
+        return result?.modelPath ?? null
     }
+    const defaultModel =
+        modelOf(plan.defaultValue) ??
+        conversionResults.find((r) => r.modelPath).modelPath
 
-    if (isTimer) {
-        // Timer: exactly 31 subtypes
-        for (let i = 0; i <= 30; i++) {
-            const valueStr = String(i)
-            const modelPath = valueToModelMap.get(valueStr) || defaultModelPath
-
-            let newSubType
-            if (isFirstSubType) {
-                newSubType = JSON.parse(JSON.stringify(baseSubType))
-                isFirstSubType = false
-            } else {
-                newSubType = {
-                    Name: baseSubType.Name,
-                    Model: {},
-                }
-                if (baseSubType.Sounds) {
-                    newSubType.Sounds = JSON.parse(JSON.stringify(baseSubType.Sounds))
-                }
-                if (baseSubType.Animations) {
-                    newSubType.Animations = JSON.parse(JSON.stringify(baseSubType.Animations))
-                }
-            }
-
-            if (!newSubType.Model) newSubType.Model = {}
-            newSubType.Model.ModelName = modelPath
-            newSubType.Name = baseSubType.Name
-
-            newSubTypes.push(newSubType)
+    return plan.values.map(({ value }, index) => {
+        // The first keeps everything else the SubType had
+        const subType =
+            index === 0
+                ? JSON.parse(JSON.stringify(baseSubType))
+                : { Name: baseSubType.Name, Model: {} }
+        if (index > 0 && baseSubType.Sounds) {
+            subType.Sounds = JSON.parse(JSON.stringify(baseSubType.Sounds))
         }
-    } else {
-        // Non-timer: generate based on actual models
-        for (const [value, instancePath] of finalInstanceMap.entries()) {
-            const result = conversionResults.find((r) => r.instancePath === instancePath)
-            if (result && result.modelPath) {
-                let newSubType
-                if (isFirstSubType) {
-                    newSubType = JSON.parse(JSON.stringify(baseSubType))
-                    isFirstSubType = false
-                } else {
-                    newSubType = {
-                        Name: baseSubType.Name,
-                        Model: {},
-                    }
-                    if (baseSubType.Sounds) {
-                        newSubType.Sounds = JSON.parse(JSON.stringify(baseSubType.Sounds))
-                    }
-                    if (baseSubType.Animations) {
-                        newSubType.Animations = JSON.parse(JSON.stringify(baseSubType.Animations))
-                    }
-                }
-
-                if (!newSubType.Model) newSubType.Model = {}
-                newSubType.Model.ModelName = result.modelPath
-                newSubType.Name = baseSubType.Name
-
-                newSubTypes.push(newSubType)
-            }
+        if (index > 0 && baseSubType.Animations) {
+            subType.Animations = JSON.parse(
+                JSON.stringify(baseSubType.Animations),
+            )
         }
-    }
-
-    return newSubTypes
+        if (!subType.Model) subType.Model = {}
+        subType.Model.ModelName = modelOf(value) ?? defaultModel
+        subType.Name = baseSubType.Name
+        return subType
+    })
 }
 
-module.exports = { register }
+module.exports = { register, buildSubTypes }

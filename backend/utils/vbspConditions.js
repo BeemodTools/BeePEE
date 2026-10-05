@@ -155,110 +155,6 @@ function rawBlockObject(block) {
     return toObject(block.vdf)
 }
 
-/** `object`'s value for `key` in any case (VDF keys aren't case-sensitive) */
-function valueOf(object, key) {
-    const found = Object.keys(object).find(
-        (k) => k.toLowerCase() === key.toLowerCase(),
-    )
-    return found === undefined ? undefined : object[found]
-}
-
-/** Keys of a Switch block that set it up, rather than being cases */
-const SWITCH_SETTINGS = new Set(["flag", "test", "method", "seed"])
-
-/** The variable most of a Switch's cases test ("$cube_type 0": cube_type) */
-function mostTested(caseKeys) {
-    const counts = {}
-    for (const key of caseKeys) {
-        const variable = key.match(/^\$([^\s=]+)/)?.[1]?.toLowerCase()
-        if (variable) counts[variable] = (counts[variable] || 0) + 1
-    }
-    const [top] = Object.entries(counts).sort((a, b) => b[1] - a[1])
-    return top?.[0]
-}
-
-/**
- * The Switch blocks over an instvar in a raw block's condition ("$cube_type
- * 0" { "Changeinstance" "..." }), as switchCase blocks with a changeInstance
- * in each case. Model making reads them to know which instance each value of
- * a variable uses. `instances` (the item's) gives the names the item knows
- * the instances by.
- */
-function switchBlocksOf(block, instances = {}) {
-    let condition
-    try {
-        condition = rawBlockObject(block)
-    } catch {
-        return []
-    }
-
-    const names = Object.values(instances)
-        .filter((instance) => instance?.Name && !instance._toRemove)
-        .map((instance) => instance.Name)
-    const normalize = (file) => file.replace(/\\/g, "/").toLowerCase()
-    // The item's name for an instance file (the same file, else one whose
-    // path has the other's in it)
-    const instanceName = (file) => {
-        const wanted = normalize(file)
-        const overlaps = (name) =>
-            normalize(name).includes(wanted) || wanted.includes(normalize(name))
-        return (
-            names.find((name) => normalize(name) === wanted) ??
-            names.find(overlaps) ??
-            file
-        )
-    }
-
-    const switches = []
-    const addSwitch = (switchBlock) => {
-        const keys = Object.keys(switchBlock).filter(
-            (key) => !SWITCH_SETTINGS.has(key.toLowerCase()),
-        )
-        const variable = mostTested(keys)
-        if (!variable) return
-        const id = `${block.id}_switch_${switches.length}`
-        const caseBlock = (key, c) => {
-            const results = [switchBlock[key]].flat()[0]
-            const file =
-                results && typeof results === "object"
-                    ? [valueOf(results, "Changeinstance")].flat()[0]
-                    : undefined
-            const change = {
-                id: `${id}_change_${c}`,
-                type: "changeInstance",
-                instanceName: typeof file === "string" && instanceName(file),
-            }
-            return {
-                id: `${id}_case_${c}`,
-                type: "case",
-                value: key.match(/[=\s]+(.+)$/)?.[1]?.trim() ?? "",
-                thenBlocks: change.instanceName ? [change] : [],
-            }
-        }
-        switches.push({
-            id,
-            type: "switchCase",
-            variable: `$${variable}`,
-            cases: keys.map(caseBlock),
-        })
-    }
-
-    const visit = (value) => {
-        if (Array.isArray(value)) return value.forEach(visit)
-        if (!value || typeof value !== "object") return
-        for (const [key, inner] of Object.entries(value)) {
-            if (key.toLowerCase() === "switch") {
-                for (const each of [inner].flat()) {
-                    if (each && typeof each === "object") addSwitch(each)
-                }
-            }
-            visit(inner)
-        }
-    }
-    visit(condition)
-    return switches
-}
-
 module.exports = {
     RAW_BLOCK,
     readText,
@@ -269,5 +165,4 @@ module.exports = {
     isEmpty,
     withHeader,
     rawBlockObject,
-    switchBlocksOf,
 }
