@@ -28,6 +28,24 @@ function mainItemBlock(editoritems) {
     return { ...rest, Item: Array.isArray(block) ? block[0] : block }
 }
 
+/**
+ * An editoritems instance's VMF path: from its block's "Name", or BEE2's
+ * short form, the path itself ("0" "instances/...vmf")
+ */
+function instanceName(instance) {
+    return typeof instance === "string" ? instance : getKey(instance, "Name")
+}
+
+/** "ITEM_PLACEMENT_HELPER" -> "Placement Helper" */
+function nameFromId(id) {
+    return String(id ?? "")
+        .replace(/^ITEM_/i, "")
+        .split("_")
+        .filter(Boolean)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(" ")
+}
+
 /** The styles an item's folder is taken from first */
 const PREFERRED_STYLES = ["BEE2_CLEAN", "ANY_STYLE"]
 
@@ -107,15 +125,13 @@ class Item {
 
         const parsedEditoritems = this.getEditorItems()
 
-        //handle both single SubType and array of SubTypes
+        //handle both single SubType and array of SubTypes. Items BEE2
+        //uses itself (like ITEM_PLACEMENT_HELPER) have no Editor block: they
+        //never show in the palette, and are named after their ID.
         const editor = getKey(parsedEditoritems.Item, "Editor")
-        if (!editor) {
-            throw new Error(
-                `Item ${this.id}: ${where}/editoritems has no Item > Editor block`,
-            )
-        }
-        const subType = [getKey(editor, "SubType")].flat()[0]
-        const name = getKey(subType, "Name")
+        this.hasEditor = Boolean(editor)
+        const subType = editor ? [getKey(editor, "SubType")].flat()[0] : undefined
+        const name = editor ? getKey(subType, "Name") : nameFromId(this.id)
         if (!name) {
             throw new Error(
                 `Item ${this.id}: ${where}/editoritems has no Editor > SubType > Name`,
@@ -128,14 +144,16 @@ class Item {
         this.movementHandle =
             getKey(editor, "MovementHandle") || "HANDLE_4_DIRECTIONS"
 
-        //Get details
-        if (!fs.existsSync(this.paths.properties)) {
+        //Get details. Items BEE2 uses itself (no Editor block) can do
+        //without a properties file: they have no palette entry to describe.
+        let parsedProperties = { Properties: {} }
+        if (fs.existsSync(this.paths.properties)) {
+            parsedProperties = JSON.parse(
+                fs.readFileSync(this.paths.properties, "utf-8"),
+            )
+        } else if (this.hasEditor) {
             throw new Error(`Item ${this.id}: ${where} has no properties`)
         }
-
-        const parsedProperties = JSON.parse(
-            fs.readFileSync(this.paths.properties, "utf-8"),
-        )
 
         this.details = parsedProperties["Properties"]
 
@@ -148,7 +166,7 @@ class Item {
 
         if (!this.icon) {
             //Icon isnt defined in properties, get it from editoritems
-            const rawIconPath = subType.Palette?.Image
+            const rawIconPath = subType?.Palette?.Image
             if (rawIconPath) {
                 // Remove "palette/" prefix and build full path
                 const cleanIconPath = rawIconPath.split("/").slice(1).join("/")
@@ -183,7 +201,7 @@ class Item {
                 return
             }
             this.instances[key] = {
-                Name: instance.Name,
+                Name: instanceName(instance),
                 source: "editor",
             }
         })
@@ -197,10 +215,12 @@ class Item {
         if (typeof obj === "object" && obj !== null) {
             for (const [key, value] of Object.entries(obj)) {
                 if (key === "Changeinstance") {
-                    if (Array.isArray(value)) {
-                        result.push(...value)
-                    } else {
-                        result.push(value)
+                    // Not "" (which removes the instance) or "<ITEM_ID:name>"
+                    // (an item's own instance, listed with it): not files
+                    for (const instance of [value].flat()) {
+                        const vmf =
+                            typeof instance === "string" ? instance.trim() : ""
+                        if (vmf && !/^<.*>$/.test(vmf)) result.push(vmf)
                     }
                 } else if (typeof value === "object") {
                     this.extractChangeInstances(value, result)
@@ -247,7 +267,7 @@ class Item {
                 if (
                     !Object.values(this.instances).some(
                         (inst) =>
-                            inst.Name.toLowerCase() ===
+                            inst.Name?.toLowerCase() ===
                             instancePath.toLowerCase(),
                     )
                 ) {
@@ -394,7 +414,7 @@ class Item {
                 return
             }
             this.instances[key] = {
-                Name: instance.Name,
+                Name: instanceName(instance),
                 // Preserve VMF stats if they exist in the saved data
                 ...(instance.EntityCount !== undefined && {
                     EntityCount: instance.EntityCount,
@@ -490,7 +510,7 @@ class Item {
 
                 if (!this.icon) {
                     // Icon isn't defined in properties, get it from editoritems
-                    const rawIconPath = subType.Palette?.Image
+                    const rawIconPath = subType?.Palette?.Image
                     if (rawIconPath) {
                         // Remove "palette/" prefix and build full path
                         const cleanIconPath = rawIconPath

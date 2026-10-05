@@ -90,7 +90,9 @@ async function saveItem(item) {
 
     // Validate file structure
     if (!editorItems?.Item?.Editor?.SubType) {
-        throw new Error("Invalid editor items format")
+        throw new Error(
+            "This item has no Editor block in its editoritems (BEE2 uses it itself; it's never in the palette), so it can't be saved here",
+        )
     }
     if (!properties?.Properties) {
         throw new Error("Invalid properties format")

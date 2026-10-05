@@ -93,37 +93,35 @@ class Package {
                         if (typeof styleValue === "string") {
                             processedStyles[styleKey] = styleValue
                         } else if (styleValue && typeof styleValue === "object") {
-                            const iconPath = styleValue.icon
-                            let resolvedIcon = null
-                            if (iconPath) {
-                                // Resolve icon path relative to package
-                                // Icon can be:
-                                // - "items/clean/BEE/signage/cake.png" -> resources/BEE2/items/...
-                                // - "PACKAGE:path/file.png" -> resources/BEE2/path/file.png
-                                // - "filename.png" -> resources/BEE2/items/filename.png
-                                if (iconPath.includes(":")) {
+                            // Resolve icon path relative to package
+                            // Icon can be:
+                            // - "items/clean/BEE/signage/cake.png" -> resources/BEE2/items/...
+                            // - "PACKAGE:path/file.png" -> resources/BEE2/path/file.png
+                            // - "filename.png" -> resources/BEE2/filename.png
+                            const resolveIcon = (iconPath) =>
+                                path.join(
+                                    this.packageDir,
+                                    "resources/BEE2",
                                     // Package reference - just use the part after ':'
-                                    const pathPart = iconPath.split(":")[1]
-                                    resolvedIcon = path.join(
-                                        this.packageDir,
-                                        "resources/BEE2",
-                                        pathPart,
-                                    )
-                                } else if (iconPath.includes("/")) {
-                                    // Path with directories - prepend resources/BEE2
-                                    resolvedIcon = path.join(
-                                        this.packageDir,
-                                        "resources/BEE2",
-                                        iconPath,
-                                    )
-                                } else {
-                                    // Simple filename - look directly in BEE2
-                                    resolvedIcon = path.join(
-                                        this.packageDir,
-                                        "resources/BEE2",
-                                        iconPath,
-                                    )
-                                }
+                                    iconPath.includes(":")
+                                        ? iconPath.split(":")[1]
+                                        : iconPath,
+                                )
+                            const icon = styleValue.icon
+                            let resolvedIcon = null
+                            if (typeof icon === "string" && icon) {
+                                resolvedIcon = resolveIcon(icon)
+                            } else if (icon && typeof icon === "object") {
+                                // An icon made of image layers ("img" lines in
+                                // an "icon" block): the first one in this
+                                // package
+                                const layers = [icon.img ?? icon.Img]
+                                    .flat()
+                                    .filter((layer) => typeof layer === "string")
+                                resolvedIcon =
+                                    layers
+                                        .map(resolveIcon)
+                                        .find((file) => fs.existsSync(file)) ?? null
                             }
                             processedStyles[styleKey] = {
                                 ...styleValue,

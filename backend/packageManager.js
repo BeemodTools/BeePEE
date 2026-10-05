@@ -416,6 +416,19 @@ function isArrayLikeObject(obj) {
 // VDF quoted tokens can't contain raw newlines or double quotes (the BEE2
 // parser has no escape handling for them) - sanitize so a stray character in
 // user-entered text can't produce a malformed file that hangs BEEmod on load
+/**
+ * Put condition flags kept in keys (see convertVdfToJson) back after the
+ * value or the block's name: "Tooltip [lang_zh]" "..." becomes "Tooltip"
+ * "..." [lang_zh]
+ */
+function restoreConditionFlags(vdfText) {
+    return vdfText.replace(
+        /^(\s*)"([^"\n]*?) (\[[^\]\n]+\])"(\s+"(?:[^"\\\n]|\\.)*")?[ \t]*$/gm,
+        (line, indent, key, flag, value = "") =>
+            `${indent}"${key}"${value} ${flag}`,
+    )
+}
+
 function sanitizeVdfToken(value) {
     return String(value)
         .replace(/\r?\n/g, " ")
@@ -478,7 +491,10 @@ function convertJsonToVdf(jsonData, indent = 0, parentKey = null) {
         // Regular object - write key-value pairs
         for (const [key, value] of Object.entries(jsonData)) {
             // Handle desc_ keys - convert them back to empty string keys
-            const vdfKey = key.startsWith("desc_") ? "" : key
+            // (keeping a condition flag: "desc_3 [lang_zh]")
+            const vdfKey = key.startsWith("desc_")
+                ? key.replace(/^desc_\d+/, "")
+                : key
 
             // Root-level sections with no entries (e.g. "Item": [] in a
             // signage-only package) would export as an empty block, which
@@ -509,7 +525,9 @@ function convertJsonToVdf(jsonData, indent = 0, parentKey = null) {
                         )
                         for (const k of sortedKeys) {
                             // Handle desc_ prefix - convert to empty string
-                            const innerKey = k.startsWith("desc_") ? "" : k
+                            const innerKey = k.startsWith("desc_")
+                                ? k.replace(/^desc_\d+/, "")
+                                : k
                             vdfString += `${"\t".repeat(indent + 1)}"${innerKey}" "${sanitizeVdfToken(value[k])}"\n`
                         }
                         vdfString += `${indentStr}}\n`
@@ -560,6 +578,10 @@ function convertJsonToVdf(jsonData, indent = 0, parentKey = null) {
         }
     }
 
+    // The whole file: condition flags go back after their values
+    if (indent === 0 && parentKey === null) {
+        return restoreConditionFlags(vdfString)
+    }
     return vdfString
 }
 
@@ -572,9 +594,24 @@ function convertVdfToJson(filePath) {
         // Split into lines and process each line
         const lines = rawData.split("\n")
         const fixedLines = lines.map((line) => {
-            return line.replace(/^(\s*)""\s+(".*")/, (match, indent, value) => {
-                return `${indent}"desc_${emptyKeyCounter++}" ${value}`
-            })
+            return (
+                line
+                    // Windows line ends aren't needed (and "." doesn't
+                    // match them, below)
+                    .replace(/\r$/, "")
+                    .replace(/^(\s*)""\s+(".*")/, (match, indent, value) => {
+                        return `${indent}"desc_${emptyKeyCounter++}" ${value}`
+                    })
+                    // A condition flag after a value or a block's name
+                    // ("Tooltip" "..." [lang_zh]), which the parser can't
+                    // read, goes into the key ("Tooltip [lang_zh]"):
+                    // convertJsonToVdf puts it back after the value
+                    .replace(
+                        /^(\s*)"([^"\n]*)"(\s+"(?:[^"\\\n]|\\.)*")?\s*(\[[^\]\n]+\])\s*(?:\/\/.*)?$/,
+                        (match, indent, key, value = "", flag) =>
+                            `${indent}"${key} ${flag}"${value}`,
+                    )
+            )
         })
 
         const parsedData = vdf.parse(fixedLines.join("\n"))
@@ -854,10 +891,15 @@ const updateVMFStatsForPackage = async (packageDir) => {
                         let hasChanges = false
 
                         if (item?.Exporting?.Instances) {
-                            for (const [index, instance] of Object.entries(
+                            for (const [index, entry] of Object.entries(
                                 item.Exporting.Instances,
                             )) {
-                                if (instance.Name) {
+                                // BEE2's short form is the path itself
+                                const instance =
+                                    typeof entry === "string"
+                                        ? { Name: entry }
+                                        : entry
+                                if (instance?.Name) {
                                     // Check if this is a VMF file (not VBSP)
                                     const isVbspInstance =
                                         instance.Name.includes(
