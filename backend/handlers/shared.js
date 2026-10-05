@@ -2,7 +2,7 @@
  * Shared state and helper functions for IPC handlers
  */
 
-const { BrowserWindow, dialog } = require("electron")
+const { BrowserWindow, dialog, nativeImage } = require("electron")
 const fs = require("fs")
 const path = require("path")
 const { saveItem } = require("../saveItem")
@@ -14,6 +14,7 @@ const {
 } = require("../packageManager")
 const { sendItemUpdateToEditor } = require("../items/itemEditor")
 const { logger } = require("../utils/logger")
+const { imageDataUrl } = require("../utils/imageDataUrl")
 
 // Track open preview windows to prevent duplicates
 const openPreviewWindows = new Map()
@@ -38,37 +39,85 @@ function loadOriginalItemJSON(packagePath, itemId) {
     return found
 }
 
+/** The icon preview's page: the icon, as big as the window lets it be */
+const ICON_PREVIEW_PAGE = `<!DOCTYPE html>
+<html>
+<head>
+    <meta name="viewport" content="width=device-width" />
+    <title>Icon Preview</title>
+    <style>
+        html, body { height: 100%; margin: 0; }
+        body {
+            box-sizing: border-box;
+            padding: 20px;
+            background: #2d2d2d;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: #ff6666;
+        }
+        img {
+            width: min(100%, calc(100vh - 40px));
+            aspect-ratio: 1;
+            object-fit: contain;
+            border: 1px solid #555;
+            background: #fff;
+            image-rendering: pixelated;
+        }
+    </style>
+</head>
+<body><img id="icon" alt="" /></body>
+</html>`
+
+/** Show the icon file as it is now in a preview window */
+function showPreviewIcon(previewWindow, iconPath) {
+    let script
+    try {
+        const src = JSON.stringify(imageDataUrl(iconPath))
+        script = `document.getElementById("icon").src = ${src}`
+    } catch (error) {
+        console.error(`Failed to read the icon ${iconPath}:`, error)
+        const message = JSON.stringify(`Can't show the icon: ${error.message}`)
+        script = `document.body.textContent = ${message}`
+    }
+    previewWindow.webContents.executeJavaScript(script).catch(() => {})
+}
+
 /**
- * Create an icon preview window
+ * Create an icon preview window (or bring the icon's to the front, with the
+ * icon as its file is now)
  */
 function createIconPreviewWindow(iconPath, itemName, parentWindow) {
-    // If a preview window is already open for this icon, focus it instead
-    if (openPreviewWindows.has(iconPath)) {
-        const existingWindow = openPreviewWindows.get(iconPath)
-        if (!existingWindow.isDestroyed()) {
-            existingWindow.focus()
-            return
-        }
-        // Window was destroyed, remove from map
-        openPreviewWindows.delete(iconPath)
+    const existingWindow = openPreviewWindows.get(iconPath)
+    if (existingWindow && !existingWindow.isDestroyed()) {
+        if (existingWindow.isMinimized()) existingWindow.restore()
+        existingWindow.show()
+        existingWindow.focus()
+        showPreviewIcon(existingWindow, iconPath)
+        return
     }
+    openPreviewWindows.delete(iconPath)
+    console.log(`Opening the icon preview of ${iconPath}`)
 
     const title = itemName ? `${itemName} - Icon Preview` : `Icon Preview`
+    // The icon as the window's icon (a PNG or the like)
+    const windowIcon = nativeImage.createFromPath(iconPath)
 
     const previewWindow = new BrowserWindow({
         width: 296, // 256 + 40px padding for window chrome
         height: 336, // 256 + 80px for title bar and padding
-        resizable: false,
-        maximizable: false,
+        minWidth: 160,
+        minHeight: 200,
+        resizable: true,
         minimizable: false,
         title: title,
         alwaysOnTop: true, // Keep preview on top without parent relationship
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
-            webSecurity: false, // Allow loading local files
         },
-        icon: iconPath, // Set the window icon to the preview image
+        ...(windowIcon.isEmpty() ? {} : { icon: windowIcon }),
     })
 
     // Track the window
@@ -76,45 +125,18 @@ function createIconPreviewWindow(iconPath, itemName, parentWindow) {
 
     // Clean up when window is closed
     previewWindow.on("closed", () => {
-        openPreviewWindows.delete(iconPath)
+        if (openPreviewWindows.get(iconPath) === previewWindow) {
+            openPreviewWindows.delete(iconPath)
+        }
     })
 
-    // Create simple HTML to display the image
-    const htmlContent = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <title>Icon Preview</title>
-        <style>
-            body {
-                margin: 0;
-                padding: 20px;
-                background: #2d2d2d;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                min-height: calc(100vh - 40px);
-                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-            }
-            img {
-                width: 256px;
-                height: 256px;
-                object-fit: contain;
-                border: 1px solid #555;
-                background: #fff;
-                image-rendering: pixelated;
-            }
-        </style>
-    </head>
-    <body>
-        <img src="file://${iconPath.replace(/\\/g, "/")}" alt="Icon Preview" />
-    </body>
-    </html>
-    `
-
-    // Load the HTML content
+    // The icon goes in once the page is there (big icons don't fit in the
+    // page's data: URL)
+    previewWindow.webContents.on("did-finish-load", () =>
+        showPreviewIcon(previewWindow, iconPath),
+    )
     previewWindow.loadURL(
-        `data:text/html;charset=UTF-8,${encodeURIComponent(htmlContent)}`,
+        `data:text/html;charset=UTF-8,${encodeURIComponent(ICON_PREVIEW_PAGE)}`,
     )
 
     // Remove menu bar

@@ -50,6 +50,11 @@ function register(ipcMain, mainWindow) {
         async (event, { iconPath, itemName }) => {
             try {
                 if (!iconPath || !fs.existsSync(iconPath)) {
+                    // Like a staged icon replaced since
+                    dialog.showErrorBox(
+                        "Can't Show the Icon",
+                        `The icon's file isn't there anymore:\n${iconPath}`,
+                    )
                     throw new Error("Icon file not found")
                 }
 

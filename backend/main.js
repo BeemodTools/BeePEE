@@ -117,29 +117,9 @@ const createWindow = () => {
 
 ipcMain.handle("api:loadImage", async (event, filePath) => {
     try {
-        const imageBuffer = fs.readFileSync(filePath)
-        const ext = path.extname(filePath).toLowerCase()
-
-        // A texture (like an item's palette image): as a PNG
-        if (ext === ".vtf") {
-            const {
-                decodeVtf,
-                encodePng,
-            } = require("./utils/vmfConverter/textures")
-            const { width, height, rgba } = decodeVtf(imageBuffer)
-            const png = encodePng(width, height, rgba, true)
-            return `data:image/png;base64,${png.toString("base64")}`
-        }
-
-        const base64 = imageBuffer.toString("base64")
-
-        // Determine MIME type
-        let mimeType = "image/png"
-        if (ext === ".jpg" || ext === ".jpeg") mimeType = "image/jpeg"
-        if (ext === ".gif") mimeType = "image/gif"
-        if (ext === ".svg") mimeType = "image/svg+xml"
-
-        return `data:${mimeType};base64,${base64}`
+        // A VTF (like an item's palette image) as a PNG
+        const { imageDataUrl } = require("./utils/imageDataUrl.js")
+        return imageDataUrl(filePath)
     } catch (error) {
         logger.error(`Failed to load image ${filePath}:`, error)
         return null
