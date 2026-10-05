@@ -48,6 +48,8 @@ function App() {
         progress: 0,
         message: "Loading...",
         error: null,
+        // The package that failed to open, to report it
+        failureId: null,
     })
     // Check if setup is complete on mount
     useEffect(() => {
@@ -83,6 +85,7 @@ function App() {
                 progress: data.progress,
                 message: data.message,
                 error: data.error || null,
+                failureId: data.failureId || null,
             })
 
             if (data.progress >= 100 && !data.error) {
@@ -125,6 +128,20 @@ function App() {
                                 open: false,
                                 error: null,
                             }))
+                        }
+                        onReport={
+                            loadingState.failureId
+                                ? () => {
+                                      window.package.reportFailedPackage?.(
+                                          loadingState.failureId,
+                                      )
+                                      setLoadingState((prev) => ({
+                                          ...prev,
+                                          open: false,
+                                          error: null,
+                                      }))
+                                  }
+                                : undefined
                         }
                     />
                 </>
@@ -257,6 +274,20 @@ function App() {
                                 open: false,
                                 error: null,
                             }))
+                        }
+                        onReport={
+                            loadingState.failureId
+                                ? () => {
+                                      window.package.reportFailedPackage?.(
+                                          loadingState.failureId,
+                                      )
+                                      setLoadingState((prev) => ({
+                                          ...prev,
+                                          open: false,
+                                          error: null,
+                                      }))
+                                  }
+                                : undefined
                         }
                     />
                     <UpdateNotification />

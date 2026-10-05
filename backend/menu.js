@@ -10,6 +10,7 @@ const {
     getCurrentPackageSourcePath,
     getLastSavedBpeePath,
     setLastSavedBpeePath,
+    showPackageOpenError,
 } = require("./packageManager")
 const { app, dialog, BrowserWindow } = require("electron")
 const path = require("path")
@@ -228,9 +229,11 @@ function createMainMenu(mainWindow) {
                                 `Failed to open ${result.filePaths[0]}:`,
                                 error,
                             )
-                            dialog.showErrorBox(
+                            await showPackageOpenError(
+                                mainWindow,
                                 "Open Failed",
                                 `Failed to open package: ${error.message}`,
+                                error,
                             )
                         }
                     },
@@ -353,9 +356,11 @@ function createMainMenu(mainWindow) {
                             })
                         } catch (error) {
                             console.error(`Failed to restore ${backupPath}:`, error)
-                            dialog.showErrorBox(
+                            await showPackageOpenError(
+                                mainWindow,
                                 "Restore Failed",
                                 `Failed to restore backup: ${error.message}`,
+                                error,
                             )
                         }
                     },

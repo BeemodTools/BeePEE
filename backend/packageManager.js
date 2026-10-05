@@ -79,14 +79,98 @@ let lastSavedBpeePath = null // .bpee the open package was last saved to
 let currentPackageSourcePath = null // .bpee/.zip the package was opened from
 
 // Helper function to send progress updates
-function sendProgressUpdate(progress, message, error = null) {
+function sendProgressUpdate(progress, message, error = null, failureId = null) {
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("package-loading-progress", {
             progress,
             message,
             error,
+            // A package that failed to open: the popup offers to report it
+            failureId,
         })
     }
+}
+
+/**
+ * Packages that failed to open (the newest few) by id: what was opened, and
+ * why it failed. A bug report about one sends that package (see
+ * crashReporter).
+ */
+const failedPackages = new Map()
+const MAX_FAILED_PACKAGES = 10
+let failureCount = 0
+
+/** Remember a package that failed to open; its id goes on the error */
+function rememberFailedPackage(source, error) {
+    const id = `failure_${++failureCount}`
+    failedPackages.set(id, {
+        source,
+        message: error.message,
+        stack: error.stack,
+        time: new Date().toISOString(),
+    })
+    for (const old of failedPackages.keys()) {
+        if (failedPackages.size <= MAX_FAILED_PACKAGES) break
+        failedPackages.delete(old)
+    }
+    error.failureId = id
+    return id
+}
+
+/** A package that failed to open, by its id (see rememberFailedPackage) */
+function getFailedPackage(id) {
+    return failedPackages.get(id) ?? null
+}
+
+/** The name of what was opened: a package's file, or the folder of its info.json */
+function openedName(source) {
+    return path.basename(source).toLowerCase() === "info.json"
+        ? path.basename(path.dirname(source))
+        : path.basename(source)
+}
+
+/**
+ * Open a bug report about a package that failed to open, with its error.
+ * Returns whether the failure was known.
+ */
+function reportFailedPackage(failureId) {
+    const failed = getFailedPackage(failureId)
+    if (!failed) return false
+    const { createCrashReportWindow } = require("./items/itemEditor")
+    createCrashReportWindow(
+        {
+            type: "packageOpenFailed",
+            failureId,
+            package: openedName(failed.source),
+            message: failed.message,
+            stack: failed.stack,
+            timestamp: failed.time,
+        },
+        { replace: true },
+    )
+    return true
+}
+
+/**
+ * An error box for a package that failed to open, with a Report button when
+ * the failure is known (see rememberFailedPackage)
+ */
+async function showPackageOpenError(window, title, message, error) {
+    const canReport = Boolean(getFailedPackage(error?.failureId))
+    const options = {
+        type: "error",
+        title,
+        message,
+        buttons: canReport ? ["OK", "Report"] : ["OK"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+    }
+    const { response } =
+        window && !window.isDestroyed()
+            ? await dialog.showMessageBox(window, options)
+            : await dialog.showMessageBox(options)
+    if (canReport && response === 1) reportFailedPackage(error.failureId)
 }
 
 // Helper function to forcefully remove directory using multiple strategies
@@ -1039,8 +1123,13 @@ const importPackage = async (pathToPackage) => {
         } catch (error) {
             console.error("Failed to import package:", error)
 
-            // Send error to frontend
-            sendProgressUpdate(100, "Package import failed!", error.message)
+            // Send error to frontend, which offers to report it
+            sendProgressUpdate(
+                100,
+                "Package import failed!",
+                error.message,
+                rememberFailedPackage(pathToPackage, error),
+            )
 
             // Cleanup on failure
             if (tempPkg?.packageDir && fs.existsSync(tempPkg.packageDir)) {
@@ -1224,12 +1313,35 @@ const loadPackage = async (
             const skipped = pkg.skippedItems ?? []
             if (skipped.length > 0 && mainWindow && !mainWindow.isDestroyed()) {
                 const were = skipped.length === 1 ? "was" : "were"
-                dialog.showMessageBox(mainWindow, {
-                    type: "warning",
-                    title: "Some Items Weren't Loaded",
-                    message: `${plural(skipped.length, "item")} of "${pkg.name}" couldn't be read and ${were} left out.`,
-                    detail: `${skipped.map(({ reason }) => `• ${reason}`).join("\n")}\n\nTheir files stay in the package, so saving and exporting keep them.`,
-                })
+                dialog
+                    .showMessageBox(mainWindow, {
+                        type: "warning",
+                        title: "Some Items Weren't Loaded",
+                        message: `${plural(skipped.length, "item")} of "${pkg.name}" couldn't be read and ${were} left out.`,
+                        detail: `${skipped.map(({ reason }) => `• ${reason}`).join("\n")}\n\nTheir files stay in the package, so saving and exporting keep them.`,
+                        buttons: ["OK", "Report"],
+                        defaultId: 0,
+                        cancelId: 0,
+                        noLink: true,
+                    })
+                    .then(({ response }) => {
+                        if (response !== 1) return
+                        const {
+                            createCrashReportWindow,
+                        } = require("./items/itemEditor")
+                        createCrashReportWindow(
+                            {
+                                type: "itemsSkipped",
+                                package: pkg.name,
+                                message: `${plural(skipped.length, "item")} of "${pkg.name}" couldn't be read`,
+                                stack: skipped
+                                    .map(({ reason }) => reason)
+                                    .join("\n"),
+                                timestamp: new Date().toISOString(),
+                            },
+                            { replace: true },
+                        )
+                    })
             }
 
             return pkg
@@ -1252,8 +1364,14 @@ const loadPackage = async (
                 }
             }
 
-            // Send error to frontend
-            sendProgressUpdate(100, "Package load failed!", error.message)
+            // Send error to frontend, which offers to report it. In an
+            // import, the package is the file imported.
+            sendProgressUpdate(
+                100,
+                "Package load failed!",
+                error.message,
+                rememberFailedPackage(pathToPackage, error),
+            )
 
             throw error
         }
@@ -1597,6 +1715,9 @@ module.exports = {
     convertJsonToVdf,
     removeUuidsFromVbspConditions,
     extractPackage,
+    getFailedPackage,
+    reportFailedPackage,
+    showPackageOpenError,
     processVdfFiles,
     cleanupDeletedDirectories,
 }

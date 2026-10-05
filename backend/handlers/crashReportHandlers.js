@@ -1,5 +1,6 @@
 const { submitCrashReport } = require("../utils/crashReporter")
 const { getCrashReportEndpoint } = require("../utils/crashReportConfig")
+const { reportFailedPackage } = require("../packageManager")
 
 /**
  * Register crash report IPC handlers
@@ -14,6 +15,11 @@ function register(ipcMain, mainWindow) {
             console.error("Failed to submit crash report:", error)
             return { success: false, error: error.message }
         }
+    })
+
+    // Report in the loading popup, for a package that failed to open
+    ipcMain.handle("report-failed-package", async (event, failureId) => {
+        return { success: reportFailedPackage(failureId) }
     })
 
     ipcMain.handle("get-crash-report-status", async () => {

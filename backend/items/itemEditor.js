@@ -610,13 +610,35 @@ function createModelPreviewWindow(modelData) {
     return previewWindow
 }
 
+/** The crash report window's title for an error (none: a bug the user reports) */
+function crashReportTitle(errorDetails) {
+    if (!errorDetails) return "BeePEE - Report a Bug"
+    if (errorDetails.type === "packageOpenFailed") {
+        return "BeePEE - Package Failed to Open"
+    }
+    if (errorDetails.type === "itemsSkipped") {
+        return "BeePEE - Items Weren't Loaded"
+    }
+    return "BeePEE - Unexpected Error"
+}
+
 /**
  * Create a crash report window
  * @param {Object|null} errorDetails - Error info or null for manual bug report
+ * @param {Object} [options]
+ * @param {boolean} [options.replace] - When the window is open already, show
+ *   this error in it (the user asked to report it)
  */
-function createCrashReportWindow(errorDetails) {
+function createCrashReportWindow(errorDetails, { replace = false } = {}) {
     // If window already exists, focus it
     if (crashReportWindow && !crashReportWindow.isDestroyed()) {
+        if (replace) {
+            crashReportWindow.webContents.send("crash-report-data", {
+                errorDetails: errorDetails || null,
+                isManual: !errorDetails,
+            })
+            crashReportWindow.setTitle(crashReportTitle(errorDetails))
+        }
         crashReportWindow.focus()
         return
     }
@@ -626,7 +648,7 @@ function createCrashReportWindow(errorDetails) {
     crashReportWindow = new BrowserWindow({
         width: 500,
         height: 550,
-        title: isManual ? "BeePEE - Report a Bug" : "BeePEE - Unexpected Error",
+        title: crashReportTitle(errorDetails),
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,

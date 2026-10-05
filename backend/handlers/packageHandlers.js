@@ -13,6 +13,7 @@ const {
     Package,
     getCurrentPackageDir,
     savePackageAsBpee,
+    showPackageOpenError,
 } = require("../packageManager")
 const {
     createPackageCreationWindow,
@@ -119,7 +120,12 @@ function register(ipcMain, mainWindow) {
                 return { success: true, packageId }
             } catch (error) {
                 console.error(`Failed to create package "${name}":`, error)
-                dialog.showErrorBox("Failed to Create Package", error.message)
+                await showPackageOpenError(
+                    null,
+                    "Failed to Create Package",
+                    error.message,
+                    error,
+                )
                 return { success: false, error: error.message }
             }
         },

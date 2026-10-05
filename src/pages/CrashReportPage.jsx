@@ -65,6 +65,16 @@ export default function CrashReportPage() {
         window.close()
     }
 
+    // What the report is about
+    const failedPackage = errorDetails?.type === "packageOpenFailed"
+    const heading = isManual
+        ? "Report a Bug"
+        : failedPackage
+          ? "Package Failed to Open"
+          : errorDetails?.type === "itemsSkipped"
+            ? "Items Weren't Loaded"
+            : "Unexpected Error"
+
     return (
         <Box
             sx={{
@@ -91,7 +101,7 @@ export default function CrashReportPage() {
                     <ErrorOutlineIcon sx={{ mr: 1, fontSize: 28, color: "#ff6666" }} />
                 )}
                 <Typography variant="h6" fontWeight="bold">
-                    {isManual ? "Report a Bug" : "Unexpected Error"}
+                    {heading}
                 </Typography>
             </Box>
 
@@ -118,6 +128,12 @@ export default function CrashReportPage() {
                                 "& .MuiAlert-icon": { color: "#ff6666" },
                             }}
                         >
+                            {/* The package's name, when the error doesn't say it */}
+                            {failedPackage &&
+                                errorDetails.package &&
+                                !errorDetails.message?.includes(
+                                    errorDetails.package,
+                                ) && <strong>{errorDetails.package}: </strong>}
                             {errorDetails.message || "An unknown error occurred"}
                         </Alert>
 
@@ -238,7 +254,7 @@ export default function CrashReportPage() {
                     variant="caption"
                     sx={{ color: "rgba(255,255,255,0.5)" }}
                 >
-                    Please be as descriptive as possible - it helps a lot! Your logs and current package will be included automatically (with your user name, PC name and other personal details taken out).
+                    Please be as descriptive as possible - it helps a lot! Your logs and {failedPackage ? "the package that failed to open" : "current package"} will be included automatically (with your user name, PC name and other personal details taken out).
                 </Typography>
 
                 {/* Submission result feedback */}

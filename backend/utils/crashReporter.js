@@ -5,7 +5,12 @@ const { app } = require("electron")
 const { logger } = require("./logger")
 const { getCrashReportEndpoint } = require("./crashReportConfig")
 const { isBeta } = require("./betaInfo")
-const { getCurrentPackageDir, savePackageAsBpee } = require("../packageManager")
+const {
+    getCurrentPackageDir,
+    savePackageAsBpee,
+    extractPackage,
+    getFailedPackage,
+} = require("../packageManager")
 
 const MAX_LOG_BYTES = 500 * 1024 // 500KB read buffer
 const MAX_LOG_LINES = 500 // Only upload last 500 lines
@@ -218,6 +223,36 @@ function getDirectorySize(dirPath) {
     return total
 }
 
+/** Why a package isn't sent: it's over the size limit */
+function tooLarge(bytes) {
+    const sizeMB = (bytes / (1024 * 1024)).toFixed(1)
+    return {
+        filePath: null,
+        skipped: true,
+        reason: `Package too large (${sizeMB} MB, limit is 50 MB)`,
+    }
+}
+
+/**
+ * A temporary .bpee of the package files `fill(folder)` puts in a folder,
+ * with personal details taken out of them
+ */
+async function redactedPackageZip(fill) {
+    const name = `beepee-crash-report-${Date.now()}`
+    const folder = path.join(app.getPath("temp"), name)
+    const tempPath = `${folder}.bpee`
+    try {
+        await fill(folder)
+        const size = getDirectorySize(folder)
+        if (size > MAX_PACKAGE_SIZE) return tooLarge(size)
+        redactFolder(folder)
+        await savePackageAsBpee(folder, tempPath)
+        return { filePath: tempPath, skipped: false }
+    } finally {
+        fs.rmSync(folder, { recursive: true, force: true })
+    }
+}
+
 /**
  * Create a temporary .bpee ZIP of the current package, from a copy with
  * personal details taken out of its files
@@ -231,26 +266,51 @@ async function createTempPackageZip() {
         }
 
         const dirSize = getDirectorySize(packageDir)
-        if (dirSize > MAX_PACKAGE_SIZE) {
-            const sizeMB = (dirSize / (1024 * 1024)).toFixed(1)
+        if (dirSize > MAX_PACKAGE_SIZE) return tooLarge(dirSize)
+
+        return await redactedPackageZip((folder) =>
+            fs.cpSync(packageDir, folder, { recursive: true }),
+        )
+    } catch (err) {
+        return {
+            filePath: null,
+            skipped: true,
+            reason: `Failed to create package ZIP: ${err.message}`,
+        }
+    }
+}
+
+/**
+ * Like createTempPackageZip, for a package that failed to open: `source` is
+ * what was opened, a package file (unpacked again here) or an info.json
+ * (its folder)
+ * @returns {Promise<{filePath: string|null, skipped: boolean, reason?: string}>}
+ */
+async function createFailedPackageZip(source) {
+    try {
+        if (!source || !fs.existsSync(source)) {
             return {
                 filePath: null,
                 skipped: true,
-                reason: `Package too large (${sizeMB} MB, limit is 50 MB)`,
+                reason: "The package that failed to open isn't there anymore",
             }
         }
 
-        const name = `beepee-crash-report-${Date.now()}`
-        const tempPath = path.join(app.getPath("temp"), `${name}.bpee`)
-        const copy = path.join(app.getPath("temp"), name)
-        try {
-            fs.cpSync(packageDir, copy, { recursive: true })
-            redactFolder(copy)
-            await savePackageAsBpee(copy, tempPath)
-        } finally {
-            fs.rmSync(copy, { recursive: true, force: true })
+        if (path.basename(source).toLowerCase() === "info.json") {
+            const packageDir = path.dirname(source)
+            const dirSize = getDirectorySize(packageDir)
+            if (dirSize > MAX_PACKAGE_SIZE) return tooLarge(dirSize)
+            return await redactedPackageZip((folder) =>
+                fs.cpSync(packageDir, folder, { recursive: true }),
+            )
         }
-        return { filePath: tempPath, skipped: false }
+
+        const fileSize = fs.statSync(source).size
+        if (fileSize > MAX_PACKAGE_SIZE) return tooLarge(fileSize)
+        return await redactedPackageZip(async (folder) => {
+            fs.mkdirSync(folder, { recursive: true })
+            await extractPackage(source, folder)
+        })
     } catch (err) {
         return {
             filePath: null,
@@ -282,7 +342,21 @@ async function submitCrashReport({ userDescription, errorDetails, contact }) {
             const logs = redactPersonalInfo(collectLogs())
             const packageJson = require("../../package.json")
 
-            const packageResult = await createTempPackageZip()
+            // The package the report is about: the one that failed to
+            // open, or else the open one
+            const failedOpen = errorDetails?.type === "packageOpenFailed"
+            const failed = failedOpen
+                ? getFailedPackage(errorDetails.failureId)
+                : null
+            const packageResult = !failedOpen
+                ? await createTempPackageZip()
+                : failed
+                  ? await createFailedPackageZip(failed.source)
+                  : {
+                        filePath: null,
+                        skipped: true,
+                        reason: "The package that failed to open is no longer known",
+                    }
             tempBpeePath = packageResult.filePath
 
             // Build FormData
@@ -384,6 +458,7 @@ async function submitCrashReport({ userDescription, errorDetails, contact }) {
 
 module.exports = {
     submitCrashReport,
+    createFailedPackageZip,
     collectLogs,
     redactPersonalInfo,
     redactFolder,

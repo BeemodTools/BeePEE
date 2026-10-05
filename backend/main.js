@@ -620,10 +620,12 @@ async function handleFileOpen(filePath, isStartup = false) {
         }
     } catch (error) {
         logger.error(`Failed to open ${filePath}:`, error)
-        const { dialog } = require("electron")
-        dialog.showErrorBox(
+        const { showPackageOpenError } = require("./packageManager")
+        await showPackageOpenError(
+            mainWindow,
             "Open Failed",
-            `Failed to open ${path.basename(filePath)}: ${error.message}`
+            `Failed to open ${path.basename(filePath)}: ${error.message}`,
+            error,
         )
 
         // Show window even on error (if it was hidden during startup)

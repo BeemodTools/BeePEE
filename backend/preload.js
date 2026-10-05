@@ -395,6 +395,8 @@ contextBridge.exposeInMainWorld("package", {
         ipcRenderer.invoke("submit-crash-report", { userDescription, errorDetails, contact }),
     getCrashReportStatus: () =>
         ipcRenderer.invoke("get-crash-report-status"),
+    reportFailedPackage: (failureId) =>
+        ipcRenderer.invoke("report-failed-package", failureId),
     onCrashReportData: (callback) => {
         ipcRenderer.removeAllListeners("crash-report-data")
         ipcRenderer.on("crash-report-data", (event, data) => callback(data))
