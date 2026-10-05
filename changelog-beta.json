@@ -5,7 +5,7 @@
             "date": "2026-10-5",
             "notes": [
                 "This is a BETA build - it is bug prone. If you encounter any bugs go to Help > Report Bug. Please stress test as much as you can!",
-                "Conditions are now kept exactly as written, and Make Model follows them. Please test items with conditions and multiple models (cube types, timers, etc.)"
+                "This fix primarly focuses on package compatibility. Please try to import packages to see if BeePEE will crash out."
             ],
             "changes": {
                 "added": [
@@ -15,14 +15,15 @@
                 "fixed": [
                     "Conditions getting deleted or broken when opening, saving or exporting items (ones BeePEE can't edit show as Raw VBSP blocks now)",
                     "Make Model picking the wrong model for some cube types, timers, etc.",
-                    "Some packages failing to open (all 86 BEE2 4.46 packages open now)",
+                    "Some packages failing to open",
                     "Missing descriptions and icons on some items",
                     "Gel blobs and cubes showing the wrong model in generated models",
-                    "Icon preview sometimes not opening (it's resizable now too)"
+                    "Icon preview sometimes not opening (it's resizable now too)",
+                    "Some autopacking logic"
                 ],
                 "changed": [
                     "Icon maker reuses the models from Make Model",
-                    "Bug reports leave out personal details like your username and PC name"
+                    "Bug reports leave out personal details like your username and PC name client side"
                 ]
             }
         },
