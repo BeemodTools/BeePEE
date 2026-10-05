@@ -29,6 +29,7 @@ const {
     VmfConverter,
     convertVmf,
     assertHasGeometry,
+    hasDrawableContent,
 } = require("../utils/vmfConverter")
 
 const close = (actual, expected) =>
@@ -682,6 +683,26 @@ describe("convertVmf: empty results, model entities and tints", () => {
         } finally {
             await converter.dispose()
         }
+    })
+
+    test("draws gel blobs as a ball in their gel's color, not their placeholder model", async () => {
+        const vmf = `entity { "id" "1" "classname" "prop_paint_bomb" "model" "models/error.mdl" "painttype" "2" "skin" "2" "origin" "0 0 128" }`
+        expect(hasDrawableContent(parseVmf(vmf))).toBe(true)
+        const result = await convert("gel", vmf)
+        const obj = fs.readFileSync(result.objPath, "utf8")
+        expect(obj).toContain("usemtl bpee_gel_2\n")
+        expect(obj).not.toMatch(/error/)
+        expect(
+            readPngPixel(
+                path.join(root, "out", "materials", "bpee_colors", "bpee_gel_2.png"),
+                0,
+                0,
+            ),
+        ).toEqual([255, 106, 0])
+        // A ball around the entity's origin
+        const heights = [...obj.matchAll(/^v \S+ \S+ (\S+)$/gm)].map((m) => Number(m[1]))
+        expect(Math.min(...heights)).toBeCloseTo(104)
+        expect(Math.max(...heights)).toBeCloseTo(152)
     })
 })
 
