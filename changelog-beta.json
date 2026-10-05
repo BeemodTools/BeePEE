@@ -5,34 +5,24 @@
             "date": "2026-10-5",
             "notes": [
                 "This is a BETA build - it is bug prone. If you encounter any bugs go to Help > Report Bug. Please stress test as much as you can!",
-                "Conditions are now kept exactly as the package has them. Please open, save and export items with conditions (especially items from other packages) and check they still work in BEE2.",
-                "Make Model now runs the item's conditions to pick each model. Please try it on items with multiple models (cube types, timers, etc.)"
+                "Conditions are now kept exactly as written, and Make Model follows them. Please test items with conditions and multiple models (cube types, timers, etc.)"
             ],
             "changes": {
                 "added": [
                     "Report button when a package fails to open",
-                    "Button to autopack an instance again (Instances tab)"
+                    "Autopack again button in the Instances tab"
                 ],
                 "fixed": [
-                    "Conditions BeePEE can't edit getting deleted when opening an item (they show as Raw VBSP blocks now and are kept exactly as they are)",
-                    "Exporting a package rewriting vbsp_config.cfg files, which could break items (like MapInstVar mappings and repeated keys)",
-                    "Some condition blocks saving VBSP that BEE2 can't read (Change Fixup, Add Global Instance, Offset Instance, an empty Change Instance, and blocks outside an If Block)",
-                    "Two blocks of the same kind in one If Block (like two overlays) only saving the last one",
-                    "Applying a conditions prefab saving broken conditions",
-                    "Make Model picking the wrong model for some cube types, timer delays and other options",
-                    "Some packages failing to open, like Decoration Station (all 86 packages in BEE2 4.46 open now, and an item that can't be read is skipped instead)",
-                    "A package failing to open closing the one you had open",
-                    "Descriptions not loading for some items, like the neurotoxin timer (descriptions in info.txt load and save now)",
-                    "Icons not showing for items that only have a palette texture (.vtf)",
-                    "Instances used by an item's conditions missing from its Instances tab",
-                    "Icon preview sometimes not opening, or showing an old icon",
-                    "Gel blobs showing as the error model in generated models",
-                    "Cubes showing the wrong model in generated models, and their Hammer model showing as a missing file"
+                    "Conditions getting deleted or broken when opening, saving or exporting items (ones BeePEE can't edit show as Raw VBSP blocks now)",
+                    "Make Model picking the wrong model for some cube types, timers, etc.",
+                    "Some packages failing to open (all 86 BEE2 4.46 packages open now)",
+                    "Missing descriptions and icons on some items",
+                    "Gel blobs and cubes showing the wrong model in generated models",
+                    "Icon preview sometimes not opening (it's resizable now too)"
                 ],
                 "changed": [
-                    "Icon maker reuses the models Make Model made instead of making them again",
-                    "Icon preview window can be resized",
-                    "Bug reports leave out your Windows username, PC name and other personal details"
+                    "Icon maker reuses the models from Make Model",
+                    "Bug reports leave out personal details like your username and PC name"
                 ]
             }
         },
