@@ -685,32 +685,72 @@ describe("convertVmf: empty results, model entities and tints", () => {
         }
     })
 
-    test("draws gel blobs as a ball in their gel's color, not their placeholder model", async () => {
-        const vmf = `entity { "id" "1" "classname" "prop_paint_bomb" "model" "models/error.mdl" "painttype" "2" "skin" "2" "origin" "0 0 128" }`
-        expect(hasDrawableContent(parseVmf(vmf))).toBe(true)
-        const result = await convert("gel", vmf)
-        const obj = fs.readFileSync(result.objPath, "utf8")
-        expect(obj).toContain("usemtl bpee_gel_2\n")
-        expect(obj).not.toMatch(/error/)
-        expect(
-            readPngPixel(
-                path.join(
-                    root,
-                    "out",
-                    "materials",
-                    "bpee_colors",
-                    "bpee_gel_2.png",
-                ),
-                0,
-                0,
-            ),
-        ).toEqual([255, 106, 0])
-        // A ball around the entity's origin
-        const heights = [...obj.matchAll(/^v \S+ \S+ (\S+)$/gm)].map((m) =>
-            Number(m[1]),
-        )
-        expect(Math.min(...heights)).toBeCloseTo(104)
-        expect(Math.max(...heights)).toBeCloseTo(152)
+    test("draws gel blobs with Hammer's gel model in their paint type's skin, not their placeholder model", async () => {
+        const bomb = (id, type) =>
+            `entity { "id" "${id}" "classname" "prop_paint_bomb" "model" "models/error.mdl" "painttype" "${type}" "skin" "0" "origin" "0 0 128" }`
+        // Drawn, though its model is an editor model
+        expect(hasDrawableContent(parseVmf(bomb(1, 2)))).toBe(true)
+
+        const folder = path.join(content(), "materials", "test")
+        for (const name of ["blob_surface_speed", "blob_surface_stick"]) {
+            fs.writeFileSync(
+                path.join(folder, `${name}.vmt`),
+                `"VertexLitGeneric" { "$basetexture" "test/wall" }`,
+            )
+        }
+        const converter = await new VmfConverter({
+            resourcePaths: [content()],
+            quiet: true,
+        }).init()
+        // Stand-in for the decompiled gel model: skin N swaps in texture N
+        const loaded = new Set()
+        converter.getModel = async (modelPath) => {
+            loaded.add(modelPath)
+            return {
+                qc: {
+                    cdmaterials: ["test"],
+                    textureGroups: [
+                        ["bounce", "reflect", "speed", "portal", "erase", "stick"].map(
+                            (gel) => [`blob_surface_${gel}`],
+                        ),
+                    ],
+                    modelName: null,
+                    sequences: [],
+                },
+                references: [],
+                missing: [],
+            }
+        }
+        converter.getGeometry = async () => ({
+            triangles: [
+                {
+                    material: "blob_surface_bounce",
+                    verts: [
+                        [0, 0, 0],
+                        [16, 0, 0],
+                        [0, 16, 0],
+                    ].map((pos) => ({ pos, normal: [0, 0, 1], uv: [0, 0] })),
+                },
+            ],
+        })
+        const vmfPath = path.join(root, "gel.vmf")
+        fs.writeFileSync(vmfPath, `${bomb(1, 2)}\n${bomb(2, 1)}`)
+        try {
+            const result = await converter.convert(
+                vmfPath,
+                path.join(root, "out", "gel"),
+            )
+            const obj = fs.readFileSync(result.objPath, "utf8")
+            expect([...loaded]).toEqual(["models/editor/prop_paint_bomb.mdl"])
+            // Propulsion gel's skin, whatever its skin keyvalue
+            expect(obj).toContain("usemtl blob_surface_speed\n")
+            // Reflection gel's skin has no material in the game files, so it
+            // has the gray gel's
+            expect(obj).toContain("usemtl blob_surface_stick\n")
+            expect(obj).not.toMatch(/error|bounce|reflect/)
+        } finally {
+            await converter.dispose()
+        }
     })
 })
 
@@ -1422,5 +1462,29 @@ describe("weighted cubes", () => {
             path: "models/custom/cube.mdl",
             skin: null,
         })
+    })
+})
+
+describe("gel blobs", () => {
+    // modelOf doesn't need a session
+    const converter = Object.create(VmfConverter.prototype)
+    const bomb = (keyvalues) =>
+        converter.modelOf(
+            parseVmf(
+                `entity { "id" "1" "classname" "prop_paint_bomb" "model" "models/props/futbol.mdl" ${keyvalues} }`,
+            ).entities[0],
+        )
+
+    test("use Hammer's gel model, in their paint type's skin", () => {
+        const skins = ["0", "1", "2", "3", "4"].map(
+            (type) => bomb(`"PaintType" "${type}" "skin" "0"`).skin,
+        )
+        // Reflection gel (1) has the gray gel's skin (5)
+        expect(skins).toEqual([0, 5, 2, 3, 4])
+        expect(bomb("")).toEqual({
+            path: "models/editor/prop_paint_bomb.mdl",
+            skin: 0,
+        })
+        expect(bomb(`"PaintType" "9"`).skin).toBe(0)
     })
 })

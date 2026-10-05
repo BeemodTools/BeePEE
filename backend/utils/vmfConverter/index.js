@@ -115,51 +115,14 @@ const CUBE_TYPES = [
 
 /**
  * prop_paint_bomb is a blob of gel the game draws itself: its "model"
- * keyvalue only quiets a warning, and its "skin" only shows the gel in
- * Hammer. It's drawn as a ball in its gel's color, by its "PaintType".
+ * keyvalue only quiets a warning. It's drawn with the model Hammer shows it
+ * with (in Portal 2's hammer folder), in the skin of its "PaintType": skin N
+ * is paint type N, but skin 1's material (models/editor/ts/
+ * blob_surface_reflect) isn't in the game files, so reflection gel has skin
+ * 5's (blob_surface_stick, gray).
  */
-const GEL_COLORS = [
-    [0, 165, 255], // 0: repulsion
-    [130, 50, 200], // 1: reflection / adhesion
-    [255, 106, 0], // 2: propulsion
-    [225, 225, 225], // 3: conversion
-    [140, 175, 205], // 4: cleansing
-]
-const GEL_RADIUS = 24
-
-/**
- * The triangles of a ball of radius 1, outside faces counter-clockwise
- * (like the props): each corner's position (also its normal) and UV
- */
-function ballTriangles(segments, rings) {
-    const corner = (ring, segment) => {
-        const across = (ring / rings) * Math.PI
-        const around = (segment / segments) * 2 * Math.PI
-        return {
-            pos: [
-                Math.sin(across) * Math.cos(around),
-                Math.sin(across) * Math.sin(around),
-                Math.cos(across),
-            ],
-            uv: [segment / segments, 1 - ring / rings],
-        }
-    }
-    const triangles = []
-    for (let ring = 0; ring < rings; ring++) {
-        for (let segment = 0; segment < segments; segment++) {
-            const a = corner(ring, segment)
-            const b = corner(ring + 1, segment)
-            const c = corner(ring + 1, segment + 1)
-            const d = corner(ring, segment + 1)
-            // None at the poles, where two corners are the same
-            if (ring > 0) triangles.push([a, b, d])
-            if (ring < rings - 1) triangles.push([d, b, c])
-        }
-    }
-    return triangles
-}
-
-const GEL_BALL = ballTriangles(24, 12)
+const GEL_MODEL = "models/editor/prop_paint_bomb.mdl"
+const GEL_SKINS = [0, 5, 2, 3, 4]
 
 /** Stand-in for missing textures: Source's purple/black checkerboard */
 const PLACEHOLDER_TEXTURE = "bpee_missing_texture"
@@ -205,10 +168,6 @@ const INVISIBLE = Symbol("invisible material")
 /** Folder (under materials/) for the see-through textures of glass */
 const GLASS_FOLDER = "bpee_glass"
 const GLASS_SIZE = 16
-
-/** Folder (under materials/) for textures of one color (gel blobs) */
-const COLOR_FOLDER = "bpee_colors"
-const COLOR_SIZE = 8
 
 /** How opaque glass (the Refract shader) is drawn */
 const GLASS_ALPHA = 0.35
@@ -541,9 +500,9 @@ class VmfConverter {
      */
     isModelEntity(entity) {
         const classname = entity.classname.toLowerCase()
-        const info = this.modelOf(entity)
-        if (info?.gel !== undefined) return true
-        const model = info?.path
+        // Its editor model stands for the blob the game draws (GEL_MODEL)
+        if (classname === "prop_paint_bomb") return true
+        const model = this.modelOf(entity)?.path
         if (!model)
             return /^prop_(static|dynamic|physics|detail)/.test(classname)
         return (
@@ -821,59 +780,6 @@ class VmfConverter {
         return materialName
     }
 
-    /**
-     * A material with a texture of one color (things drawn without a
-     * model, like gel blobs)
-     * @param {number[]} color - 0-255 RGB
-     */
-    async registerColor(state, materialName, color) {
-        if (state.textures.has(materialName)) return materialName
-        const textureName = `${COLOR_FOLDER}/${materialName}`
-        const key = `${state.outDir}|${textureName}`
-        if (!this.textures.has(key)) {
-            this.textures.set(
-                key,
-                (async () => {
-                    const target = path.join(
-                        state.outDir,
-                        "materials",
-                        `${textureName}.png`,
-                    )
-                    await fs.promises.mkdir(path.dirname(target), {
-                        recursive: true,
-                    })
-                    const rgba = Buffer.alloc(COLOR_SIZE * COLOR_SIZE * 4)
-                    for (let o = 0; o < rgba.length; o += 4) {
-                        rgba.set([...color, 255], o)
-                    }
-                    await fs.promises.writeFile(
-                        target,
-                        encodePng(COLOR_SIZE, COLOR_SIZE, rgba, false),
-                    )
-                })(),
-            )
-        }
-        await this.textures.get(key)
-
-        state.textures.set(materialName, {
-            width: COLOR_SIZE,
-            height: COLOR_SIZE,
-            alphaMode: null,
-        })
-        state.mtl.push(
-            "",
-            `newmtl ${materialName}`,
-            "Ka 1.000 1.000 1.000",
-            "Kd 1.000 1.000 1.000",
-            "Ks 0.000 0.000 0.000",
-            `map_Ka materials/${textureName}.png`,
-            `map_Kd materials/${textureName}.png`,
-            "",
-        )
-        state.stats.materials++
-        return materialName
-    }
-
     /** Give a material the purple/black placeholder texture */
     async registerPlaceholder(state, materialName) {
         if (state.textures.has(materialName)) return materialName
@@ -1093,16 +999,17 @@ class VmfConverter {
 
     /**
      * The model an entity draws: its "model" keyvalue, else a built-in one
-     * @returns {{path: string|null, skin: number|null, gel?: number}|null}
+     * @returns {{path: string|null, skin: number|null}|null}
      *   skin is the default skin for built-in models (the entity's "skin"
-     *   keyvalue still wins); gel is a gel blob's paint type (no model)
+     *   keyvalue still wins)
      */
     modelOf(entity) {
         const classname = entity.classname.toLowerCase()
         if (classname === "prop_paint_bomb") {
-            // A blob of gel the game draws itself (see GEL_COLORS)
+            // A blob of gel the game draws itself, by its paint type (see
+            // GEL_MODEL)
             const type = Number.parseInt(entity.get("painttype") ?? "0", 10)
-            return { path: null, skin: null, gel: GEL_COLORS[type] ? type : 0 }
+            return { path: GEL_MODEL, skin: GEL_SKINS[type] ?? GEL_SKINS[0] }
         }
         if (classname === "npc_portal_turret_floor") {
             // "ModelIndex" picks the model (normal, box, backwards, skeleton
@@ -1212,10 +1119,6 @@ class VmfConverter {
 
     async writeProp(state, entity) {
         const modelInfo = this.modelOf(entity)
-        if (modelInfo?.gel !== undefined) {
-            await this.writeGelBlob(state, entity, modelInfo.gel)
-            return
-        }
         const modelPath = modelInfo?.path
         if (!modelPath) {
             this.warn(`Prop has no model? ${entity.classname}`)
@@ -1350,50 +1253,6 @@ class VmfConverter {
             faces.push({ text, material: materialNames.get(tri.material) })
             state.vt += tri.verts.length
             state.vn += tri.verts.length
-        }
-
-        state.obj.push("")
-        state.v += vertices.list.length
-        this.writeFaces(state, faces)
-        state.stats.props++
-    }
-
-    /** Draw a prop_paint_bomb: a ball in its gel's color (GEL_COLORS) */
-    async writeGelBlob(state, entity, type) {
-        const material = await this.registerColor(
-            state,
-            `bpee_gel_${type}`,
-            GEL_COLORS[type],
-        )
-        const origin = parseVector(entity.get("origin"))
-        const triangles = GEL_BALL.map((corners) =>
-            corners.map(({ pos, uv }) => ({
-                pos: pos.map((value, i) => origin[i] + value * GEL_RADIUS),
-                normal: pos,
-                uv,
-            })),
-        )
-        const vertices = new VertexList()
-        for (const tri of triangles) for (const v of tri) vertices.add(v.pos)
-
-        state.obj.push("", "", `o gel_blob_${type}`, "")
-        for (const p of vertices.list)
-            state.obj.push(`v ${p[0]} ${p[1]} ${p[2]}`)
-        state.obj.push("")
-
-        const faces = []
-        for (const tri of triangles) {
-            let text = ""
-            tri.forEach((v, i) => {
-                state.obj.push(`vt ${v.uv[0]} ${v.uv[1]}`)
-                state.obj.push(
-                    `vn ${v.normal[0]} ${v.normal[1]} ${v.normal[2]}`,
-                )
-                text += `${vertices.indexOf(v.pos) + state.v}/${i + state.vt}/${i + state.vn} `
-            })
-            faces.push({ text, material })
-            state.vt += tri.length
-            state.vn += tri.length
         }
 
         state.obj.push("")
