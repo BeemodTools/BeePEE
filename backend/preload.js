@@ -281,8 +281,6 @@ contextBridge.exposeInMainWorld("package", {
     getConditions: (itemId) => ipcRenderer.invoke("get-conditions", { itemId }),
     saveConditions: (itemId, conditions) =>
         ipcRenderer.invoke("save-conditions", { itemId, conditions }),
-    convertBlocksToVbsp: (blocks) =>
-        ipcRenderer.invoke("convert-blocks-to-vbsp", { blocks }),
     getVbspPrefabs: () => ipcRenderer.invoke("get-vbsp-prefabs"),
 
     // ========================================
