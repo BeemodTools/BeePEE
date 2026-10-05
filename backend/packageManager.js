@@ -849,11 +849,13 @@ const updateVMFStatsForPackage = async (packageDir) => {
                         const editorItems = JSON.parse(
                             fs.readFileSync(editorItemsPath, "utf-8"),
                         )
+                        // The item's own block, when there are several
+                        const item = [editorItems.Item].flat()[0]
                         let hasChanges = false
 
-                        if (editorItems.Item?.Exporting?.Instances) {
+                        if (item?.Exporting?.Instances) {
                             for (const [index, instance] of Object.entries(
-                                editorItems.Item.Exporting.Instances,
+                                item.Exporting.Instances,
                             )) {
                                 if (instance.Name) {
                                     // Check if this is a VMF file (not VBSP)
@@ -892,9 +894,8 @@ const updateVMFStatsForPackage = async (packageDir) => {
                                                     vmfStats.BrushSideCount ||
                                                     0,
                                             }
-                                            editorItems.Item.Exporting.Instances[
-                                                index
-                                            ] = updatedInstance
+                                            item.Exporting.Instances[index] =
+                                                updatedInstance
                                             hasChanges = true
                                             logger.debug(
                                                 `${instance.Name}: ${updatedInstance.EntityCount} entities, ${updatedInstance.BrushCount} brushes, ${updatedInstance.BrushSideCount} brush sides`,
@@ -1219,14 +1220,22 @@ const loadPackage = async (
                 sendProgressUpdate(80, "Loading package data...")
             }
 
-            // Close existing package
-            await closePackage()
-            currentPackageDir = null
-            lastSavedBpeePath = null
-            mainWindow.webContents.send("package:closed")
-
-            // Now load the package
+            // Load the package before closing the open one, so one that
+            // fails to load leaves the open one as it was. Not when it's the
+            // same package: its files were just replaced.
+            const closeOpenPackage = async () => {
+                await closePackage()
+                currentPackageDir = null
+                lastSavedBpeePath = null
+                mainWindow.webContents.send("package:closed")
+            }
+            const samePackage =
+                currentPackageDir &&
+                path.resolve(currentPackageDir).toLowerCase() ===
+                    path.resolve(pkg.packageDir).toLowerCase()
+            if (samePackage) await closeOpenPackage()
             await pkg.load()
+            if (!samePackage) await closeOpenPackage()
             packages.push(pkg)
 
             // Set the current package directory
@@ -1251,6 +1260,18 @@ const loadPackage = async (
 
             if (!skipProgressReset) {
                 sendProgressUpdate(100, "Package loaded successfully!")
+            }
+
+            // Say which items couldn't be read and were left out
+            const skipped = pkg.skippedItems ?? []
+            if (skipped.length > 0 && mainWindow && !mainWindow.isDestroyed()) {
+                const were = skipped.length === 1 ? "was" : "were"
+                dialog.showMessageBox(mainWindow, {
+                    type: "warning",
+                    title: "Some Items Weren't Loaded",
+                    message: `${plural(skipped.length, "item")} of "${pkg.name}" couldn't be read and ${were} left out.`,
+                    detail: `${skipped.map(({ reason }) => `• ${reason}`).join("\n")}\n\nTheir files stay in the package, so saving and exporting keep them.`,
+                })
             }
 
             return pkg

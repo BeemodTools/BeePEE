@@ -48,14 +48,25 @@ class Package {
                 rawitems = [rawitems]
             }
 
-            // Create items directly in this package
-            this.items = rawitems.map(
-                (element) =>
-                    new Item({
-                        packagePath: this.packageDir,
-                        itemJSON: element,
-                    }),
-            )
+            // Create items directly in this package. An item that can't be
+            // read is left out (and listed in skippedItems) rather than
+            // failing the package; its files stay as they are.
+            this.items = []
+            this.skippedItems = []
+            for (const element of rawitems) {
+                try {
+                    this.items.push(
+                        new Item({
+                            packagePath: this.packageDir,
+                            itemJSON: element,
+                        }),
+                    )
+                } catch (error) {
+                    const id = element?.ID ?? "(an item with no ID)"
+                    this.skippedItems.push({ id, reason: error.message })
+                    console.warn(`Left out item ${id}: ${error.message}`)
+                }
+            }
 
             // Signages (also optional)
             let rawSignages = parsedInfo["Signage"] || []

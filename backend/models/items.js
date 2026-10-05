@@ -6,29 +6,81 @@ const { vmfStatsCache } = require("../utils/vmfParser")
 /** "1 case", "3 cases" */
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
+/** `object`'s value for `key` in any case (VDF keys aren't case-sensitive) */
+function getKey(object, key) {
+    if (!object || typeof object !== "object") return undefined
+    if (key in object) return object[key]
+    const lower = key.toLowerCase()
+    const found = Object.keys(object).find((k) => k.toLowerCase() === lower)
+    return found === undefined ? undefined : object[found]
+}
+
+/**
+ * editoritems with its first "Item" block as Item. A file can have several:
+ * BEE2 exports the others along with the item (see saveEditorItems).
+ */
+function mainItemBlock(editoritems) {
+    const key = Object.keys(editoritems ?? {}).find(
+        (k) => k.toLowerCase() === "item",
+    )
+    if (key === undefined) return editoritems
+    const { [key]: block, ...rest } = editoritems
+    return { ...rest, Item: Array.isArray(block) ? block[0] : block }
+}
+
+/** The styles an item's folder is taken from first */
+const PREFERRED_STYLES = ["BEE2_CLEAN", "ANY_STYLE"]
+
+/**
+ * The folder (items/<folder>) of an item in info.json: from its first
+ * version that names one (several "Version" blocks are an array), in
+ * BEE2_CLEAN, ANY_STYLE or else the first style. A style's value is a
+ * folder, another style's ("<BEE2_CLEAN>"), or a block with a "Folder" or
+ * the "Base" style it builds on.
+ * @returns {string|null}
+ */
+function itemFolderOf(itemJSON) {
+    const versions = [getKey(itemJSON, "Version")].flat().filter(Boolean)
+    for (const version of versions) {
+        const styles = getKey(version, "Styles")
+        if (!styles || typeof styles !== "object") continue
+        const folderOf = (style, seen) => {
+            const key = Object.keys(styles).find(
+                (k) => k.toLowerCase() === String(style).toLowerCase(),
+            )
+            if (key === undefined || seen.has(key)) return null
+            seen.add(key)
+            const value = styles[key]
+            if (typeof value === "string") {
+                const same = value.trim().match(/^<(.+)>$/)
+                return same ? folderOf(same[1], seen) : value.trim() || null
+            }
+            const folder = getKey(value, "Folder")
+            if (typeof folder === "string" && folder.trim()) return folder.trim()
+            const base = getKey(value, "Base")
+            return typeof base === "string"
+                ? folderOf(base.trim().replace(/^<(.+)>$/, "$1"), seen)
+                : null
+        }
+        for (const style of [...PREFERRED_STYLES, ...Object.keys(styles)]) {
+            const folder = folderOf(style, new Set())
+            if (folder) return folder
+        }
+    }
+    return null
+}
+
 class Item {
     constructor({ packagePath, itemJSON }) {
         this.packagePath = packagePath
         this.id = itemJSON.ID
 
         //get item folder from styles
-        const styles = itemJSON.Version?.Styles || {}
-        let folder =
-            styles.BEE2_CLEAN || styles.ANY_STYLE || Object.values(styles)[0]
-
-        //handle both string and object folder formats
-        if (typeof folder === "object") {
-            // Find any property that looks like "folder" (case insensitive)
-            const folderKey = Object.keys(folder).find(
-                (key) => key.toLowerCase() === "folder",
-            )
-            if (folderKey) {
-                folder = folder[folderKey]
-            }
-        }
-
+        const folder = itemFolderOf(itemJSON)
         if (!folder) {
-            throw new Error(`No item folder found for item ${this.id}`)
+            throw new Error(
+                `Item ${this.id}: info.json names no folder for it (Version > Styles)`,
+            )
         }
 
         const fullItemPath = path.join(
@@ -48,32 +100,37 @@ class Item {
         this.paths.vbsp_config = path.join(fullItemPath, "vbsp_config.json")
 
         //parse editoritems file
+        const where = `items/${folder.toLowerCase()}`
         if (!fs.existsSync(this.paths.editorItems)) {
-            throw new Error("Missing editoritems.json!")
+            throw new Error(`Item ${this.id}: ${where} has no editoritems`)
         }
 
-        const parsedEditoritems = JSON.parse(
-            fs.readFileSync(this.paths.editorItems, "utf-8"),
-        )
+        const parsedEditoritems = this.getEditorItems()
 
         //handle both single SubType and array of SubTypes
-        const editor = parsedEditoritems.Item.Editor
-        const subType = Array.isArray(editor.SubType)
-            ? editor.SubType[0]
-            : editor.SubType
-
-        if (!subType?.Name) {
-            throw new Error("Invalid editoritems - missing SubType Name")
+        const editor = getKey(parsedEditoritems.Item, "Editor")
+        if (!editor) {
+            throw new Error(
+                `Item ${this.id}: ${where}/editoritems has no Item > Editor block`,
+            )
+        }
+        const subType = [getKey(editor, "SubType")].flat()[0]
+        const name = getKey(subType, "Name")
+        if (!name) {
+            throw new Error(
+                `Item ${this.id}: ${where}/editoritems has no Editor > SubType > Name`,
+            )
         }
 
-        this.name = subType.Name
+        this.name = name
 
         // Get MovementHandle from editor properties
-        this.movementHandle = editor.MovementHandle || "HANDLE_4_DIRECTIONS"
+        this.movementHandle =
+            getKey(editor, "MovementHandle") || "HANDLE_4_DIRECTIONS"
 
         //Get details
         if (!fs.existsSync(this.paths.properties)) {
-            throw new Error("Missing properties.json!")
+            throw new Error(`Item ${this.id}: ${where} has no properties`)
         }
 
         const parsedProperties = JSON.parse(
@@ -323,9 +380,7 @@ class Item {
         this._loadedInstances.clear()
 
         // Re-read editoritems file
-        const parsedEditoritems = JSON.parse(
-            fs.readFileSync(this.paths.editorItems, "utf-8"),
-        )
+        const parsedEditoritems = this.getEditorItems()
 
         // Re-add editor instances
         const editorInstances =
@@ -402,22 +457,19 @@ class Item {
     reloadItemData() {
         try {
             // Re-read editoritems file
-            const parsedEditoritems = JSON.parse(
-                fs.readFileSync(this.paths.editorItems, "utf-8"),
-            )
+            const parsedEditoritems = this.getEditorItems()
 
             // Update name from editoritems
-            const editor = parsedEditoritems.Item.Editor
-            const subType = Array.isArray(editor.SubType)
-                ? editor.SubType[0]
-                : editor.SubType
-
-            if (subType?.Name) {
-                this.name = subType.Name
+            const editor = getKey(parsedEditoritems.Item, "Editor") ?? {}
+            const subType = [getKey(editor, "SubType")].flat()[0]
+            const name = getKey(subType, "Name")
+            if (name) {
+                this.name = name
             }
 
             // Update MovementHandle
-            this.movementHandle = editor.MovementHandle || "HANDLE_4_DIRECTIONS"
+            this.movementHandle =
+                getKey(editor, "MovementHandle") || "HANDLE_4_DIRECTIONS"
 
             // Re-read properties file
             if (fs.existsSync(this.paths.properties)) {
@@ -464,20 +516,47 @@ class Item {
         }
     }
 
+    /**
+     * The item's editoritems. In a file with several "Item" blocks, Item is
+     * the first (the item itself); saveEditorItems keeps the others.
+     * @param {boolean} [raw] - The file's text instead
+     */
     getEditorItems(raw = false) {
-        //Returns a JSON that is editoritems.
         const rawEditoritems = fs.readFileSync(this.paths.editorItems, "utf-8")
         if (raw) {
             return rawEditoritems
         } else {
-            return JSON.parse(rawEditoritems)
+            return mainItemBlock(JSON.parse(rawEditoritems))
         }
     }
 
+    /**
+     * Write the item's editoritems (from getEditorItems). The file's other
+     * "Item" blocks, after the first, are kept.
+     */
     saveEditorItems(editedJSON) {
+        let data = editedJSON
+        try {
+            const current = JSON.parse(
+                fs.readFileSync(this.paths.editorItems, "utf-8"),
+            )
+            const key = Object.keys(current).find(
+                (k) => k.toLowerCase() === "item",
+            )
+            const blocks = key === undefined ? null : current[key]
+            if (
+                Array.isArray(blocks) &&
+                blocks.length > 1 &&
+                !Array.isArray(editedJSON.Item)
+            ) {
+                data = { ...editedJSON, Item: [editedJSON.Item, ...blocks.slice(1)] }
+            }
+        } catch {
+            // No file yet (or one that can't be read): written as it is
+        }
         fs.writeFileSync(
             this.paths.editorItems,
-            JSON.stringify(editedJSON, null, 4),
+            JSON.stringify(data, null, 4),
             "utf8",
         )
     }
@@ -1070,9 +1149,7 @@ class Item {
                 return []
             }
 
-            const editorItems = JSON.parse(
-                fs.readFileSync(this.paths.editorItems, "utf-8"),
-            )
+            const editorItems = this.getEditorItems()
 
             const properties = editorItems?.Item?.Properties
             if (!properties) {
@@ -1121,9 +1198,7 @@ class Item {
                 throw new Error("editoritems.json not found")
             }
 
-            const editorItems = JSON.parse(
-                fs.readFileSync(this.paths.editorItems, "utf-8"),
-            )
+            const editorItems = this.getEditorItems()
 
             // Initialize Properties section if it doesn't exist
             if (!editorItems.Item.Properties) {
@@ -1218,10 +1293,7 @@ class Item {
             }
 
             // Write back to file
-            fs.writeFileSync(
-                this.paths.editorItems,
-                JSON.stringify(editorItems, null, 4),
-            )
+            this.saveEditorItems(editorItems)
 
             // Auto-generate VBSP conditions for ButtonType if needed
             if (hasButtonType) {
