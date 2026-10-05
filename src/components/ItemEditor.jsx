@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react"
+import { useEffect, useState, useMemo, useRef } from "react"
 import {
     Box,
     Tabs,
@@ -43,6 +43,7 @@ import Other from "./items/Other"
 import Metadata from "./items/Metadata"
 import { useItemContext } from "../contexts/ItemContext"
 import { descriptionText } from "../utils/descriptionText"
+import { instancesWithUnsaved } from "../utils/instancesWithUnsaved"
 
 function ItemEditor() {
     const { item, reloadItem } = useItemContext()
@@ -95,6 +96,9 @@ function ItemEditor() {
     const [redoStack, setRedoStack] = useState([])
     const [isUndoRedoAction, setIsUndoRedoAction] = useState(false)
     const [editingNames, setEditingNames] = useState({})
+    // Counts the items the backend sent, so a slower load of an older one
+    // can't overwrite a newer one's
+    const itemLoads = useRef(0)
 
     // Create a snapshot of current form data for undo/redo
     const createSnapshot = (action, description) => {
@@ -234,8 +238,13 @@ function ItemEditor() {
             const sharedDescription =
                 descriptionSource === "info" ? "" : infoDescription
 
+            // The backend sends the item again whenever it changes, also
+            // while a save is writing it: only the latest one's data is used
+            const run = ++itemLoads.current
+
             // Load inputs, outputs, variables, and conditions
             const loadData = async () => {
+                let loaded
                 try {
                     const [
                         inputResult,
@@ -259,24 +268,14 @@ function ItemEditor() {
                               error: `The conditions couldn't be loaded (${conditionsResult.error})`,
                           }
 
-                    setFormData((prev) => ({
-                        ...prev,
-                        name: item.name || "",
-                        author: item.details?.Authors || "",
-                        description: description,
-                        descriptionSource,
-                        sharedDescription,
-                        movementHandle:
-                            item.movementHandle || "HANDLE_4_DIRECTIONS",
-                        modelName: modelNameResult.success ? modelNameResult.modelName : "",
+                    loaded = {
+                        modelName: modelNameResult.success
+                            ? modelNameResult.modelName
+                            : "",
                         inputs: inputResult.success ? inputResult.inputs : {},
                         outputs: outputResult.success
                             ? outputResult.outputs
                             : {},
-                        // Update instances from item data, but preserve local modifications
-                        instances: prev._modified.instances
-                            ? prev.instances
-                            : item.instances || {},
                         variables: variablesResult.success
                             ? variablesResult.variables
                             : {},
@@ -284,54 +283,56 @@ function ItemEditor() {
                             ? conditionsData.blocks
                             : [],
                         conditionsError: conditionsData.error,
-                        other: item.other || {},
-                        _modified: {
-                            basicInfo: false,
-                            inputs: false,
-                            outputs: false,
-                            // Keep instances modified flag if it was already set
-                            instances: prev._modified.instances,
-                            variables: false,
-                            conditions: false,
-                            other: false,
-                        },
-                    }))
+                    }
                 } catch (error) {
                     console.error(
                         `Failed to load editor data for item "${item.name}":`,
                         error,
                     )
-                    setFormData((prev) => ({
-                        ...prev,
-                        name: item.name || "",
-                        author: item.details?.Authors || "",
-                        description: description,
-                        descriptionSource,
-                        sharedDescription,
-                        movementHandle:
-                            item.movementHandle || "HANDLE_4_DIRECTIONS",
+                    loaded = {
                         inputs: {},
                         outputs: {},
-                        // Update instances from item data, but preserve local modifications
-                        instances: prev._modified.instances
-                            ? prev.instances
-                            : item.instances || {},
                         variables: {},
                         blocks: [],
                         conditionsError: "The conditions couldn't be loaded",
-                        other: item.other || {},
-                        _modified: {
-                            basicInfo: false,
-                            inputs: false,
-                            outputs: false,
-                            // Keep instances modified flag if it was already set
-                            instances: prev._modified.instances,
-                            variables: false,
-                            conditions: false,
-                            other: false,
-                        },
-                    }))
+                    }
                 }
+                if (run !== itemLoads.current) return
+
+                // What hasn't been saved yet stays as it is in the form
+                setFormData((prev) => {
+                    const unsaved = prev._modified
+                    return {
+                        ...prev,
+                        ...(!unsaved.basicInfo && {
+                            name: item.name || "",
+                            author: item.details?.Authors || "",
+                            description: description,
+                            descriptionSource,
+                            sharedDescription,
+                            movementHandle:
+                                item.movementHandle || "HANDLE_4_DIRECTIONS",
+                        }),
+                        ...(!unsaved.inputs && { inputs: loaded.inputs }),
+                        ...(!unsaved.outputs && { outputs: loaded.outputs }),
+                        instances: unsaved.instances
+                            ? instancesWithUnsaved(item.instances, prev.instances)
+                            : item.instances || {},
+                        ...(!unsaved.variables && {
+                            variables: loaded.variables,
+                        }),
+                        ...(!unsaved.conditions && {
+                            blocks: loaded.blocks,
+                            conditionsError: loaded.conditionsError,
+                        }),
+                        ...(!unsaved.other && {
+                            ...("modelName" in loaded && {
+                                modelName: loaded.modelName,
+                            }),
+                            other: item.other || {},
+                        }),
+                    }
+                })
             }
 
             loadData()
@@ -741,7 +742,22 @@ function ItemEditor() {
                                 addResult?.success &&
                                 addResult.index !== undefined
                             ) {
-                                pendingIndexMap[index] = String(addResult.index)
+                                const realIndex = String(addResult.index)
+                                pendingIndexMap[index] = realIndex
+                                // The item has it now (the backend's
+                                // instance shows instead), so a save that
+                                // fails later can't add it again, and its
+                                // name is kept for its real index
+                                setFormData((prev) => {
+                                    const instances = { ...prev.instances }
+                                    delete instances[index]
+                                    return { ...prev, instances }
+                                })
+                                setEditingNames((prev) => {
+                                    if (!(index in prev)) return prev
+                                    const { [index]: name, ...rest } = prev
+                                    return { ...rest, [realIndex]: name }
+                                })
                             }
                         }
                     }
@@ -778,7 +794,8 @@ function ItemEditor() {
                         }
 
                         const trimmedName = newName.trim()
-                        const defaultName = `Instance ${numericIndex + 1}`
+                        // What the backend names an instance without a name
+                        const defaultName = `Instance ${numericIndex}`
 
                         if (trimmedName === defaultName || trimmedName === "") {
                             // Remove custom name
@@ -949,15 +966,18 @@ function ItemEditor() {
 
                 // Clear staged editoritems from model generation
                 setStagedEditorItems(null)
-
-                // Trigger reload to get fresh data from backend
-                reloadItem(item.id)
             }
         } catch (error) {
             console.error(`Failed to save item "${item.name}":`, error)
             setSaveError(error.message)
         } finally {
             setIsSaving(false)
+            // Show the item as the save left it. The items sent while it
+            // saved came with the changes still unsaved, and their loads may
+            // be older than what got saved after them; what a failed save
+            // didn't save stays in the form
+            itemLoads.current++
+            reloadItem(item.id)
         }
     }
 

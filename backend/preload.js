@@ -328,6 +328,8 @@ contextBridge.exposeInMainWorld("package", {
     // ========================================
     getItemMetadata: (itemId) =>
         ipcRenderer.invoke("get-item-metadata", { itemId }),
+    // The item as the item editor has it: { success, item }
+    getItem: (itemId) => ipcRenderer.invoke("get-item", { itemId }),
     updateItemMetadata: (itemId, metadata) =>
         ipcRenderer.invoke("update-item-metadata", { itemId, metadata }),
 

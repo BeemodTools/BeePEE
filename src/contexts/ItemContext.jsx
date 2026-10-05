@@ -21,20 +21,27 @@ export const ItemProvider = ({ children }) => {
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState(null)
 
-    // Function to reload item data from backend
+    // Load the item from the backend again, like after a save: the
+    // item-updated events sent while saving come while the editor still has
+    // the changes being saved
     const reloadItem = useCallback(async (itemId) => {
-        if (!itemId) return
+        if (!itemId) return null
 
         setLoading(true)
         setError(null)
 
         try {
-            // Since there's no getItem function, we'll rely on the backend events
-            // The backend should send item-updated events when data changes
-            setLoading(false)
+            const result = await window.package.getItem(itemId)
+            if (!result?.success) {
+                throw new Error(result?.error || "No reason given")
+            }
+            setItem(result.item)
+            return result.item
         } catch (err) {
             console.error(`Failed to reload item ${itemId}:`, err)
             setError(err.message)
+            return null
+        } finally {
             setLoading(false)
         }
     }, [])

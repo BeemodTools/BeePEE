@@ -493,7 +493,9 @@ function Instances({
 
                         return (
                             <Paper
-                                key={instance.Name || "unknown"}
+                                // Not the VMF's path: two instances can use
+                                // the same one
+                                key={instance.index}
                                 variant="outlined"
                                 sx={{
                                     backgroundColor: isDisabled

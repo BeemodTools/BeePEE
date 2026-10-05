@@ -47,6 +47,16 @@ function register(ipcMain, mainWindow) {
         }
     })
 
+    // The item as the item editor has it ("load-item" and "item-updated"
+    // send the same), to show what a save wrote
+    ipcMain.handle("get-item", async (event, { itemId }) => {
+        const item = packages
+            .flatMap((p) => p.items)
+            .find((i) => i.id === itemId)
+        if (!item) return { success: false, error: `Item ${itemId} not found` }
+        return { success: true, item: item.toJSONWithExistence() }
+    })
+
     // Open create item window
     ipcMain.handle("open-create-item-window", async () => {
         try {
