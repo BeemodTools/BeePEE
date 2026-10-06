@@ -1,4 +1,11 @@
-import { useEffect, useState, useRef, Suspense, useMemo } from "react"
+import {
+    useEffect,
+    useLayoutEffect,
+    useState,
+    useRef,
+    Suspense,
+    useMemo,
+} from "react"
 import { Canvas, useThree } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import * as THREE from "three"
@@ -59,15 +66,35 @@ async function fetchText(url) {
 // Instances tab's warning) is red: outlined brushes and props, and an X for
 // an entity without a model
 const BEHIND_COLOR = 0xff3b30
+const BEHIND_CSS = "#ff3b30"
 
-/** A material for what's behind the surface: seen through the rest */
+/**
+ * A material for the outlines of what's behind the surface. They're hidden
+ * behind the rest of the model, whose surfaces are pushed back a little
+ * (pushBackSurfaces) so lines on them still show.
+ */
 const behindLineMaterial = () =>
-    new THREE.LineBasicMaterial({
-        color: BEHIND_COLOR,
-        depthTest: false,
-        transparent: true,
-        opacity: 0.9,
+    new THREE.LineBasicMaterial({ color: BEHIND_COLOR })
+
+/** Push a model's surfaces back a little, so outlines drawn on them show */
+function pushBackSurfaces(object) {
+    object.traverse((child) => {
+        if (!child.isMesh) return
+        for (const material of [child.material].flat()) {
+            if (!material) continue
+            material.polygonOffset = true
+            material.polygonOffsetFactor = 1
+            material.polygonOffsetUnits = 1
+            material.needsUpdate = true
+        }
     })
+}
+
+/** An entity marker's size, as a part of the window's height */
+const MARKER_SIZE = 0.032
+
+/** How much of a marker shows through what's in front of it */
+const HIDDEN_MARKER_OPACITY = 0.2
 
 /** A prop's model (brush entities' "*N" aren't) */
 const propModel = (entity) =>
@@ -150,11 +177,22 @@ function outlineProps(object, entities) {
         let edges = seeThrough
             ? null
             : new THREE.EdgesGeometry(nearest.mesh.geometry, 40)
+        let lines
         if (!edges || edges.attributes.position.count / 2 > MAX_OUTLINE_EDGES) {
+            // A box, dashed: around the prop, not its shape
             edges?.dispose()
-            edges = boxEdges(nearest.mesh.geometry.boundingBox)
+            lines = new THREE.LineSegments(
+                boxEdges(nearest.mesh.geometry.boundingBox),
+                new THREE.LineDashedMaterial({
+                    color: BEHIND_COLOR,
+                    dashSize: 6,
+                    gapSize: 4,
+                }),
+            )
+            lines.computeLineDistances()
+        } else {
+            lines = new THREE.LineSegments(edges, behindLineMaterial())
         }
-        const lines = new THREE.LineSegments(edges, behindLineMaterial())
         lines.renderOrder = 10
         lines.raycast = () => {}
         nearest.mesh.add(lines)
@@ -207,26 +245,31 @@ function BrushOutlines({ brushes }) {
     )
 }
 
-/** A red X, for an entity without a model */
-function useXTexture() {
+/**
+ * Draw an entity marker: a thin box with an X across it, like a point
+ * entity in an editor (also the legend's swatch)
+ */
+function drawMarker(context, size) {
+    const inset = size * 0.08
+    const cross = size * 0.27
+    context.strokeStyle = BEHIND_CSS
+    context.lineCap = "butt"
+    context.lineWidth = size * 0.05
+    context.strokeRect(inset, inset, size - 2 * inset, size - 2 * inset)
+    context.beginPath()
+    context.moveTo(cross, cross)
+    context.lineTo(size - cross, size - cross)
+    context.moveTo(size - cross, cross)
+    context.lineTo(cross, size - cross)
+    context.stroke()
+}
+
+/** The texture of an entity marker */
+function useMarkerTexture() {
     const texture = useMemo(() => {
         const canvas = document.createElement("canvas")
-        canvas.width = canvas.height = 64
-        const context = canvas.getContext("2d")
-        context.lineCap = "round"
-        for (const [color, width] of [
-            ["#1e1e1e", 18],
-            [`#${BEHIND_COLOR.toString(16).padStart(6, "0")}`, 10],
-        ]) {
-            context.strokeStyle = color
-            context.lineWidth = width
-            context.beginPath()
-            context.moveTo(12, 12)
-            context.lineTo(52, 52)
-            context.moveTo(52, 12)
-            context.lineTo(12, 52)
-            context.stroke()
-        }
+        canvas.width = canvas.height = 128
+        drawMarker(canvas.getContext("2d"), 128)
         return new THREE.CanvasTexture(canvas)
     }, [])
     useEffect(() => () => texture.dispose(), [texture])
@@ -234,12 +277,49 @@ function useXTexture() {
 }
 
 /**
+ * An entity's marker, the same size on screen at any distance: faint where
+ * something is in front of it
+ */
+function EntityMarker({ entity, texture, onHover }) {
+    const scale = [MARKER_SIZE, MARKER_SIZE, 1]
+    return (
+        <group position={entity.origin}>
+            <sprite scale={scale} renderOrder={19} raycast={() => null}>
+                <spriteMaterial
+                    map={texture}
+                    sizeAttenuation={false}
+                    depthTest={false}
+                    depthWrite={false}
+                    transparent
+                    opacity={HIDDEN_MARKER_OPACITY}
+                />
+            </sprite>
+            <sprite
+                scale={scale}
+                renderOrder={20}
+                onPointerOver={(e) => {
+                    e.stopPropagation()
+                    onHover(entity)
+                }}
+                onPointerOut={() => onHover(null)}>
+                <spriteMaterial
+                    map={texture}
+                    sizeAttenuation={false}
+                    depthWrite={false}
+                    transparent
+                />
+            </sprite>
+        </group>
+    )
+}
+
+/**
  * What's behind the surface: the brushes outlined, the props outlined in the
- * model, and an X for each other entity (or a prop the model doesn't show,
- * like one hidden at the start)
+ * model, and a marker for each other entity (or a prop the model doesn't
+ * show, like one hidden at the start)
  */
 function BehindSurface({ behind, hasModel, model, framedRef, onHover }) {
-    const texture = useXTexture()
+    const texture = useMarkerTexture()
     const { camera, controls } = useThree()
     const [outlined, setOutlined] = useState(new Set())
     // Which props the model shows is known once it's loaded (or there's none)
@@ -247,6 +327,7 @@ function BehindSurface({ behind, hasModel, model, framedRef, onHover }) {
 
     useEffect(() => {
         if (!model) return
+        pushBackSurfaces(model)
         const props = outlineProps(model, behind.entities)
         setOutlined(props.outlined)
         return props.remove
@@ -275,34 +356,139 @@ function BehindSurface({ behind, hasModel, model, framedRef, onHover }) {
             <BrushOutlines brushes={behind.brushes} />
             {behind.entities.map((entity, index) =>
                 outlined.has(index) || (propModel(entity) && !known) ? null : (
-                    <sprite
+                    <EntityMarker
                         key={index}
-                        position={entity.origin}
-                        scale={[24, 24, 24]}
-                        renderOrder={20}
-                        onPointerOver={(e) => {
-                            e.stopPropagation()
-                            onHover(entity)
-                        }}
-                        onPointerOut={() => onHover(null)}>
-                        <spriteMaterial
-                            map={texture}
-                            depthTest={false}
-                            transparent
-                        />
-                    </sprite>
+                        entity={entity}
+                        texture={texture}
+                        onHover={onHover}
+                    />
                 ),
             )}
         </>
     )
 }
 
-/** What the info box says about something behind the surface */
-function describeBehind(entity) {
-    const name = entity.name ? ` "${entity.name}"` : ""
-    const model = entity.model && !entity.model.startsWith("*") ? ` (${entity.model})` : ""
-    const units = `${entity.depth} unit${entity.depth === 1 ? "" : "s"}`
-    return `${entity.classname}${name}${model}: ${units} behind the surface`
+const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`
+
+/** A legend swatch: an outline, a box or an entity marker */
+function Swatch({ kind }) {
+    const ref = useRef(null)
+    useEffect(() => {
+        if (kind !== "marker") return
+        const context = ref.current.getContext("2d")
+        context.clearRect(0, 0, 32, 32)
+        drawMarker(context, 32)
+    }, [kind])
+    if (kind === "marker") {
+        return <canvas ref={ref} width={32} height={32} style={styles.swatch} />
+    }
+    // An outlined shape (a bent pipe), or a box (a cube's edges)
+    const path =
+        kind === "box"
+            ? "M1.5 5.5 H10.5 V14.5 H1.5 Z M1.5 5.5 L5.5 1.5 H14.5 V10.5 L10.5 14.5 M10.5 5.5 L14.5 1.5"
+            : "M1.5 14.5 V7.5 Q1.5 2.5 6.5 2.5 H14.5 V7.5 H8.5 Q6.5 7.5 6.5 9.5 V14.5 Z"
+    return (
+        <svg width="16" height="16" viewBox="0 0 16 16" style={styles.swatch}>
+            <path
+                d={path}
+                fill="none"
+                stroke={BEHIND_CSS}
+                strokeWidth="1"
+                strokeDasharray={kind === "box" ? "2 1.5" : undefined}
+            />
+        </svg>
+    )
+}
+
+/** The legend of what's behind the surface, with how much there is */
+function BehindLegend({ behind, loading }) {
+    const deepest = Math.max(
+        0,
+        ...behind.entities.map((entity) => entity.depth),
+        ...behind.brushes.map((brush) => brush.depth),
+    )
+    return (
+        <div style={styles.legend}>
+            <div style={styles.legendTitle}>Behind the surface</div>
+            <div style={styles.legendStats}>
+                <span>{plural(behind.entities.length, "entity", "entities")}</span>
+                <span style={styles.legendDot}>·</span>
+                <span>{plural(behind.brushes.length, "brush", "brushes")}</span>
+                <span style={styles.legendDot}>·</span>
+                <span>up to {deepest} units deep</span>
+            </div>
+            <div style={styles.legendRows}>
+                <div style={styles.legendRow}>
+                    <Swatch kind="outline" />
+                    Brush or prop
+                </div>
+                <div style={styles.legendRow}>
+                    <Swatch kind="box" />
+                    Prop with a cut-out texture, like leaves
+                </div>
+                <div style={styles.legendRow}>
+                    <Swatch kind="marker" />
+                    Entity without a model
+                </div>
+            </div>
+            {behind.modelError && (
+                <div style={styles.legendWarning}>
+                    No model to show: {behind.modelError}
+                </div>
+            )}
+            <div style={styles.legendHint}>
+                The grid is the surface the item is placed on. Point at
+                something red to see what it is.
+            </div>
+            <div style={styles.legendControls}>
+                {loading
+                    ? "Loading the model..."
+                    : "Drag to orbit · Right-drag to pan · Scroll to zoom"}
+            </div>
+        </div>
+    )
+}
+
+/** What the pointer is on, next to it */
+function BehindTooltip({ entity }) {
+    const ref = useRef(null)
+    const pointer = useRef({ x: 0, y: 0 })
+
+    const place = () => {
+        const tooltip = ref.current
+        if (!tooltip) return
+        const { x, y } = pointer.current
+        const left = Math.min(x + 16, window.innerWidth - tooltip.offsetWidth - 8)
+        const top = Math.min(y + 18, window.innerHeight - tooltip.offsetHeight - 8)
+        tooltip.style.transform = `translate(${Math.max(8, left)}px, ${Math.max(8, top)}px)`
+    }
+
+    useEffect(() => {
+        const move = (e) => {
+            pointer.current = { x: e.clientX, y: e.clientY }
+            place()
+        }
+        window.addEventListener("pointermove", move)
+        return () => window.removeEventListener("pointermove", move)
+    }, [])
+    useLayoutEffect(place, [entity])
+
+    if (!entity) return null
+    const model = propModel(entity)
+    return (
+        <div ref={ref} style={styles.tooltip}>
+            <div style={styles.tooltipHead}>
+                <span style={styles.tooltipClass}>{entity.classname}</span>
+                {entity.name && (
+                    <span style={styles.tooltipName}>{entity.name}</span>
+                )}
+            </div>
+            {model && <div style={styles.tooltipModel}>{model}</div>}
+            <div style={styles.tooltipDepth}>
+                {plural(entity.depth, "unit", "units")} behind the surface
+            </div>
+        </div>
+    )
 }
 
 // An OBJ model from beep:// URLs. The camera is framed on the first model
@@ -375,11 +561,15 @@ function Model({ objUrl, mtlUrl, framedRef, onLoad, onError, onHover }) {
     useEffect(() => () => disposeModel(model), [model])
 
     if (!model) return null
-    // Hovering a prop behind the surface (outlineProps marks them) says which
+    // Hovering a prop behind the surface (outlineProps marks them) says which:
+    // the nearest one the pointer is on
     return onHover ? (
         <primitive
             object={model}
-            onPointerMove={(e) => onHover(e.object.userData.behind ?? null)}
+            onPointerMove={(e) => {
+                e.stopPropagation()
+                onHover(e.object.userData.behind ?? null)
+            }}
             onPointerOut={() => onHover(null)}
         />
     ) : (
@@ -398,7 +588,8 @@ function Scene({
     behind,
     loadedModel,
     modelFailed,
-    onHover,
+    onHoverProp,
+    onHoverMarker,
 }) {
     return (
         <>
@@ -424,7 +615,7 @@ function Scene({
                     framedRef={framedRef}
                     onLoad={onLoad}
                     onError={onError}
-                    onHover={behind ? onHover : null}
+                    onHover={behind ? onHoverProp : null}
                 />
             )}
 
@@ -434,7 +625,7 @@ function Scene({
                     hasModel={Boolean(objUrl) && !modelFailed}
                     model={loadedModel}
                     framedRef={framedRef}
-                    onHover={onHover}
+                    onHover={onHoverMarker}
                 />
             )}
 
@@ -507,9 +698,12 @@ export default function ModelPreviewPage() {
     // Whether the camera was framed on a model yet: later models (segments)
     // keep the view
     const framedRef = useRef(false)
-    // The model shown, and what behind the surface the pointer is on
+    // The model shown, and what behind the surface the pointer is on: an
+    // entity's marker, or else a prop
     const [loadedModel, setLoadedModel] = useState(null)
-    const [hovered, setHovered] = useState(null)
+    const [hoveredMarker, setHoveredMarker] = useState(null)
+    const [hoveredProp, setHoveredProp] = useState(null)
+    const hovered = hoveredMarker ?? hoveredProp
 
     // Receive model data from main process
     useEffect(() => {
@@ -586,31 +780,10 @@ export default function ModelPreviewPage() {
         <div style={styles.container}>
             {/* Info overlay */}
             {behind ? (
-                <div style={{ ...styles.info, maxWidth: 520 }}>
-                    <div>
-                        <span style={{ color: "#ff3b30", fontWeight: "bold" }}>Red</span>
-                        : what's behind the surface the item is placed on (the
-                        grid). An X is an entity there without a model.
-                    </div>
-                    <div style={{ marginTop: 4 }}>
-                        {`${behind.entities.length} ${behind.entities.length === 1 ? "entity" : "entities"} and ${behind.brushes.length} ${behind.brushes.length === 1 ? "brush" : "brushes"} behind it`}
-                    </div>
-                    {behind.modelError && (
-                        <div style={{ marginTop: 4 }}>
-                            No model to show: {behind.modelError}
-                        </div>
-                    )}
-                    <div style={{ marginTop: 4, fontWeight: "bold", minHeight: 15 }}>
-                        {hovered
-                            ? describeBehind(hovered)
-                            : "Point at an X or a red prop to see what it is"}
-                    </div>
-                    <div style={{ marginTop: 4, opacity: 0.7 }}>
-                        {loading
-                            ? "Loading model..."
-                            : "Left-drag: orbit • Right-drag: pan • Wheel: zoom"}
-                    </div>
-                </div>
+                <>
+                    <BehindLegend behind={behind} loading={loading} />
+                    <BehindTooltip entity={hovered} />
+                </>
             ) : (
                 <div style={styles.info}>{loading ? "Loading model..." : infoText}</div>
             )}
@@ -645,7 +818,8 @@ export default function ModelPreviewPage() {
                             behind={behind}
                             loadedModel={loadedModel}
                             modelFailed={Boolean(error)}
-                            onHover={setHovered}
+                            onHoverProp={setHoveredProp}
+                            onHoverMarker={setHoveredMarker}
                         />
                     )}
                 </Suspense>
@@ -654,8 +828,98 @@ export default function ModelPreviewPage() {
     )
 }
 
+const UI_FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif"
+const CODE_FONT = "Consolas, 'Cascadia Mono', 'Courier New', monospace"
+const DIVIDER = "1px solid rgba(255, 255, 255, 0.08)"
+
 // Styles
 const styles = {
+    // What's behind the surface: the legend, and what the pointer is on
+    legend: {
+        position: "absolute",
+        top: 12,
+        left: 12,
+        zIndex: 100,
+        width: 290,
+        padding: "12px 14px",
+        background: "rgba(22, 22, 24, 0.92)",
+        border: DIVIDER,
+        borderRadius: 8,
+        boxShadow: "0 4px 16px rgba(0, 0, 0, 0.4)",
+        color: "#d4d4d4",
+        fontFamily: UI_FONT,
+        fontSize: 12,
+        lineHeight: 1.45,
+        pointerEvents: "none",
+    },
+    legendTitle: {
+        color: BEHIND_CSS,
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: "0.08em",
+        textTransform: "uppercase",
+    },
+    legendStats: {
+        marginTop: 2,
+        color: "#f2f2f2",
+        fontSize: 13,
+        fontWeight: 500,
+    },
+    legendDot: { margin: "0 6px", color: "#666" },
+    legendRows: {
+        marginTop: 10,
+        paddingTop: 10,
+        borderTop: DIVIDER,
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+    },
+    legendRow: { display: "flex", alignItems: "center", gap: 8 },
+    swatch: { width: 16, height: 16, flexShrink: 0 },
+    legendWarning: {
+        marginTop: 10,
+        padding: "6px 8px",
+        background: "rgba(255, 179, 0, 0.1)",
+        border: "1px solid rgba(255, 179, 0, 0.3)",
+        borderRadius: 4,
+        color: "#ffcc66",
+    },
+    legendHint: {
+        marginTop: 10,
+        paddingTop: 10,
+        borderTop: DIVIDER,
+        color: "#9a9a9a",
+    },
+    legendControls: { marginTop: 4, color: "#6f6f6f", fontSize: 11 },
+    tooltip: {
+        position: "fixed",
+        top: 0,
+        left: 0,
+        zIndex: 200,
+        maxWidth: 380,
+        padding: "8px 10px",
+        background: "rgba(16, 16, 18, 0.96)",
+        border: "1px solid rgba(255, 255, 255, 0.1)",
+        borderLeft: `3px solid ${BEHIND_CSS}`,
+        borderRadius: 6,
+        boxShadow: "0 6px 20px rgba(0, 0, 0, 0.5)",
+        color: "#e6e6e6",
+        fontFamily: UI_FONT,
+        fontSize: 12,
+        lineHeight: 1.4,
+        pointerEvents: "none",
+    },
+    tooltipHead: { display: "flex", alignItems: "baseline", gap: 8 },
+    tooltipClass: { fontFamily: CODE_FONT, fontWeight: 600, color: "#ffffff" },
+    tooltipName: { fontFamily: CODE_FONT, color: "#9ecbff" },
+    tooltipModel: {
+        marginTop: 2,
+        fontFamily: CODE_FONT,
+        fontSize: 11,
+        color: "#8a8a8a",
+        wordBreak: "break-all",
+    },
+    tooltipDepth: { marginTop: 4, color: BEHIND_CSS, fontWeight: 500 },
     container: {
         width: "100%",
         height: "100vh",
