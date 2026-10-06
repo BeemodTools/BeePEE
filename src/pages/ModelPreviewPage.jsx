@@ -1,14 +1,16 @@
-import {
-    useEffect,
-    useLayoutEffect,
-    useState,
-    useRef,
-    Suspense,
-    useMemo,
-} from "react"
+import { useEffect, useState, useRef, Suspense, useMemo } from "react"
 import { Canvas, useThree } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import * as THREE from "three"
+import {
+    Alert,
+    Box,
+    Chip,
+    CircularProgress,
+    Paper,
+    Tooltip,
+    Typography,
+} from "@mui/material"
 import { buildObjModel, disposeModel } from "../utils/objModel"
 
 // Dual grid component: main grid at 128 units, lighter sub-grid at 64 units
@@ -63,10 +65,10 @@ async function fetchText(url) {
 }
 
 // What's behind the surface the item is placed on (an instance's, from the
-// Instances tab's warning) is red: outlined brushes and props, and an X for
-// an entity without a model
-const BEHIND_COLOR = 0xff3b30
-const BEHIND_CSS = "#ff3b30"
+// Instances tab's warning) is red, the theme's error red: outlined brushes
+// and props, and a marker for an entity without a model
+const BEHIND_COLOR = 0xf44336
+const BEHIND_CSS = "#f44336"
 
 /**
  * A material for the outlines of what's behind the surface. They're hidden
@@ -247,7 +249,7 @@ function BrushOutlines({ brushes }) {
 
 /**
  * Draw an entity marker: a thin box with an X across it, like a point
- * entity in an editor (also the legend's swatch)
+ * entity in an editor (also the key's symbol)
  */
 function drawMarker(context, size) {
     const inset = size * 0.08
@@ -370,25 +372,33 @@ function BehindSurface({ behind, hasModel, model, framedRef, onHover }) {
 
 const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`
 
-/** A legend swatch: an outline, a box or an entity marker */
-function Swatch({ kind }) {
+/** What each kind of red is, in the key */
+const KEY = [
+    { kind: "outline", label: "Brush or prop" },
+    { kind: "box", label: "Prop with a cut-out texture, like leaves" },
+    { kind: "marker", label: "Entity without a model" },
+]
+
+/** A key's symbol: an outline (a bent pipe), a dashed box or a marker */
+function KeySymbol({ kind }) {
     const ref = useRef(null)
     useEffect(() => {
         if (kind !== "marker") return
         const context = ref.current.getContext("2d")
-        context.clearRect(0, 0, 32, 32)
-        drawMarker(context, 32)
+        context.clearRect(0, 0, 36, 36)
+        drawMarker(context, 36)
     }, [kind])
+    const size = { width: 18, height: 18, flexShrink: 0 }
     if (kind === "marker") {
-        return <canvas ref={ref} width={32} height={32} style={styles.swatch} />
+        // Drawn at twice its size, for a sharp line
+        return <canvas ref={ref} width={36} height={36} style={size} />
     }
-    // An outlined shape (a bent pipe), or a box (a cube's edges)
     const path =
         kind === "box"
             ? "M1.5 5.5 H10.5 V14.5 H1.5 Z M1.5 5.5 L5.5 1.5 H14.5 V10.5 L10.5 14.5 M10.5 5.5 L14.5 1.5"
             : "M1.5 14.5 V7.5 Q1.5 2.5 6.5 2.5 H14.5 V7.5 H8.5 Q6.5 7.5 6.5 9.5 V14.5 Z"
     return (
-        <svg width="16" height="16" viewBox="0 0 16 16" style={styles.swatch}>
+        <Box component="svg" viewBox="0 0 16 16" sx={size}>
             <path
                 d={path}
                 fill="none"
@@ -396,98 +406,97 @@ function Swatch({ kind }) {
                 strokeWidth="1"
                 strokeDasharray={kind === "box" ? "2 1.5" : undefined}
             />
-        </svg>
+        </Box>
     )
 }
 
-/** The legend of what's behind the surface, with how much there is */
-function BehindLegend({ behind, loading }) {
+/**
+ * The panel beside the view: how much is behind the surface, why it
+ * matters (as the Instances tab's warning says), and what the reds are
+ */
+function BehindPanel({ behind, error }) {
     const deepest = Math.max(
         0,
         ...behind.entities.map((entity) => entity.depth),
         ...behind.brushes.map((brush) => brush.depth),
     )
     return (
-        <div style={styles.legend}>
-            <div style={styles.legendTitle}>Behind the surface</div>
-            <div style={styles.legendStats}>
-                <span>{plural(behind.entities.length, "entity", "entities")}</span>
-                <span style={styles.legendDot}>·</span>
-                <span>{plural(behind.brushes.length, "brush", "brushes")}</span>
-                <span style={styles.legendDot}>·</span>
-                <span>up to {deepest} units deep</span>
-            </div>
-            <div style={styles.legendRows}>
-                <div style={styles.legendRow}>
-                    <Swatch kind="outline" />
-                    Brush or prop
-                </div>
-                <div style={styles.legendRow}>
-                    <Swatch kind="box" />
-                    Prop with a cut-out texture, like leaves
-                </div>
-                <div style={styles.legendRow}>
-                    <Swatch kind="marker" />
-                    Entity without a model
-                </div>
-            </div>
-            {behind.modelError && (
-                <div style={styles.legendWarning}>
-                    No model to show: {behind.modelError}
-                </div>
+        <Box
+            sx={{
+                width: { xs: "100%", sm: 284 },
+                flexShrink: 0,
+                overflowY: { sm: "auto" },
+                display: "flex",
+                flexDirection: "column",
+                gap: 1.5,
+            }}>
+            <Box>
+                <Typography variant="subtitle1">Behind the surface</Typography>
+                <Typography variant="body2" color="text.secondary">
+                    What the instance has behind the surface the item is
+                    placed on (the grid)
+                </Typography>
+            </Box>
+            <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1 }}>
+                <Chip
+                    size="small"
+                    label={plural(behind.entities.length, "entity", "entities")}
+                />
+                <Chip
+                    size="small"
+                    label={plural(behind.brushes.length, "brush", "brushes")}
+                />
+                <Chip size="small" label={`Up to ${deepest} units`} />
+            </Box>
+            {behind.entities.length > 0 ? (
+                <Alert severity="warning">
+                    An entity behind the wall can end up in the void, which
+                    makes the map leak.
+                </Alert>
+            ) : (
+                <Alert severity="info">
+                    Brushes in the wall are hidden, and don't make the map leak.
+                </Alert>
             )}
-            <div style={styles.legendHint}>
-                The grid is the surface the item is placed on. Point at
-                something red to see what it is.
-            </div>
-            <div style={styles.legendControls}>
-                {loading
-                    ? "Loading the model..."
-                    : "Drag to orbit · Right-drag to pan · Scroll to zoom"}
-            </div>
-        </div>
+            <Paper
+                variant="outlined"
+                sx={{ p: 1.5, display: "flex", flexDirection: "column", gap: 1 }}>
+                {KEY.map(({ kind, label }) => (
+                    <Box
+                        key={kind}
+                        sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                        <KeySymbol kind={kind} />
+                        <Typography variant="body2">{label}</Typography>
+                    </Box>
+                ))}
+            </Paper>
+            <Typography variant="body2" color="text.secondary">
+                Point at something red to see what it is.
+            </Typography>
+            {behind.modelError && (
+                <Alert severity="info">
+                    No model to show: {behind.modelError}
+                </Alert>
+            )}
+            {error && <Alert severity="error">{error}</Alert>}
+        </Box>
     )
 }
 
-/** What the pointer is on, next to it */
-function BehindTooltip({ entity }) {
-    const ref = useRef(null)
-    const pointer = useRef({ x: 0, y: 0 })
-
-    const place = () => {
-        const tooltip = ref.current
-        if (!tooltip) return
-        const { x, y } = pointer.current
-        const left = Math.min(x + 16, window.innerWidth - tooltip.offsetWidth - 8)
-        const top = Math.min(y + 18, window.innerHeight - tooltip.offsetHeight - 8)
-        tooltip.style.transform = `translate(${Math.max(8, left)}px, ${Math.max(8, top)}px)`
-    }
-
-    useEffect(() => {
-        const move = (e) => {
-            pointer.current = { x: e.clientX, y: e.clientY }
-            place()
-        }
-        window.addEventListener("pointermove", move)
-        return () => window.removeEventListener("pointermove", move)
-    }, [])
-    useLayoutEffect(place, [entity])
-
-    if (!entity) return null
+/** What the pointer is on: its tooltip, laid out like the Instances tab's warning */
+function BehindTooltipTitle({ entity }) {
     const model = propModel(entity)
     return (
-        <div ref={ref} style={styles.tooltip}>
-            <div style={styles.tooltipHead}>
-                <span style={styles.tooltipClass}>{entity.classname}</span>
-                {entity.name && (
-                    <span style={styles.tooltipName}>{entity.name}</span>
-                )}
-            </div>
-            {model && <div style={styles.tooltipModel}>{model}</div>}
-            <div style={styles.tooltipDepth}>
+        <Box>
+            <Box sx={{ fontWeight: "bold" }}>
+                {entity.classname}
+                {entity.name ? ` "${entity.name}"` : ""}
+            </Box>
+            {model && <Box sx={{ opacity: 0.8 }}>{model}</Box>}
+            <Box sx={{ mt: 0.5 }}>
                 {plural(entity.depth, "unit", "units")} behind the surface
-            </div>
-        </div>
+            </Box>
+        </Box>
     )
 }
 
@@ -776,17 +785,115 @@ export default function ModelPreviewPage() {
         setError(err.message || "Failed to load model")
     }
 
+    // 3D Canvas
+    const canvas = (
+        <Canvas
+            camera={{ fov: 50, near: 0.1, far: 50000, position: [2, 2, 3] }}
+            shadows
+            style={{ background: "#1e1e1e" }}
+        >
+            <Suspense fallback={null}>
+                {(objUrl || behind) && (
+                    <Scene
+                        objUrl={objUrl}
+                        mtlUrl={mtlUrl}
+                        framedRef={framedRef}
+                        onLoad={handleLoad}
+                        onError={handleError}
+                        behind={behind}
+                        loadedModel={loadedModel}
+                        modelFailed={Boolean(error)}
+                        onHoverProp={setHoveredProp}
+                        onHoverMarker={setHoveredMarker}
+                    />
+                )}
+            </Suspense>
+        </Canvas>
+    )
+
+    // What an instance has behind its surface: the view, with a panel beside
+    // it (like the icon maker's), and what the pointer is on in a tooltip
+    if (behind) {
+        return (
+            <Box
+                sx={{
+                    height: "100vh",
+                    boxSizing: "border-box",
+                    display: "flex",
+                    flexDirection: { xs: "column", sm: "row" },
+                    gap: 3,
+                    p: 3,
+                    bgcolor: "background.default",
+                    color: "text.primary",
+                }}>
+                <Box
+                    sx={{
+                        flex: 1,
+                        minWidth: 0,
+                        minHeight: 0,
+                        display: "flex",
+                        flexDirection: "column",
+                    }}>
+                    <Tooltip
+                        open={Boolean(hovered)}
+                        title={
+                            hovered ? <BehindTooltipTitle entity={hovered} /> : ""
+                        }
+                        followCursor
+                        disableInteractive
+                        placement="bottom-start"
+                        slotProps={{
+                            popper: {
+                                modifiers: [
+                                    { name: "offset", options: { offset: [12, 12] } },
+                                ],
+                            },
+                        }}>
+                        <Box
+                            sx={{
+                                flex: 1,
+                                minHeight: 0,
+                                position: "relative",
+                                overflow: "hidden",
+                                border: "1px solid #555",
+                            }}>
+                            {canvas}
+                            {loading && (
+                                <Box
+                                    sx={{
+                                        position: "absolute",
+                                        inset: 0,
+                                        display: "flex",
+                                        flexDirection: "column",
+                                        alignItems: "center",
+                                        justifyContent: "center",
+                                        gap: 1,
+                                        bgcolor: "rgba(0,0,0,0.45)",
+                                    }}>
+                                    <CircularProgress />
+                                    <Typography variant="body2">
+                                        Loading the model...
+                                    </Typography>
+                                </Box>
+                            )}
+                        </Box>
+                    </Tooltip>
+                    <Typography
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{ mt: 0.5 }}>
+                        Left-drag: rotate • Right-drag: move • Wheel: zoom
+                    </Typography>
+                </Box>
+                <BehindPanel behind={behind} error={error} />
+            </Box>
+        )
+    }
+
     return (
         <div style={styles.container}>
             {/* Info overlay */}
-            {behind ? (
-                <>
-                    <BehindLegend behind={behind} loading={loading} />
-                    <BehindTooltip entity={hovered} />
-                </>
-            ) : (
-                <div style={styles.info}>{loading ? "Loading model..." : infoText}</div>
-            )}
+            <div style={styles.info}>{loading ? "Loading model..." : infoText}</div>
 
             {/* Segment selector */}
             <SegmentSelector
@@ -801,125 +908,13 @@ export default function ModelPreviewPage() {
             {/* Error display */}
             {error && <div style={styles.error}>{error}</div>}
 
-            {/* 3D Canvas */}
-            <Canvas
-                camera={{ fov: 50, near: 0.1, far: 50000, position: [2, 2, 3] }}
-                shadows
-                style={{ background: "#1e1e1e" }}
-            >
-                <Suspense fallback={null}>
-                    {(objUrl || behind) && (
-                        <Scene
-                            objUrl={objUrl}
-                            mtlUrl={mtlUrl}
-                            framedRef={framedRef}
-                            onLoad={handleLoad}
-                            onError={handleError}
-                            behind={behind}
-                            loadedModel={loadedModel}
-                            modelFailed={Boolean(error)}
-                            onHoverProp={setHoveredProp}
-                            onHoverMarker={setHoveredMarker}
-                        />
-                    )}
-                </Suspense>
-            </Canvas>
+            {canvas}
         </div>
     )
 }
 
-const UI_FONT = "system-ui, -apple-system, 'Segoe UI', sans-serif"
-const CODE_FONT = "Consolas, 'Cascadia Mono', 'Courier New', monospace"
-const DIVIDER = "1px solid rgba(255, 255, 255, 0.08)"
-
 // Styles
 const styles = {
-    // What's behind the surface: the legend, and what the pointer is on
-    legend: {
-        position: "absolute",
-        top: 12,
-        left: 12,
-        zIndex: 100,
-        width: 290,
-        padding: "12px 14px",
-        background: "rgba(22, 22, 24, 0.92)",
-        border: DIVIDER,
-        borderRadius: 8,
-        boxShadow: "0 4px 16px rgba(0, 0, 0, 0.4)",
-        color: "#d4d4d4",
-        fontFamily: UI_FONT,
-        fontSize: 12,
-        lineHeight: 1.45,
-        pointerEvents: "none",
-    },
-    legendTitle: {
-        color: BEHIND_CSS,
-        fontSize: 11,
-        fontWeight: 600,
-        letterSpacing: "0.08em",
-        textTransform: "uppercase",
-    },
-    legendStats: {
-        marginTop: 2,
-        color: "#f2f2f2",
-        fontSize: 13,
-        fontWeight: 500,
-    },
-    legendDot: { margin: "0 6px", color: "#666" },
-    legendRows: {
-        marginTop: 10,
-        paddingTop: 10,
-        borderTop: DIVIDER,
-        display: "flex",
-        flexDirection: "column",
-        gap: 6,
-    },
-    legendRow: { display: "flex", alignItems: "center", gap: 8 },
-    swatch: { width: 16, height: 16, flexShrink: 0 },
-    legendWarning: {
-        marginTop: 10,
-        padding: "6px 8px",
-        background: "rgba(255, 179, 0, 0.1)",
-        border: "1px solid rgba(255, 179, 0, 0.3)",
-        borderRadius: 4,
-        color: "#ffcc66",
-    },
-    legendHint: {
-        marginTop: 10,
-        paddingTop: 10,
-        borderTop: DIVIDER,
-        color: "#9a9a9a",
-    },
-    legendControls: { marginTop: 4, color: "#6f6f6f", fontSize: 11 },
-    tooltip: {
-        position: "fixed",
-        top: 0,
-        left: 0,
-        zIndex: 200,
-        maxWidth: 380,
-        padding: "8px 10px",
-        background: "rgba(16, 16, 18, 0.96)",
-        border: "1px solid rgba(255, 255, 255, 0.1)",
-        borderLeft: `3px solid ${BEHIND_CSS}`,
-        borderRadius: 6,
-        boxShadow: "0 6px 20px rgba(0, 0, 0, 0.5)",
-        color: "#e6e6e6",
-        fontFamily: UI_FONT,
-        fontSize: 12,
-        lineHeight: 1.4,
-        pointerEvents: "none",
-    },
-    tooltipHead: { display: "flex", alignItems: "baseline", gap: 8 },
-    tooltipClass: { fontFamily: CODE_FONT, fontWeight: 600, color: "#ffffff" },
-    tooltipName: { fontFamily: CODE_FONT, color: "#9ecbff" },
-    tooltipModel: {
-        marginTop: 2,
-        fontFamily: CODE_FONT,
-        fontSize: 11,
-        color: "#8a8a8a",
-        wordBreak: "break-all",
-    },
-    tooltipDepth: { marginTop: 4, color: BEHIND_CSS, fontWeight: 500 },
     container: {
         width: "100%",
         height: "100vh",
