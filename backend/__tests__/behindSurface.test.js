@@ -15,11 +15,11 @@ const {
 } = require("../utils/behindSurface")
 
 /** An axis-aligned box brush, as Hammer writes it */
-function boxSolid(id, min, max) {
+function boxSolid(id, min, max, material = "tools/toolsnodraw") {
     const [x0, y0, z0] = min
     const [x1, y1, z1] = max
     const side = (sideId, plane) => `
-        side { "id" "${sideId}" "plane" "${plane}" "material" "tools/toolsnodraw"
+        side { "id" "${sideId}" "plane" "${plane}" "material" "${material}"
             "uaxis" "[1 0 0 0] 0.25" "vaxis" "[0 -1 0 0] 0.25" }`
     return `
     solid { "id" "${id}"${side(1, `(${x0} ${y1} ${z1}) (${x1} ${y1} ${z1}) (${x1} ${y0} ${z1})`)}${side(2, `(${x0} ${y0} ${z0}) (${x1} ${y0} ${z0}) (${x1} ${y1} ${z0})`)}${side(3, `(${x0} ${y1} ${z1}) (${x0} ${y0} ${z1}) (${x0} ${y0} ${z0})`)}${side(4, `(${x1} ${y1} ${z0}) (${x1} ${y0} ${z0}) (${x1} ${y0} ${z1})`)}${side(5, `(${x1} ${y1} ${z1}) (${x0} ${y1} ${z1}) (${x0} ${y1} ${z0})`)}${side(6, `(${x1} ${y0} ${z0}) (${x0} ${y0} ${z0}) (${x0} ${y0} ${z1})`)}
@@ -61,6 +61,36 @@ describe("what an instance has behind its item's surface", () => {
             // Less than a unit: rounding
             entity(4, { classname: "light", origin: "0 0 -64.5" })
         expect(behindSurface(vmf, FLOOR_ITEM)).toBeNull()
+    })
+
+    test("an entity in solid can't leak: the surface's tile, or the instance's own brushes", () => {
+        const vmf =
+            world(
+                boxSolid(2, [-32, -32, -128], [32, 32, -96]),
+                boxSolid(3, [64, -32, -128], [128, 32, -96], "tools/toolsplayerclip"),
+            ) +
+            // In the 4-unit tile
+            entity(4, { classname: "logic_relay", origin: "0 0 -67" }) +
+            // In the instance's own brush
+            entity(5, { classname: "logic_relay", origin: "0 0 -112" }) +
+            // In a clip brush, or a func_detail: VBSP floods through those
+            entity(6, { classname: "logic_relay", targetname: "clip", origin: "96 0 -112" }) +
+            entity(
+                7,
+                { classname: "func_detail" },
+                boxSolid(8, [-32, 64, -128], [32, 128, -96]),
+            ) +
+            entity(9, { classname: "logic_relay", targetname: "detail", origin: "0 96 -112" })
+        expect(behindSurface(vmf, FLOOR_ITEM)).toEqual({
+            depth: 64,
+            entityCount: 2,
+            entities: [
+                { classname: "logic_relay", name: "clip", depth: 48 },
+                { classname: "logic_relay", name: "detail", depth: 48 },
+            ],
+            brushCount: 3,
+            brushDepth: 64,
+        })
     })
 
     test("entities VBSP takes out before it looks for leaks don't count", () => {

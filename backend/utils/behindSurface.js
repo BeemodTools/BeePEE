@@ -7,10 +7,11 @@
  * and the surface is z = -64. On a wall or ceiling the instance is turned so
  * that's still the surface it's on. Behind it is the wall, unless the item
  * embeds into those voxels (EmbeddedVoxels: Pos "0 0 0" is the voxel just
- * behind the surface, "0 0 -1" the one behind that). An entity out there is in
- * the void behind the wall, which makes the map leak. A brush all out there is
- * only hidden in the wall; one that shows in the room is seen (some of Portal
- * 2's own items go a few units in).
+ * behind the surface, "0 0 -1" the one behind that). An entity out there, past
+ * the surface's tile and not in solid, is in the void behind the wall, which
+ * makes the map leak (unless the item's conditions seal it in, which this
+ * can't see). A brush all out there is only hidden in the wall; one that shows
+ * in the room is seen (some of Portal 2's own items go a few units in).
  */
 
 const fs = require("fs")
@@ -21,6 +22,49 @@ const VOXEL = 128
 
 /** Less than this behind the surface is touching it, or rounding */
 const TOLERANCE = 1
+
+/**
+ * How thick the surface is: BEE2 builds a chamber's walls out of 4-unit tiles
+ * with the void behind them. An entity in a tile is in solid, which VBSP
+ * doesn't look for leaks from.
+ */
+const TILE_DEPTH = 4
+
+/**
+ * Brushes that don't seal (VBSP floods through them): clips, hints, skips,
+ * triggers, areaportals, occluders, water
+ */
+const NOT_SOLID =
+    /tools\/tools(clip|playerclip|npcclip|hint|skip|trigger|areaportal|occluder|invisibleladder|fog|blocklight)|water/i
+
+/**
+ * Whether a point is inside a brush (completeSolid'd): on the inner side of
+ * every one of its planes, which side that is taken from its own middle
+ */
+function insideBrush(point, solid) {
+    const corners = solid.sides.flatMap((side) => side.points)
+    if (corners.length === 0) return false
+    const middle = [0, 1, 2].map(
+        (axis) => corners.reduce((sum, p) => sum + p[axis], 0) / corners.length,
+    )
+    return solid.sides.every(({ plane: [a, b, c] }) => {
+        const ab = [b[0] - a[0], b[1] - a[1], b[2] - a[2]]
+        const ac = [c[0] - a[0], c[1] - a[1], c[2] - a[2]]
+        const normal = [
+            ab[1] * ac[2] - ab[2] * ac[1],
+            ab[2] * ac[0] - ab[0] * ac[2],
+            ab[0] * ac[1] - ab[1] * ac[0],
+        ]
+        const length = Math.hypot(...normal) || 1
+        const distance = (p) =>
+            (normal[0] * (p[0] - a[0]) +
+                normal[1] * (p[1] - a[1]) +
+                normal[2] * (p[2] - a[2])) /
+            length
+        const inward = Math.sign(distance(middle)) || 1
+        return distance(point) * inward >= -0.5
+    })
+}
 
 /**
  * Entities VBSP takes out when it loads the map, before it looks for leaks
@@ -157,8 +201,15 @@ function partsBehind(text, frame) {
         if (lowest < limit) brushes.push({ solid, depth: depthOf(lowest) })
     }
 
-    // Brush entities have an origin too (where their brushes are), when
-    // they have one at all
+    // An entity past the surface's tile, and not in solid there: one of the
+    // instance's own world brushes that seals (brush entities' don't, nor
+    // func_detail's). Brush entities have an origin too (where their brushes
+    // are), when they have one at all.
+    const sealing = vmf.solids.filter(
+        (solid) =>
+            !solid.owner &&
+            !solid.sides.some((side) => NOT_SOLID.test(side.material)),
+    )
     const entities = []
     for (const entity of vmf.entities) {
         if (COMPILED_AWAY.has(entity.classname.toLowerCase())) continue
@@ -166,9 +217,10 @@ function partsBehind(text, frame) {
         if (origin.length < 3 || origin.some((n) => !Number.isFinite(n))) {
             continue
         }
-        if (origin[2] < limit && !inEmbedded(frame, origin)) {
-            entities.push({ entity, origin, depth: depthOf(origin[2]) })
-        }
+        if (origin[2] >= frame.surface - TILE_DEPTH) continue
+        if (inEmbedded(frame, origin)) continue
+        if (sealing.some((solid) => insideBrush(origin, solid))) continue
+        entities.push({ entity, origin, depth: depthOf(origin[2]) })
     }
 
     brushes.sort((a, b) => b.depth - a.depth)
