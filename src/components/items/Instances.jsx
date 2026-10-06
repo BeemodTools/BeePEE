@@ -96,7 +96,7 @@ function BehindSurfaceIcon({ behind, onOpen }) {
                             : "Brushes in the wall are hidden, and don't make the map leak."}
                     </Box>
                     <Box sx={{ mt: 0.5, fontWeight: "bold" }}>
-                        Click to see it in 3D
+                        Click to open it in the Leak Finder
                     </Box>
                 </Box>
             }>
@@ -376,7 +376,7 @@ function Instances({
                 ...(isPending
                     ? { vmfPath: instance._filePath }
                     : { instanceKey: instance.index }),
-                title: `What ${fileName} has behind the surface - ${item.name}`,
+                title: `Leak Finder - ${fileName} (${item.name})`,
             })
             if (!result?.success) {
                 throw new Error(result?.error || "No reason given")

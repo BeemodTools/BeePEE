@@ -5,12 +5,14 @@ import * as THREE from "three"
 import {
     Alert,
     Box,
+    Button,
     Chip,
     CircularProgress,
     Paper,
     Tooltip,
     Typography,
 } from "@mui/material"
+import { Close } from "@mui/icons-material"
 import { buildObjModel, disposeModel } from "../utils/objModel"
 
 // Dual grid component: main grid at 128 units, lighter sub-grid at 64 units
@@ -478,6 +480,13 @@ function BehindPanel({ behind, error }) {
                 </Alert>
             )}
             {error && <Alert severity="error">{error}</Alert>}
+            <Button
+                variant="outlined"
+                startIcon={<Close />}
+                onClick={() => window.close()}
+                sx={{ mt: "auto", flexShrink: 0 }}>
+                Close
+            </Button>
         </Box>
     )
 }
@@ -772,6 +781,13 @@ export default function ModelPreviewPage() {
 
     const { objUrl, mtlUrl } = getCurrentUrls()
     const behind = modelData?.behindSurface ?? null
+
+    // The Leak Finder's window has its own title (the page's would be BeePEE)
+    useEffect(() => {
+        if (modelData?.behindSurface && modelData.title) {
+            document.title = modelData.title
+        }
+    }, [modelData])
 
     const handleLoad = (object) => {
         setLoading(false)
