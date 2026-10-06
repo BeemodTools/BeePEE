@@ -730,6 +730,32 @@ class Item {
     }
 
     /**
+     * Give the item its own ID as the Type in its editoritems. Items BeePEE
+     * made had "ITEM_CUBE" (the game's cube) there instead, which BEE2 warns
+     * about ("Item ID ... does not match "ITEM_CUBE" ... update
+     * editoritems!") before using the ID.
+     * @returns {boolean} Whether it was changed
+     */
+    fixCubeType() {
+        if (String(this.id).toUpperCase() === "ITEM_CUBE") return false
+        let editoritems
+        try {
+            editoritems = this.getEditorItems()
+        } catch {
+            return false
+        }
+        if (String(editoritems?.Item?.Type ?? "").toUpperCase() !== "ITEM_CUBE") {
+            return false
+        }
+        editoritems.Item.Type = this.id
+        this.saveEditorItems(editoritems)
+        console.log(
+            `Set the type of "${this.name}" to its ID ${this.id} (it was ITEM_CUBE, the game's cube)`,
+        )
+        return true
+    }
+
+    /**
      * Where the item's instances are measured from for what they have behind
      * its surface (behindSurface.js), or null for items whose instances are
      * meant to be outside the map, or without editoritems

@@ -141,6 +141,26 @@ class Package {
                 }
             })
 
+            // Items BeePEE made had "ITEM_CUBE" (the game's cube) as their
+            // type instead of their ID: they get their ID (not in a file other
+            // items use too)
+            const fileUsers = new Map()
+            for (const item of this.items) {
+                const file = item.paths?.editorItems
+                fileUsers.set(file, (fileUsers.get(file) ?? 0) + 1)
+            }
+            for (const item of this.items) {
+                if (fileUsers.get(item.paths?.editorItems) !== 1) continue
+                try {
+                    item.fixCubeType()
+                } catch (error) {
+                    console.warn(
+                        `Failed to set the type of "${item.name}" to its ID:`,
+                        error,
+                    )
+                }
+            }
+
             // Set importedVersion for items that don't have it (for imported packages)
             try {
                 const packageJson = require("../../package.json")

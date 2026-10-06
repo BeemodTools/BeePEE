@@ -142,10 +142,11 @@ function register(ipcMain, mainWindow) {
                     fs.mkdirSync(itemFolderPath, { recursive: true })
                 }
 
-                // Create editoritems.json
+                // Create editoritems.json. Its Type is the item's ID, as in
+                // info.json
                 const editoritems = {
                     Item: {
-                        Type: "ITEM_CUBE",
+                        Type: itemId,
                         ItemClass: "ItemBase",
                         SubtypeProperty: null,
                         Editor: {
@@ -376,10 +377,11 @@ function register(ipcMain, mainWindow) {
 
                 fs.mkdirSync(itemFolderPath, { recursive: true })
 
-                // Create minimal editoritems.json
+                // Create minimal editoritems.json. Its Type is the item's ID,
+                // as in info.json
                 const editoritems = {
                     Item: {
-                        Type: "ITEM_CUBE",
+                        Type: itemId,
                         ItemClass: "ItemBase",
                         Editor: {
                             SubType: {
