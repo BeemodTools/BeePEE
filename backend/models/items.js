@@ -302,39 +302,12 @@ class Item {
         }
 
         try {
-            const vbspData = this.readVbspObject()
-            if (!vbspData) return false
-
-            // Extract Changeinstance entries from the JSON structure
-            const changeInstances = []
-            this.extractChangeInstances(vbspData, changeInstances)
-
-            if (changeInstances.length === 0) {
+            if (this.conditionInstances().length === 0) {
                 return false
             }
 
-            // Start index after the last editor instance
-            let nextIndex = Object.keys(this.instances).length
-
-            for (const instancePath of changeInstances) {
-                // Only add if not already present (case-insensitive comparison)
-                if (
-                    !Object.values(this.instances).some(
-                        (inst) =>
-                            inst.Name?.toLowerCase() ===
-                            instancePath.toLowerCase(),
-                    )
-                ) {
-                    this.instances[nextIndex.toString()] = {
-                        Name: instancePath,
-                        source: "vbsp",
-                    }
-                    nextIndex++
-                }
-            }
-
-            // Auto-register VBSP instances in editoritems.json
-            this.autoRegisterVbspInstances(changeInstances)
+            // Registered in editoritems.json, and read back from there
+            this.reloadInstances()
 
             // Mark as imported in meta.json
             // Frontend will check this flag and skip auto-conversion
@@ -350,6 +323,47 @@ class Item {
             )
             return false
         }
+    }
+
+    /** An instance's file, to compare instances by (any case, BEE2/ or not) */
+    instanceFileKey(instanceName) {
+        return this.fixInstancePath(instanceName ?? "").toLowerCase()
+    }
+
+    /**
+     * The instance files the item's VBSP conditions switch to
+     * (changeInstance), as they're written there
+     */
+    conditionInstances() {
+        if (!this.hasVbspConfig()) return []
+        try {
+            const targets = []
+            this.extractChangeInstances(this.readVbspObject(), targets)
+            return targets
+        } catch (error) {
+            console.error(
+                `Failed to read the VBSP config of "${this.name}":`,
+                error,
+            )
+            return []
+        }
+    }
+
+    /**
+     * Register the instances the item's conditions switch to in its
+     * editoritems.json, so they show in the Instances tab, but not the ones
+     * the user removed (metadata.removedInstances)
+     */
+    registerConditionInstances() {
+        const removed = new Set(
+            (this.getMetadata().removedInstances ?? []).map((name) =>
+                this.instanceFileKey(name),
+            ),
+        )
+        const targets = this.conditionInstances().filter(
+            (target) => !removed.has(this.instanceFileKey(target)),
+        )
+        if (targets.length > 0) this.autoRegisterVbspInstances(targets)
     }
 
     autoRegisterVbspInstances(changeInstances) {
@@ -449,6 +463,11 @@ class Item {
     }
 
     reloadInstances() {
+        // The instances the conditions switch to go into editoritems.json
+        // first: the instances are what the file has, under its indices (an
+        // index of its own here could be another instance's there)
+        this.registerConditionInstances()
+
         // Clear current instances
         this.instances = {}
         this._loadedInstances.clear()
@@ -481,45 +500,6 @@ class Item {
                 }),
             }
         })
-
-        // Re-add VBSP instances if they exist
-        if (this.hasVbspConfig()) {
-            try {
-                const vbspData = this.readVbspObject()
-
-                // Extract Changeinstance entries from the JSON structure
-                const changeInstances = []
-                this.extractChangeInstances(vbspData, changeInstances)
-
-                // Start index after the last editor instance
-                let nextIndex = Object.keys(this.instances).length
-
-                for (const instancePath of changeInstances) {
-                    // Only add if not already present (case-insensitive comparison)
-                    if (
-                        !Object.values(this.instances).some(
-                            (inst) =>
-                                inst.Name.toLowerCase() ===
-                                instancePath.toLowerCase(),
-                        )
-                    ) {
-                        this.instances[nextIndex.toString()] = {
-                            Name: instancePath,
-                            source: "vbsp",
-                        }
-                        nextIndex++
-                    }
-                }
-
-                // Auto-register VBSP instances in editoritems.json
-                this.autoRegisterVbspInstances(changeInstances)
-            } catch (error) {
-                console.error(
-                    `Failed to read the VBSP config of "${this.name}":`,
-                    error,
-                )
-            }
-        }
     }
 
     /**
@@ -888,34 +868,33 @@ class Item {
         }
         this.saveEditorItems(editoritems)
 
+        // Added again after it was removed: its conditions can register it
+        // again too
+        const meta = this.getMetadata()
+        const key = this.instanceFileKey(instanceName)
+        const removed = meta.removedInstances ?? []
+        const stillRemoved = removed.filter(
+            (name) => this.instanceFileKey(name) !== key,
+        )
+        if (stillRemoved.length !== removed.length) {
+            meta.removedInstances = stillRemoved
+            this.saveMetadata(meta)
+        }
+
         // Reload instances from file to ensure consistency
         this.reloadInstances()
 
         return nextIndex.toString()
     }
 
-    removeInstance(index) {
-        const instance = this.instances[index]
-        if (!instance) {
-            throw new Error(`Instance ${index} not found`)
-        }
-
-        // Only allow removing editor instances
-        if (instance.source === "vbsp") {
-            throw new Error("Cannot remove VBSP instances")
-        }
-
-        // Delete the instance file from filesystem if it exists
+    /** Delete an instance's VMF (and its folder, when that's left empty) */
+    deleteInstanceFile(index, instanceName) {
         try {
-            const fs = require("fs")
-            const path = require("path")
-
             // Apply path fixing to remove BEE2/ prefix for actual file structure
-            const actualFilePath = this.fixInstancePath(instance.Name)
             const instanceFilePath = path.join(
                 this.packagePath,
                 "resources",
-                actualFilePath,
+                this.fixInstancePath(instanceName),
             )
 
             if (fs.existsSync(instanceFilePath)) {
@@ -925,12 +904,11 @@ class Item {
                 // Also try to remove the directory if it's empty
                 const instanceDir = path.dirname(instanceFilePath)
                 try {
-                    const files = fs.readdirSync(instanceDir)
-                    if (files.length === 0) {
+                    if (fs.readdirSync(instanceDir).length === 0) {
                         fs.rmdirSync(instanceDir)
                         console.log(`Removed empty directory ${instanceDir}`)
                     }
-                } catch (dirError) {
+                } catch {
                     // Directory not empty or other error, ignore
                 }
             } else {
@@ -939,16 +917,77 @@ class Item {
                 )
             }
         } catch (fileError) {
+            // Not a reason to keep the instance: it's removed anyway
             console.error(
                 `Failed to delete the file of instance ${index} of "${this.name}":`,
                 fileError,
             )
-            // Don't throw error, continue with removal from editoritems
+        }
+    }
+
+    /**
+     * Remove an instance from the item. Its VMF is deleted unless something
+     * still uses it: another of the item's instances, the item's conditions
+     * (changeInstance), or another item (keepFile). One the conditions
+     * switch to isn't registered again (metadata.removedInstances).
+     * @param {string} index
+     * @param {{keepFile?: boolean}} [options] - keepFile: another item uses
+     *   the VMF
+     */
+    removeInstance(index, { keepFile = false } = {}) {
+        const instance = this.instances[index]
+        if (!instance) {
+            throw new Error(`Instance ${index} not found`)
+        }
+
+        // BEE2's dev instances stay (the Instances tab doesn't offer it)
+        if (this.isVbspInstance(instance)) {
+            throw new Error("Cannot remove VBSP instances")
+        }
+
+        const file = this.instanceFileKey(instance.Name)
+        const sharedWith = Object.entries(this.instances).find(
+            ([other, data]) =>
+                other !== String(index) &&
+                this.instanceFileKey(data.Name) === file,
+        )?.[0]
+        const conditionsUseIt = this.conditionInstances().some(
+            (target) => this.instanceFileKey(target) === file,
+        )
+        const usedBy =
+            sharedWith !== undefined
+                ? `instance ${sharedWith} uses it too`
+                : conditionsUseIt
+                  ? "the item's conditions use it"
+                  : keepFile
+                    ? "another item uses it"
+                    : null
+
+        if (usedBy) {
+            console.log(
+                `Kept the file of instance ${index} (${instance.Name}) of "${this.name}": ${usedBy}`,
+            )
+        } else {
+            this.deleteInstanceFile(index, instance.Name)
         }
 
         // Remove from memory
         delete this.instances[index]
         this._loadedInstances.delete(index)
+
+        // Its name and error don't go to an instance added at its index later
+        const meta = this.getMetadata()
+        for (const key of ["instanceNames", "instanceErrors"]) {
+            if (meta[key] && index in meta[key]) delete meta[key][index]
+        }
+        // The conditions still switch to it: registering it again would
+        // bring it back
+        if (conditionsUseIt && sharedWith === undefined) {
+            meta.removedInstances = [
+                ...new Set([...(meta.removedInstances ?? []), instance.Name]),
+            ]
+        }
+        this.saveMetadata(meta)
 
         // Update editoritems file
         const editoritems = this.getEditorItems()

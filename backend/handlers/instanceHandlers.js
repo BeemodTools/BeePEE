@@ -562,7 +562,17 @@ function register(ipcMain, mainWindow) {
                     }
                 }
 
-                item.removeInstance(instanceIndex)
+                // Another item of the package can use the same VMF
+                const pkg = packages.find((p) => p.items.includes(item))
+                const file = item.instanceFileKey(instanceData?.Name)
+                const keepFile = !!pkg?.items.some(
+                    (other) =>
+                        other !== item &&
+                        Object.values(other.instances).some(
+                            (data) => other.instanceFileKey(data.Name) === file,
+                        ),
+                )
+                item.removeInstance(instanceIndex, { keepFile })
                 console.log(
                     `Removed instance ${instanceIndex} (${instanceData?.Name}) from "${item.name}"`,
                 )
