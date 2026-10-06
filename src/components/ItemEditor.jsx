@@ -522,7 +522,6 @@ function ItemEditor() {
                 throw new Error("Item name cannot be empty")
             }
 
-            const savePromises = []
             let hasErrors = false
 
             // Most save handlers report a failure as { success: false, error }
@@ -562,16 +561,20 @@ function ItemEditor() {
                         : null,
                 }
 
-                savePromises.push(
-                    window.package?.saveItem?.(saveData).then(assertSaved).catch((error) => {
+                // Saved before the rest: it writes the editoritems after
+                // converting the icon, which would put back what it read
+                // over what the rest saved in the meantime
+                await window.package
+                    ?.saveItem?.(saveData)
+                    .then(assertSaved)
+                    .catch((error) => {
                         console.error(
                             `Failed to save basic info of item "${item.name}":`,
                             error,
                         )
                         hasErrors = true
                         throw new Error(`Basic info: ${error.message}`)
-                    }),
-                )
+                    })
             }
 
             // Save inputs if modified - handle add/update/remove operations
@@ -921,11 +924,6 @@ function ItemEditor() {
                 throw new Error(`Staged model changes: ${error.message}`)
             }
 
-            // Wait for all saves to complete
-            if (savePromises.length > 0) {
-                await Promise.all(savePromises)
-            }
-
             // Ensure ConnectionPoints exist if item has I/O
             try {
                 assertSaved(
@@ -967,9 +965,11 @@ function ItemEditor() {
                 // Clear staged editoritems from model generation
                 setStagedEditorItems(null)
             }
+            return !hasErrors
         } catch (error) {
             console.error(`Failed to save item "${item.name}":`, error)
             setSaveError(error.message)
+            return false
         } finally {
             setIsSaving(false)
             // Show the item as the save left it. The items sent while it
@@ -979,6 +979,24 @@ function ItemEditor() {
             itemLoads.current++
             reloadItem(item.id)
         }
+    }
+
+    // Make Model makes models from the item's saved instances: with
+    // instances added or removed since the item was saved, it saves the item
+    // first (asking). False: don't make the model.
+    const saveBeforeMakeModel = async () => {
+        if (!formData._modified.instances) return true
+        const answer = await window.electron.showMessageBox({
+            type: "question",
+            buttons: ["Save and Make Model", "Cancel"],
+            defaultId: 0,
+            cancelId: 1,
+            title: "Save the Item First?",
+            message: "The item's instances changed since it was saved.",
+            detail: "Make Model makes the model from the saved instances. Save the item now, and make the model from them?",
+        })
+        if (answer?.response !== 0) return false
+        return handleSave()
     }
 
     const handleCloseError = () => {
@@ -1262,6 +1280,7 @@ function ItemEditor() {
                             onUpdateOther={updateOtherData}
                             onModelGenerationStart={handleModelGenerationStart}
                             onModelGenerationComplete={handleModelGenerationComplete}
+                            onBeforeMakeModel={saveBeforeMakeModel}
                         />
                     </Box>
                     <Box sx={{ display: tabValue === 6 ? "block" : "none" }}>

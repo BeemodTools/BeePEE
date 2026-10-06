@@ -53,7 +53,7 @@ function iconModelOption({ instanceKey, name }, canMakeModels) {
     }
 }
 
-function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart, onModelGenerationComplete }) {
+function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart, onModelGenerationComplete, onBeforeMakeModel }) {
     const [selectedInstanceKey, setSelectedInstanceKey] = useState("")
     const [isConverting, setIsConverting] = useState(false)
     const [conversionProgress, setConversionProgress] = useState("")
@@ -298,6 +298,10 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
 
     const handleMakeModel = async () => {
         if (!selectedInstanceKey || isConverting) return
+
+        // Models are made from the saved instances: the editor saves the
+        // item first when its instances changed (asking), or stops
+        if (onBeforeMakeModel && !(await onBeforeMakeModel())) return
 
         setIsConverting(true)
         setConversionProgress("🚀 Starting conversion...")

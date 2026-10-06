@@ -158,6 +158,16 @@ async function convertInstance(event, item, instanceKey, options) {
 
     if (!item) throw new Error("Item not found")
 
+    // Models are made from the item's saved instances (the editor offers to
+    // save the ones added since)
+    if (!Object.values(item.instances ?? {}).some((i) => i?.Name)) {
+        const error = new Error(
+            `"${item.name}" has no saved instances to make a model from. Add an instance in the Instances tab and save the item.`,
+        )
+        error.userFacing = true
+        throw error
+    }
+
     // If this is a variable-based conversion, handle it differently
     if (options.isVariable) {
         return handleVariableConversion(event, item, instanceKey, options)
