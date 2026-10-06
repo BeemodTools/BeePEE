@@ -214,6 +214,13 @@ contextBridge.exposeInMainWorld("package", {
         ipcRenderer.invoke("get-instance-metadata", { itemId, instanceIndex }),
     checkVmfExternalAssets: (vmfPath) =>
         ipcRenderer.invoke("check-vmf-external-assets", { vmfPath }),
+    // What a VMF has behind the item's surface: { success, behindSurface }
+    checkInstanceBehindSurface: (itemId, vmfPath) =>
+        ipcRenderer.invoke("check-instance-behind-surface", { itemId, vmfPath }),
+    // The same for each of the item's instances: { success, behindSurface }
+    // with behindSurface by instance index
+    getInstancesBehindSurface: (itemId) =>
+        ipcRenderer.invoke("get-instances-behind-surface", { itemId }),
 
     // ========================================
     // INSTANCE NAMING FUNCTIONS

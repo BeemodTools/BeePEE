@@ -2,6 +2,7 @@ const fs = require("fs")
 const path = require("path")
 const { Instance } = require("../items/Instance")
 const { vmfStatsCache } = require("../utils/vmfParser")
+const { itemFrame, instanceBehindSurface } = require("../utils/behindSurface")
 const {
     GENERATED_HEADER,
     sameEntries,
@@ -746,6 +747,41 @@ class Item {
         }
 
         return instancesWithStatus
+    }
+
+    /**
+     * Where the item's instances are measured from for what they have behind
+     * its surface (behindSurface.js), or null for items whose instances are
+     * meant to be outside the map, or without editoritems
+     */
+    instanceFrame() {
+        try {
+            return itemFrame(this.getEditorItems().Item)
+        } catch {
+            return null
+        }
+    }
+
+    /**
+     * What each instance has behind the surface the item is placed on (the
+     * Instances tab's leak warning): by index, null when nothing (or when its
+     * file isn't there). Only the item editor asks: it reads every VMF.
+     */
+    getInstancesBehindSurface() {
+        const frame = this.instanceFrame()
+        const result = {}
+        for (const [index, instanceData] of Object.entries(this.instances)) {
+            result[index] = frame
+                ? instanceBehindSurface(
+                      Instance.getCleanPath(
+                          this.packagePath,
+                          this.fixInstancePath(instanceData.Name),
+                      ),
+                      frame,
+                  )
+                : null
+        }
+        return result
     }
 
     // Helper method to determine if an instance is a VBSP instance

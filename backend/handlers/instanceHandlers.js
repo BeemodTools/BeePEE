@@ -10,6 +10,7 @@ const { packages } = require("../packageManager")
 const { sendItemUpdateToEditor } = require("../items/itemEditor")
 const { Instance } = require("../items/Instance")
 const { vmfStatsCache } = require("../utils/vmfParser")
+const { instanceBehindSurface } = require("../utils/behindSurface")
 const { getHammerPath, getHammerAvailability, findPortal2Dir } = require("../data")
 
 /**
@@ -749,6 +750,45 @@ function register(ipcMain, mainWindow) {
                     error,
                 )
                 return { success: false, error: error.message }
+            }
+        },
+    )
+
+    // What each of an item's instances has behind the surface the item is
+    // placed on (the Instances tab's leak warning), by index
+    ipcMain.handle(
+        "get-instances-behind-surface",
+        async (event, { itemId }) => {
+            const item = packages
+                .flatMap((p) => p.items)
+                .find((i) => i.id === itemId)
+            if (!item) {
+                return { success: false, error: `Item ${itemId} not found` }
+            }
+            return {
+                success: true,
+                behindSurface: item.getInstancesBehindSurface(),
+            }
+        },
+    )
+
+    // What a VMF has behind the surface the item is placed on, for an
+    // instance that isn't added yet (the Instances tab's leak warning)
+    ipcMain.handle(
+        "check-instance-behind-surface",
+        async (event, { itemId, vmfPath }) => {
+            const item = packages
+                .flatMap((p) => p.items)
+                .find((i) => i.id === itemId)
+            if (!item) {
+                return { success: false, error: `Item ${itemId} not found` }
+            }
+            const frame = item.instanceFrame()
+            return {
+                success: true,
+                behindSurface: frame
+                    ? instanceBehindSurface(vmfPath, frame)
+                    : null,
             }
         },
     )

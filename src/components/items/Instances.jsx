@@ -39,8 +39,62 @@ import ViewInArIcon from "@mui/icons-material/ViewInAr"
 import MusicNoteIcon from "@mui/icons-material/MusicNote"
 import DescriptionIcon from "@mui/icons-material/Description"
 import RefreshIcon from "@mui/icons-material/Refresh"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import ViewInAr from "@mui/icons-material/ViewInAr"
+
+const units = (depth) => `${depth} unit${depth === 1 ? "" : "s"}`
+
+/**
+ * What an instance has behind the surface the item is placed on (from the
+ * backend's behindSurface.js): a warning for entities, which can leak the
+ * map, a note for brushes alone, which are only hidden in the wall
+ */
+function BehindSurfaceIcon({ behind }) {
+    if (!behind) return null
+    const leaks = behind.entityCount > 0
+    const more = behind.entityCount - behind.entities.length
+    const brushes = `${behind.brushCount} brush${behind.brushCount === 1 ? "" : "es"}`
+    return (
+        <Tooltip
+            title={
+                <Box>
+                    <Box sx={{ fontWeight: "bold", mb: 0.5 }}>
+                        {leaks
+                            ? `Goes ${units(behind.depth)} behind the surface it's placed on`
+                            : `${brushes} up to ${units(behind.brushDepth)} behind the surface it's placed on`}
+                    </Box>
+                    {behind.entities.map((entity, i) => (
+                        <Box key={i}>
+                            {entity.classname}
+                            {entity.name ? ` "${entity.name}"` : ""}:{" "}
+                            {units(entity.depth)}
+                        </Box>
+                    ))}
+                    {more > 0 && (
+                        <Box>
+                            and {more} more {more === 1 ? "entity" : "entities"}
+                        </Box>
+                    )}
+                    {leaks && behind.brushCount > 0 && (
+                        <Box>
+                            {brushes}: up to {units(behind.brushDepth)}
+                        </Box>
+                    )}
+                    <Box sx={{ mt: 0.5, opacity: 0.8 }}>
+                        {leaks
+                            ? "An entity behind the wall can end up in the void, which makes the map leak. If the item is meant to go into the wall, its editoritems should claim those voxels (EmbeddedVoxels)."
+                            : "Brushes in the wall are hidden, and don't make the map leak."}
+                    </Box>
+                </Box>
+            }>
+            {leaks ? (
+                <WarningIcon fontSize="small" color="warning" />
+            ) : (
+                <InfoIcon fontSize="small" color="info" />
+            )}
+        </Tooltip>
+    )
+}
 
 function Instances({
     item,
@@ -68,6 +122,42 @@ function Instances({
         severity: "success",
         text: "",
     })
+
+    // What each saved instance has behind the item's surface, by index
+    // (instances not saved yet carry theirs). Checked again when the window
+    // comes back, like after editing an instance in Hammer.
+    const [behindSurface, setBehindSurface] = useState({})
+    const instanceFiles = JSON.stringify(
+        Object.entries(item?.instances ?? {}).map(([index, instance]) => [
+            index,
+            instance.Name,
+        ]),
+    )
+    useEffect(() => {
+        if (!item?.id) return
+        let current = true
+        const check = async () => {
+            try {
+                const result = await window.package.getInstancesBehindSurface(
+                    item.id,
+                )
+                if (current && result?.success) {
+                    setBehindSurface(result.behindSurface)
+                }
+            } catch (error) {
+                console.warn(
+                    `Couldn't check what the instances of item "${item.name}" have behind its surface:`,
+                    error,
+                )
+            }
+        }
+        check()
+        window.addEventListener("focus", check)
+        return () => {
+            current = false
+            window.removeEventListener("focus", check)
+        }
+    }, [item?.id, instanceFiles])
 
     // Convert formData instances to array format for rendering
     const instances = formData?.instances
@@ -167,10 +257,27 @@ function Instances({
                     .toString(36)
                     .substr(2, 9)}`
 
+                // What it has behind the item's surface, for its warning
+                let behindSurface = null
+                try {
+                    const check =
+                        await window.package.checkInstanceBehindSurface(
+                            item.id,
+                            fileResult.filePath,
+                        )
+                    if (check?.success) behindSurface = check.behindSurface
+                } catch (error) {
+                    console.warn(
+                        `Couldn't check what ${fileResult.fileName} has behind its surface:`,
+                        error,
+                    )
+                }
+
                 const newInstance = {
                     Name: fileResult.instanceName,
                     _pending: true,
                     _filePath: fileResult.filePath,
+                    behindSurface,
                 }
 
                 updatedInstances[newIndex] = newInstance
@@ -592,6 +699,16 @@ function Instances({
                                                 }}
                                             />
                                         </Box>
+
+                                        <BehindSurfaceIcon
+                                            behind={
+                                                isPending
+                                                    ? instance.behindSurface
+                                                    : behindSurface[
+                                                          instance.index
+                                                      ]
+                                            }
+                                        />
 
                                         {/* Instance Path */}
                                         <Typography

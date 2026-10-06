@@ -349,6 +349,7 @@ onPackageLoaded: (callback) => {
 - `backend/packageManager.js` - Package loading and conversion (VDF/JSON)
 - `backend/utils/keyvalues.js` - VDF read in order (with where each entry is), VDF to JS objects and back
 - `backend/utils/vbspConditions.js` - Items' VBSP conditions as raw blocks, and writing them back
+- `backend/utils/behindSurface.js` - What an instance has behind its item's surface (the Instances tab's leak warning)
 - `backend/saveItem.js` - File system operations for saving items
 - `backend/preload.js` - Secure API exposure to renderer
 
@@ -832,6 +833,16 @@ When an instance is added to an item (or replaced), `backend/utils/autopacker.js
 - **In the package already**: nothing to do
 - **Custom, packed**: everything else - custom content folders, files added to `Portal 2/portal2` later, other VPKs (extracted)
 - **Missing**: reported (dialog and log) when the instance names the file, or when custom content needs it (a custom material's texture, a custom model's materials), with what needs it; missing files the original game's content names (like gibs the game itself lacks) only go to the debug log
+
+## Leak Warning (Instances tab)
+
+`backend/utils/behindSurface.js` finds what an instance has behind the surface its item is placed on. Instances are built as if on the floor: with the usual editoritems `Offset "64 64 64"` the origin is the voxel's center and the surface is z = -64 (on walls and ceilings the instance is turned, so that's still the surface). Anything more than a unit below it counts, unless it's in a voxel the item embeds into (`EmbeddedVoxels`: `Pos "0 0 0"` is the voxel just behind the surface, `"0 0 -1"` the next; `Volume` `Pos1`/`Pos2` too).
+
+- **Entities** behind the surface get a warning on the instance's row: out in the void behind the wall, an entity makes the map leak. Brush entities count by their origin; instance helpers, `func_detail`, overlays and decals don't count.
+- **Brushes** alone get a note: they're hidden in the wall, and Portal 2's own items do it (the light strip 6 units, the rail platform's track 32).
+- Doors (`ItemEntranceDoor`, `ItemExitDoor` and the coop ones) and observation rooms are skipped: their instances are meant to be outside the map.
+- Checked on all of Portal 2's own items: no entities behind their surface but the piston platform's `debug_top` (16 units, just outside its embedded voxels).
+- The item editor asks for it (`get-instances-behind-surface`, and `check-instance-behind-surface` for an instance not added yet), again when its window comes back (after editing in Hammer). It isn't in `getInstancesWithStatus`, which every package load runs for every item. Results are kept until the VMF changes.
 
 ## VMF to OBJ Conversion (VMF2OBJ port)
 
