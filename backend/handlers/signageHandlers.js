@@ -18,6 +18,15 @@ const { generateSignageMaterial } = require("../utils/signageMaterial")
 const { getSetting, setSetting } = require("../utils/settings")
 const { logger } = require("../utils/logger")
 
+/**
+ * Where a signage style's editable design (.bpsign) is: Clean's is
+ * "<ID>.bpsign", other styles' "<ID>__<STYLE>.bpsign"
+ */
+function designPath(packageDir, signageId, styleId) {
+    const suffix = styleId && styleId !== "BEE2_CLEAN" ? `__${styleId}` : ""
+    return path.join(packageDir, ".bpee", "signs", `${signageId}${suffix}.bpsign`)
+}
+
 // The SVG import folder defaults to a dedicated spot in the app's user-data
 // directory (e.g. %APPDATA%/beepee/signage-svgs) so users have somewhere to
 // drop SVGs without configuring anything first.
@@ -78,18 +87,11 @@ function register(ipcMain, mainWindow) {
             const packageDir = getCurrentPackageDir()
             if (!packageDir) return { success: true, design: null }
             // Non-Clean styles keep their own design file next to the base one
-            const suffix =
-                styleId && styleId !== "BEE2_CLEAN" ? `__${styleId}` : ""
-            const designPath = path.join(
-                packageDir,
-                ".bpee",
-                "signs",
-                `${signageId}${suffix}.bpsign`,
-            )
-            if (!fs.existsSync(designPath)) {
+            const file = designPath(packageDir, signageId, styleId)
+            if (!fs.existsSync(file)) {
                 return { success: true, design: null }
             }
-            const design = JSON.parse(fs.readFileSync(designPath, "utf-8"))
+            const design = JSON.parse(fs.readFileSync(file, "utf-8"))
             return { success: true, design }
         } catch (error) {
             console.error(
@@ -704,6 +706,27 @@ function register(ipcMain, mainWindow) {
                                 logger.debug(
                                     `Copied the ${styleId} icon from ${stagedPath}`,
                                 )
+
+                                // The icon is that picture now, not what the
+                                // style's design made: the design goes, so
+                                // the designer starts from the picture and
+                                // can't put the old icon back
+                                for (const id of new Set([
+                                    signageData.originalId,
+                                    signageData.id,
+                                ])) {
+                                    const design = designPath(
+                                        packageDir,
+                                        id,
+                                        styleId,
+                                    )
+                                    if (fs.existsSync(design)) {
+                                        fs.rmSync(design)
+                                        logger.info(
+                                            `Removed the design of the ${styleId} icon of signage ${id}, replaced by a picture`,
+                                        )
+                                    }
+                                }
                             } else if (styleConfig.icon) {
                                 // Extract filename from existing icon path
                                 const iconPath = styleConfig.icon

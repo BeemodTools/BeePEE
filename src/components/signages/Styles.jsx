@@ -513,6 +513,8 @@ function SignageStyles({
     onUpdate,
     onEditDesign,
     stagedDesign,
+    hasDesign,
+    onDropDesign,
     onError,
 }) {
     const styles = formData.styles || {}
@@ -553,6 +555,29 @@ function SignageStyles({
         })
     }
 
+    // A picture for a style whose icon was made in the designer replaces
+    // that design (it goes when the signage is saved): ask first
+    const replacesDesign = async (styleId) => {
+        if (!hasDesign?.(styleId)) return true
+        const answer = await window.electron.showMessageBox({
+            type: "warning",
+            buttons: ["Use the Picture", "Cancel"],
+            defaultId: 1,
+            cancelId: 1,
+            title: "Replace the Design?",
+            message: `The ${catalogLabel(styleId)} icon was made in the Signage Designer.`,
+            detail: "Using a picture instead replaces its design when you save. The designer will start from the picture.",
+        })
+        if (answer?.response !== 0) return false
+        onDropDesign?.(styleId)
+        return true
+    }
+
+    const pickIcon = async (styleId, filePath) => {
+        if (!(await replacesDesign(styleId))) return
+        patchStyle(styleId, { icon: filePath, _stagedIconPath: filePath })
+    }
+
     const handleUpload = async (styleId) => {
         try {
             // Resolves Electron's { canceled, filePaths }, not an array
@@ -562,10 +587,7 @@ function SignageStyles({
                 properties: ["openFile"],
             })
             if (!result.canceled && result.filePaths.length > 0) {
-                patchStyle(styleId, {
-                    icon: result.filePaths[0],
-                    _stagedIconPath: result.filePaths[0],
-                })
+                await pickIcon(styleId, result.filePaths[0])
             }
         } catch (error) {
             console.error(`Failed to select icon for style ${styleId}:`, error)
@@ -590,7 +612,10 @@ function SignageStyles({
             )
             return
         }
-        patchStyle(styleId, { icon: filePath, _stagedIconPath: filePath })
+        pickIcon(styleId, filePath).catch((error) => {
+            console.error(`Failed to set the icon of style ${styleId}:`, error)
+            onError?.(`Failed to set the icon: ${error.message}`)
+        })
     }
 
     const handleInherit = (styleId, targetId) => {

@@ -20,6 +20,7 @@ import {
     rasterizeSignageTextures,
     serializeDesign,
     rehydrateDesign,
+    loadPictureLayer,
 } from "../components/signages/glyphs"
 import { loadSignagePrefs } from "../components/signages/SignagePreferences"
 import { styleDisplayName } from "../components/signages/Styles"
@@ -44,13 +45,23 @@ function SignageDesignerPage() {
     useEffect(() => {
         document.title = "BeePEE - Signage Designer"
 
-        window.package?.onLoadSignageDesign?.((payload) => {
+        window.package?.onLoadSignageDesign?.(async (payload) => {
             if (!payload) return
             try {
-                // No stored design (e.g. a fresh non-Clean style) starts blank
-                const layers = payload.design
-                    ? rehydrateDesign(payload.design)
-                    : []
+                // No stored design: a signage made from a picture (an
+                // uploaded PNG) starts from it, one with neither (like a
+                // fresh non-Clean style) blank
+                let layers = []
+                if (payload.design) {
+                    layers = rehydrateDesign(payload.design)
+                } else if (payload.image) {
+                    layers = [
+                        await loadPictureLayer(
+                            payload.name || "Picture",
+                            payload.image,
+                        ),
+                    ]
+                }
                 setInitialLayers(layers)
                 setEditId(payload.editId || null)
                 setEditStyle(payload.styleId || null)

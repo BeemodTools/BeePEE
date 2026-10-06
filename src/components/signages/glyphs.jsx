@@ -98,7 +98,9 @@ export const SHAPES = { ...GLYPHS, ...PRIMS }
 // Builds a SHAPES entry for an SVG with its own coordinate space. The
 // strokeScale keeps outline thickness feeling the same as on the built-in
 // 24-unit shapes; fillRule preserves evenodd holes from exported SVGs.
-const makeShapeEntry = (label, paths, vbString, fillRule) => {
+// A picture (an uploaded PNG, as a data URL in `image`) has no paths: it's
+// drawn as it is, filling its viewBox.
+const makeShapeEntry = (label, paths, vbString, fillRule, image) => {
     const [x, y, w, h] = vbString.split(/[\s,]+/).map(Number)
     return {
         label,
@@ -110,8 +112,13 @@ const makeShapeEntry = (label, paths, vbString, fillRule) => {
         vbH: h || 24,
         strokeScale: Math.max(w || 24, h || 24) / 24,
         fillRule,
+        ...(image && { image }),
     }
 }
+
+// A picture glyph's markup: the image over its whole viewBox
+const pictureSvg = (g) =>
+    `<image href="${g.image}" x="${g.vbX}" y="${g.vbY}" width="${g.vbW}" height="${g.vbH}" preserveAspectRatio="none"/>`
 
 // A glyph's paths array holds plain "d" strings (filled subpaths) or
 // { d, sw } objects (stroke-only subpaths from imported SVGs - sw is the
@@ -123,17 +130,17 @@ export const pathEntries = (g) =>
 export const CUSTOM = {}
 let _cid = 0
 
-export function registerCustomGlyph(label, paths, vbString, fillRule) {
+export function registerCustomGlyph(label, paths, vbString, fillRule, image) {
     // Dedupe by geometry: uploading a file that's also in the SVG folder,
     // remounting the designer (edit reload, HMR), or re-opening a .bpsign
     // would otherwise register the same shape again under a fresh id and
     // the palette would show duplicates.
-    const sig = JSON.stringify([paths, vbString, fillRule || null])
+    const sig = JSON.stringify([paths, vbString, fillRule || null, image || null])
     for (const [id, entry] of Object.entries(CUSTOM)) {
         if (entry._sig === sig) return id
     }
     const id = `custom_${++_cid}`
-    const entry = makeShapeEntry(label, paths, vbString, fillRule)
+    const entry = makeShapeEntry(label, paths, vbString, fillRule, image)
     entry._sig = sig
     CUSTOM[id] = entry
     SHAPES[id] = entry
@@ -156,6 +163,7 @@ export function serializeDesign(layers) {
                     paths: shape.paths,
                     vb: shape.vb,
                     fillRule: shape.fillRule,
+                    ...(shape.image && { image: shape.image }),
                 }
             }
             return out
@@ -182,12 +190,67 @@ export function rehydrateDesign(design) {
                         shape.paths,
                         shape.vb,
                         shape.fillRule,
+                        shape.image,
                     ),
                 )
             }
             glyph = glyphMap.get(glyph)
         }
         return { ...rest, glyph, id: `IMP${++_impId}` }
+    })
+}
+
+/**
+ * A layer showing a picture (like a signage's uploaded PNG), fit to the
+ * canvas: what the designer starts from for a signage with no design
+ * @param {string} label
+ * @param {string} dataUrl - The image
+ * @param {number} width - Its size in pixels
+ * @param {number} height
+ */
+export function pictureLayer(label, dataUrl, width, height) {
+    const glyph = registerCustomGlyph(
+        label,
+        [],
+        `0 0 ${width} ${height}`,
+        undefined,
+        dataUrl,
+    )
+    const scale = Math.min(CANVAS_SIZE / width, CANVAS_SIZE / height)
+    const w = Math.round(width * scale)
+    const h = Math.round(height * scale)
+    return {
+        id: `IMP${++_impId}`,
+        glyph,
+        x: Math.round((CANVAS_SIZE - w) / 2),
+        y: Math.round((CANVAS_SIZE - h) / 2),
+        w,
+        h,
+        color: "#000000",
+        rot: 0,
+        styleMode: "fill",
+        outlineAlign: "center",
+        outlineWidth: 3,
+        outlineColor: "#ffffff",
+        rounded: false,
+    }
+}
+
+/** pictureLayer for an image data URL, at the image's own size */
+export function loadPictureLayer(label, dataUrl) {
+    return new Promise((resolve, reject) => {
+        const img = new Image()
+        img.onload = () =>
+            resolve(
+                pictureLayer(
+                    label,
+                    dataUrl,
+                    img.naturalWidth || CANVAS_SIZE,
+                    img.naturalHeight || CANVAS_SIZE,
+                ),
+            )
+        img.onerror = () => reject(new Error("The picture couldn't be read"))
+        img.src = dataUrl
     })
 }
 
@@ -500,6 +563,18 @@ export function ShapeSvg({ id, color, w, h }) {
                 flexShrink: 0,
             }}>
             {(() => {
+                if (g.image) {
+                    return (
+                        <image
+                            href={g.image}
+                            x={g.vbX}
+                            y={g.vbY}
+                            width={g.vbW}
+                            height={g.vbH}
+                            preserveAspectRatio="none"
+                        />
+                    )
+                }
                 const entries = pathEntries(g)
                 const fills = entries.filter((p) => !p.sw)
                 const strokes = entries.filter((p) => p.sw > 0)
@@ -626,6 +701,8 @@ export function layerInnerSvg(l, uid, opts = {}) {
     if (isTextLayer(l)) return textLayerSvg(l)
     const g = SHAPES[l.glyph]
     if (!g) return ""
+    // A picture is drawn as it is, without a color or an outline
+    if (g.image) return pictureSvg(g)
     const c = l.color
     const mode = l.styleMode || (l.outline ? "outline" : "fill")
     // High miter limit keeps sharp corners (triangles, stars) pointed

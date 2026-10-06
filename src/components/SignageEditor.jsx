@@ -30,6 +30,19 @@ import { useSignageContext } from "../contexts/SignageContext"
 import SignageInfo from "./signages/Info"
 import SignageStyles from "./signages/Styles"
 
+// The icon file a style shows: its own, the one of the style it inherits
+// from ("BEE2_1980S": "BEE2_CLEAN"), else Clean's. "" when it's no file
+const shownIcon = (styles, styleId) => {
+    let cfg = styles?.[styleId]
+    for (let i = 0; i < 5 && typeof cfg === "string"; i++) cfg = styles?.[cfg]
+    let icon = cfg && typeof cfg === "object" ? cfg.icon : ""
+    if (!icon) {
+        const clean = styles?.BEE2_CLEAN
+        icon = clean && typeof clean === "object" ? clean.icon : ""
+    }
+    return icon && /[\\/]/.test(icon) ? icon : ""
+}
+
 function SignageEditor() {
     const { signage } = useSignageContext()
     const [tabValue, setTabValue] = useState(0)
@@ -56,6 +69,8 @@ function SignageEditor() {
     const [redoStack, setRedoStack] = useState([])
     // The editable design source, present only for BeePEE-designed signage
     const [design, setDesign] = useState(null)
+    // The styles whose icon has a design of its own (Clean's is `design`)
+    const [designedStyles, setDesignedStyles] = useState(new Set())
     // A designer save waiting for THIS editor's Save button to commit it
     const [stagedDesign, setStagedDesign] = useState(null)
 
@@ -134,23 +149,64 @@ function SignageEditor() {
                     setDesign(result?.success ? result.design : null)
                 })
                 .catch(() => setDesign(null))
+
+            // And which of its styles have a design (picking a picture for
+            // one replaces it)
+            const styleIds = [
+                ...new Set(["BEE2_CLEAN", ...Object.keys(signage.styles || {})]),
+            ]
+            Promise.all(
+                styleIds.map(async (styleId) => {
+                    const result = await window.package?.getSignageDesign?.(
+                        signage.id,
+                        styleId,
+                    )
+                    return result?.success && result.design ? styleId : null
+                }),
+            )
+                .then((ids) => setDesignedStyles(new Set(ids.filter(Boolean))))
+                .catch(() => setDesignedStyles(new Set()))
         }
     }, [signage])
 
-    // Open the designer for a specific style's icon. Non-Clean styles use
-    // their own saved design when one exists, otherwise they start from the
-    // Clean design as a base. The styleId rides along so saving writes back
-    // to the right style instead of clobbering Clean.
+    // Whether a style's icon is a design (saved, or staged by the designer)
+    const hasDesign = (styleId) =>
+        designedStyles.has(styleId) ||
+        (!!stagedDesign &&
+            (stagedDesign.styleId || "BEE2_CLEAN") === styleId)
+
+    // A picture was picked for a style: a designer save staged for it is
+    // dropped (the saved design goes when the signage is saved)
+    const dropStagedDesign = (styleId) => {
+        if (
+            stagedDesign &&
+            (stagedDesign.styleId || "BEE2_CLEAN") === styleId
+        ) {
+            setStagedDesign(null)
+        }
+    }
+
+    // Open the designer for a specific style's icon: with its design, or for
+    // a picture (an uploaded PNG, no design), with that picture to draw on.
+    // Non-Clean styles with neither a design nor a picture of their own
+    // start from the Clean design. The styleId rides along so saving writes
+    // back to the right style instead of clobbering Clean.
     const handleEditDesign = async (styleId) => {
         const style = styleId || "BEE2_CLEAN"
-        let styleDesign = design
+        const own = formData.styles?.[style]
+        const ownIcon = own && typeof own === "object" ? own.icon : ""
+        let styleDesign = null
         // An uncommitted staged design for this style is the latest version
         if (
             stagedDesign &&
             (stagedDesign.styleId || "BEE2_CLEAN") === style
         ) {
             styleDesign = stagedDesign.design
-        } else if (style !== "BEE2_CLEAN") {
+        } else if (own?._stagedIconPath) {
+            // A picture picked since the last save replaces its design
+        } else if (style === "BEE2_CLEAN") {
+            styleDesign = design
+        } else {
             try {
                 const result = await window.package.getSignageDesign(
                     signage.id,
@@ -162,11 +218,30 @@ function SignageEditor() {
             } catch {
                 /* fall back to the Clean design */
             }
+            if (!styleDesign && !ownIcon) styleDesign = design
         }
+
+        // No design: the picture the style shows
+        let image = null
+        if (!styleDesign) {
+            const icon = shownIcon(formData.styles, style)
+            if (icon) {
+                try {
+                    image = await window.package.loadFile(icon)
+                } catch (error) {
+                    console.warn(
+                        `Couldn't load the ${style} icon of signage "${formData.name}" for the designer:`,
+                        error,
+                    )
+                }
+            }
+        }
+
         window.package.openSignageDesigner({
             editId: signage.id,
             name: formData.name,
             design: styleDesign,
+            image,
             styleId: style,
         })
     }
@@ -392,6 +467,8 @@ function SignageEditor() {
                             onUpdate={handleUpdate}
                             onEditDesign={handleEditDesign}
                             stagedDesign={stagedDesign}
+                            hasDesign={hasDesign}
+                            onDropDesign={dropStagedDesign}
                             onError={setSaveError}
                         />
                     </Box>
