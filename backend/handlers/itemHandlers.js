@@ -19,6 +19,7 @@ const {
     getCreateItemWindow,
 } = require("../items/itemEditor")
 const { Item } = require("../models/items")
+const { descriptionValue } = require("../saveItem")
 const { vmfStatsCache } = require("../utils/vmfParser")
 
 /** "1 instance", "3 instances" */
@@ -152,8 +153,10 @@ function register(ipcMain, mainWindow) {
                         Editor: {
                             SubType: {
                                 Name: name,
+                                // What Portal 2's palette shows: the name in
+                                // capitals, as BEE2's items have it
                                 Palette: {
-                                    Tooltip: description || "",
+                                    Tooltip: name.trim().toUpperCase(),
                                     Position: "0 0 0",
                                 },
                             },
@@ -218,6 +221,9 @@ function register(ipcMain, mainWindow) {
                 const properties = {
                     Properties: {
                         Authors: author,
+                        ...(description?.trim() && {
+                            Description: descriptionValue(description),
+                        }),
                     },
                 }
                 fs.writeFileSync(
@@ -386,8 +392,10 @@ function register(ipcMain, mainWindow) {
                         Editor: {
                             SubType: {
                                 Name: itemName,
+                                // What Portal 2's palette shows: the name in
+                                // capitals, as BEE2's items have it
                                 Palette: {
-                                    Tooltip: description || "",
+                                    Tooltip: itemName.trim().toUpperCase(),
                                 },
                             },
                         },
@@ -407,6 +415,9 @@ function register(ipcMain, mainWindow) {
                 const properties = {
                     Properties: {
                         Authors: author || "Unknown",
+                        ...(description?.trim() && {
+                            Description: descriptionValue(description),
+                        }),
                     },
                 }
                 fs.writeFileSync(

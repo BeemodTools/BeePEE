@@ -141,9 +141,9 @@ class Package {
                 }
             })
 
-            // Items BeePEE made had "ITEM_CUBE" (the game's cube) as their
-            // type instead of their ID: they get their ID (not in a file other
-            // items use too)
+            // Fix what BeePEE got wrong in items' editoritems before (their
+            // type, ConnectionCount, palette name), not in a file other items
+            // use too (its type is theirs too)
             const fileUsers = new Map()
             for (const item of this.items) {
                 const file = item.paths?.editorItems
@@ -152,10 +152,10 @@ class Package {
             for (const item of this.items) {
                 if (fileUsers.get(item.paths?.editorItems) !== 1) continue
                 try {
-                    item.fixCubeType()
+                    item.repairEditorItems()
                 } catch (error) {
                     console.warn(
-                        `Failed to set the type of "${item.name}" to its ID:`,
+                        `Failed to fix the editoritems of "${item.name}":`,
                         error,
                     )
                 }

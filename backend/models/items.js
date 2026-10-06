@@ -118,6 +118,65 @@ function nameFromId(id) {
         .join(" ")
 }
 
+/** BEE2's antline indicators, which take inputs without ConnectionCount */
+const ANTLINE_ITEMS = new Set([
+    "ITEM_INDICATOR_PANEL",
+    "ITEM_INDICATOR_PANEL_TIMER",
+    "ITEM_INDICATOR_TOGGLE",
+])
+
+/**
+ * Give an editoritems Item block with inputs the ConnectionCount property
+ * ($connectioncount). BEE2's docs have it "Required for all items accepting
+ * an input", and BEE2 warns "Items with inputs must have ConnectionCount to
+ * work!" without it. Index 1, as the game's items have it (variables start
+ * at 2, see saveVariables).
+ * @returns {boolean} Whether it was added
+ */
+function addConnectionCount(item) {
+    const inputs = getKey(getKey(item, "Exporting"), "Inputs")
+    if (!inputs || typeof inputs !== "object" || !Object.keys(inputs).length) {
+        return false
+    }
+    if (ANTLINE_ITEMS.has(String(getKey(item, "Type") ?? "").toUpperCase())) {
+        return false
+    }
+    const key =
+        Object.keys(item).find((k) => k.toLowerCase() === "properties") ??
+        "Properties"
+    const properties = item[key] ?? {}
+    if (typeof properties !== "object" || Array.isArray(properties)) return false
+    if (getKey(properties, "ConnectionCount") !== undefined) return false
+    item[key] = { ConnectionCount: { DefaultValue: 0, Index: 1 }, ...properties }
+    return true
+}
+
+/**
+ * Keep an editoritems SubType's palette name (the Tooltip Portal 2's palette
+ * shows) as its name in capitals, as BEE2's items have it: a blank one gets
+ * the name, and one that was the old name follows a rename. Any other is the
+ * package's own (like a localized name) and stays.
+ * @param {object} subType - Its Name is the new name
+ * @param {string} [oldName] - Its name before, when it was renamed
+ * @returns {boolean} Whether it changed
+ */
+function syncPaletteName(subType, oldName = getKey(subType, "Name")) {
+    const palette = getKey(subType, "Palette")
+    const name = String(getKey(subType, "Name") ?? "").trim().toUpperCase()
+    if (!palette || typeof palette !== "object" || Array.isArray(palette)) {
+        return false
+    }
+    if (!name) return false
+    const key =
+        Object.keys(palette).find((k) => k.toLowerCase() === "tooltip") ??
+        "Tooltip"
+    const tooltip = String(palette[key] ?? "").trim().toUpperCase()
+    const before = String(oldName ?? "").trim().toUpperCase()
+    if (tooltip && (tooltip !== before || before === name)) return false
+    palette[key] = name
+    return true
+}
+
 /** The styles an item's folder is taken from first */
 const PREFERRED_STYLES = ["BEE2_CLEAN", "ANY_STYLE"]
 
@@ -730,29 +789,48 @@ class Item {
     }
 
     /**
-     * Give the item its own ID as the Type in its editoritems. Items BeePEE
-     * made had "ITEM_CUBE" (the game's cube) there instead, which BEE2 warns
-     * about ("Item ID ... does not match "ITEM_CUBE" ... update
-     * editoritems!") before using the ID.
-     * @returns {boolean} Whether it was changed
+     * Fix what BeePEE got wrong in editoritems before, which BEE2 warns about
+     * or Portal 2 shows:
+     * - The Type is the item's ID. BeePEE gave items "ITEM_CUBE" (the game's
+     *   cube) or "BPEE_<NAME>", and BEE2 warns ("Item ID ... does not match
+     *   ... update editoritems!", comparing them in any case) before using
+     *   the ID.
+     * - An item with inputs has ConnectionCount (addConnectionCount)
+     * - A blank palette name is the subtype's name (syncPaletteName)
+     * @returns {string[]} What was changed
      */
-    fixCubeType() {
-        if (String(this.id).toUpperCase() === "ITEM_CUBE") return false
+    repairEditorItems() {
         let editoritems
         try {
             editoritems = this.getEditorItems()
         } catch {
-            return false
+            return []
         }
-        if (String(editoritems?.Item?.Type ?? "").toUpperCase() !== "ITEM_CUBE") {
-            return false
+        const item = editoritems?.Item
+        if (!item || typeof item !== "object") return []
+
+        const changes = []
+        const typeKey =
+            Object.keys(item).find((k) => k.toLowerCase() === "type") ?? "Type"
+        const type = String(item[typeKey] ?? "").trim()
+        if (this.id && type.toLowerCase() !== String(this.id).toLowerCase()) {
+            item[typeKey] = this.id
+            changes.push(`its type is its ID (it was ${type || "missing"})`)
         }
-        editoritems.Item.Type = this.id
-        this.saveEditorItems(editoritems)
-        console.log(
-            `Set the type of "${this.name}" to its ID ${this.id} (it was ITEM_CUBE, the game's cube)`,
-        )
-        return true
+        if (addConnectionCount(item)) {
+            changes.push("added ConnectionCount (it has inputs)")
+        }
+        const subTypes = [getKey(getKey(item, "Editor"), "SubType")].flat()
+        if (subTypes.filter((subType) => syncPaletteName(subType)).length) {
+            changes.push("its palette name is its name (it was blank)")
+        }
+        if (changes.length) {
+            this.saveEditorItems(editoritems)
+            console.log(
+                `Fixed the editoritems of "${this.name}": ${changes.join(", ")}`,
+            )
+        }
+        return changes
     }
 
     /**
@@ -1104,6 +1182,7 @@ class Item {
 
         // Add the new input
         editoritems.Item.Exporting.Inputs[inputName] = inputConfig
+        addConnectionCount(editoritems.Item)
 
         // Auto-generate ConnectionPoints if this item has I/O but none defined
         if (!editoritems.Item.Exporting.ConnectionPoints) {
@@ -2685,4 +2764,5 @@ class Item {
 
 module.exports = {
     Item,
+    syncPaletteName,
 }

@@ -24,14 +24,16 @@ const fs = require("fs")
 const os = require("os")
 const path = require("path")
 
-/** BEE2's editoritems.txt docs: "Type: The ID for this item, which must be unique" */
-const typeOf = (dir, folder) =>
+const editoritemsOf = (dir, folder) =>
     JSON.parse(
         fs.readFileSync(
             path.join(dir, "items", folder, "editoritems.json"),
             "utf8",
         ),
-    ).Item.Type
+    ).Item
+
+/** BEE2's editoritems.txt docs: "Type: The ID for this item, which must be unique" */
+const typeOf = (dir, folder) => editoritemsOf(dir, folder).Type
 
 describe("an item's type in its editoritems", () => {
     let dir
@@ -63,12 +65,20 @@ describe("an item's type in its editoritems", () => {
         expect(result.success).toBe(true)
         expect(result.itemId).toMatch(/^bpee_exposedcubedropper_[0-9A-F]{4}$/)
         expect(typeOf(dir, "exposedcubedropper")).toBe(result.itemId)
+        // What Portal 2's palette shows for it
+        expect(
+            editoritemsOf(dir, "exposedcubedropper").Editor.SubType.Palette
+                .Tooltip,
+        ).toBe("EXPOSED CUBE DROPPER")
     })
 
-    test("becomes its ID when its package loads, if BeePEE made it ITEM_CUBE", async () => {
+    test("becomes its ID when its package loads, if BeePEE gave it another", async () => {
         const items = [
-            // Made by BeePEE before this fix
+            // Made by BeePEE before these fixes
             { id: "bpee_trophy_03AF", folder: "trophy", type: "ITEM_CUBE" },
+            { id: "crouch_relay", folder: "relay", type: "BPEE_CROUCH_RELAY" },
+            // BEE2 compares them in any case
+            { id: "bpee_vase_03AF", folder: "vase", type: "BPEE_VASE_03AF" },
             // An item that is the game's cube keeps that
             { id: "ITEM_CUBE", folder: "cube", type: "ITEM_CUBE" },
             { id: "ITEM_LAMP", folder: "lamp", type: "ITEM_LAMP" },
@@ -107,6 +117,8 @@ describe("an item's type in its editoritems", () => {
         await pkg.load()
 
         expect(typeOf(dir, "trophy")).toBe("bpee_trophy_03AF")
+        expect(typeOf(dir, "relay")).toBe("crouch_relay")
+        expect(typeOf(dir, "vase")).toBe("BPEE_VASE_03AF")
         expect(typeOf(dir, "cube")).toBe("ITEM_CUBE")
         expect(typeOf(dir, "lamp")).toBe("ITEM_LAMP")
     })

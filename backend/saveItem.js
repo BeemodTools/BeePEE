@@ -5,6 +5,7 @@ const {
     getVTFPathFromImagePath,
     updateEditorItemsWithVTF,
 } = require("./utils/vtfConverter")
+const { syncPaletteName } = require("./models/items")
 
 /**
  * Handles VTF conversion for palette images referenced in editoritems.json
@@ -137,12 +138,11 @@ async function saveItem(item) {
         throw new Error("Invalid properties format")
     }
 
-    // Update editor items
-    if (Array.isArray(editorItems.Item.Editor.SubType)) {
-        editorItems.Item.Editor.SubType[0].Name = item.name
-    } else {
-        editorItems.Item.Editor.SubType.Name = item.name
-    }
+    // Update editor items: the name, and the palette name with it
+    const subType = [editorItems.Item.Editor.SubType].flat()[0]
+    const oldName = subType.Name
+    subType.Name = item.name
+    syncPaletteName(subType, oldName)
 
     // Update MovementHandle if provided
     if (item.movementHandle) {
@@ -322,4 +322,4 @@ async function saveItem(item) {
     return { editorItems, properties, infoDescription }
 }
 
-module.exports = { saveItem }
+module.exports = { saveItem, descriptionValue }
