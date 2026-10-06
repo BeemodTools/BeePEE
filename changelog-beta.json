@@ -1,6 +1,33 @@
 {
     "versions": [
         {
+            "version": "1.2.0-beta.3",
+            "date": "2026-10-6",
+            "notes": [
+                "This is a BETA build - it is bug prone. If you encounter any bugs go to Help > Report Bug. Please stress test as much as you can!",
+                "This beta adds the Leak Finder. Please try it on your items and report anything it gets wrong."
+            ],
+            "changes": {
+                "added": [
+                    "Leak Finder: instances with stuff behind their surface get a warning in the Instances tab, click it to see it in 3D",
+                    "Meta tab says if BeePEE made the item and which version last saved it"
+                ],
+                "fixed": [
+                    "Instance names going back after saving",
+                    "Removed instances coming back",
+                    "Make Model failing on instances that weren't saved yet",
+                    "New items getting ITEM_CUBE as their type (old ones get fixed when the package opens)",
+                    "Items with inputs missing ConnectionCount, and blank names in Portal 2's palette",
+                    "Signage pictures not opening in the designer",
+                    "Being asked to name entities that can't have inputs or outputs"
+                ],
+                "changed": [
+                    "Model page opens the Model Generator for generated models, also from a .bpee",
+                    "Preview only shows when the package has the generated model's preview"
+                ]
+            }
+        },
+        {
             "version": "1.2.0-beta.2",
             "date": "2026-10-5",
             "notes": [
