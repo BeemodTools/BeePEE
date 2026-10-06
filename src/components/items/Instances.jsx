@@ -82,7 +82,7 @@ function BehindSurfaceIcon({ behind }) {
                     )}
                     <Box sx={{ mt: 0.5, opacity: 0.8 }}>
                         {leaks
-                            ? "An entity behind the wall can end up in the void, which makes the map leak. If the item is meant to go into the wall, its editoritems should claim those voxels (EmbeddedVoxels)."
+                            ? "An entity behind the wall can end up in the void, which makes the map leak."
                             : "Brushes in the wall are hidden, and don't make the map leak."}
                     </Box>
                 </Box>
