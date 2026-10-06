@@ -161,6 +161,8 @@ async function parseFGD(fgdPath, log = console) {
                 outputs,
                 parents,
                 type: entityType,
+                // It has a name keyvalue (most get it from a base class)
+                nameable: /^\s*targetname\s*\(/im.test(entityBlock),
             }
 
             if (entityType === "BaseClass") {
@@ -174,7 +176,7 @@ async function parseFGD(fgdPath, log = console) {
         // Function to resolve inheritance
         const resolveInheritance = (entityName, visited = new Set()) => {
             if (visited.has(entityName)) {
-                return { inputs: [], outputs: [] }
+                return { inputs: [], outputs: [], nameable: false }
             }
 
             visited.add(entityName)
@@ -182,17 +184,19 @@ async function parseFGD(fgdPath, log = console) {
             const entity = entities[entityName] || baseClasses[entityName]
             if (!entity) {
                 visited.delete(entityName)
-                return { inputs: [], outputs: [] }
+                return { inputs: [], outputs: [], nameable: false }
             }
 
             let allInputs = [...entity.inputs]
             let allOutputs = [...entity.outputs]
+            let nameable = entity.nameable
 
             // Recursively resolve parent classes
             for (const parent of entity.parents) {
                 const parentData = resolveInheritance(parent, visited)
                 allInputs.unshift(...parentData.inputs)
                 allOutputs.unshift(...parentData.outputs)
+                nameable ||= parentData.nameable
             }
 
             visited.delete(entityName)
@@ -220,7 +224,7 @@ async function parseFGD(fgdPath, log = console) {
                 }
             }
 
-            return { inputs: uniqueInputs, outputs: uniqueOutputs }
+            return { inputs: uniqueInputs, outputs: uniqueOutputs, nameable }
         }
 
         // Resolve inheritance for all concrete entities
@@ -389,6 +393,7 @@ async function locatePortal2Resources(log) {
 
                     allEntities[entityName].inputs.push(...newInputs)
                     allEntities[entityName].outputs.push(...newOutputs)
+                    allEntities[entityName].nameable ||= entityData.nameable
                 } else {
                     allEntities[entityName] = entityData
                 }
@@ -459,4 +464,5 @@ module.exports = {
     getHammerPath,
     getHammerAvailability,
     parseGameInfo,
+    parseFGD,
 }

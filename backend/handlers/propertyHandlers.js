@@ -4,6 +4,7 @@
 
 const { dialog } = require("electron")
 const { packages } = require("../packageManager")
+const { findPortal2Resources } = require("../data")
 const { sendItemUpdateToEditor } = require("../items/itemEditor")
 
 function register(ipcMain, mainWindow) {
@@ -150,6 +151,11 @@ function register(ipcMain, mainWindow) {
                 unnamedEntities: [],
                 invalidNames: [],
             }
+            // Which unnamed entities could have inputs or outputs
+            let fgdEntities = null
+            try {
+                fgdEntities = (await findPortal2Resources())?.entities ?? null
+            } catch {}
 
             // Get entities from all valid instances only
             for (const [instanceIndex, instanceData] of Object.entries(
@@ -166,7 +172,8 @@ function register(ipcMain, mainWindow) {
                     Object.assign(allEntities, entities)
 
                     // Get validation issues for this instance
-                    const issues = instance.getEntityValidationIssues()
+                    const issues =
+                        instance.getEntityValidationIssues(fgdEntities)
                     // Add instance index to each issue for context
                     issues.unnamedEntities.forEach((e) => {
                         e.instanceIndex = instanceIndex
