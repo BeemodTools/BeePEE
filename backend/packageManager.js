@@ -11,12 +11,33 @@ const { vmfStatsCache } = require("./utils/vmfParser")
 const { getPackagesDir, ensurePackagesDir } = require("./utils/packagesDir")
 const {
     GENERATED_HEADER,
+    beepeeVersionOf,
     toObject,
     vdfToken,
 } = require("./utils/keyvalues")
 
 /** "1 item", "3 items" */
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
+
+/**
+ * Note in an item's meta.json (the Meta tab's) whether BeePEE made its
+ * editoritems.txt, and the BeePEE version that did, as its first line says
+ * (beepeeVersionOf). One BeePEE didn't make gets no meta.json for that.
+ */
+function noteMadeWith(itemDir, version) {
+    const metaPath = path.join(itemDir, "meta.json")
+    let meta = null
+    try {
+        meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
+    } catch {
+        // None (or one that can't be read)
+    }
+    if (version === null && !meta) return
+    meta = meta && typeof meta === "object" ? meta : {}
+    meta.madeWithBeePEE = version !== null
+    if (version) meta.lastSavedVersion = version
+    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 4))
+}
 
 // Fix 7zip-bin path for packaged app
 // When app is packaged, use extraResources directory
@@ -684,6 +705,17 @@ function processVdfFiles(directory) {
         ) {
             // Always convert these specific files to JSON
             try {
+                // An item's: whether BeePEE made it (its first line says so)
+                const inItems = directory
+                    .split(/[\\/]/)
+                    .some((part) => part.toLowerCase() === "items")
+                if (file === "editoritems.txt" && inItems) {
+                    noteMadeWith(
+                        directory,
+                        beepeeVersionOf(fs.readFileSync(fullPath, "utf-8")),
+                    )
+                }
+
                 // Convert VDF to JSON
                 const jsonData = convertVdfToJson(fullPath)
 
@@ -1282,6 +1314,15 @@ const loadPackage = async (
                     path.resolve(pkg.packageDir).toLowerCase()
             if (samePackage) await closeOpenPackage()
             await pkg.load()
+            // A .bpee is BeePEE's own, so BeePEE made its items (the Meta tab
+            // says so)
+            if (path.extname(pathToPackage).toLowerCase() === ".bpee") {
+                for (const item of pkg.items) {
+                    if (item.getMetadata()?.madeWithBeePEE !== true) {
+                        item.updateMetadata({ madeWithBeePEE: true })
+                    }
+                }
+            }
             if (!samePackage) await closeOpenPackage()
             packages.push(pkg)
 

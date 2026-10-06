@@ -161,27 +161,6 @@ class Package {
                 }
             }
 
-            // Set importedVersion for items that don't have it (for imported packages)
-            try {
-                const packageJson = require("../../package.json")
-                const appVersion = packageJson.version
-                if (appVersion) {
-                    for (const item of this.items) {
-                        const metadata = item.getMetadata()
-                        // Only set importedVersion if it doesn't exist (meaning it was imported)
-                        // and if createdVersion doesn't exist (meaning it wasn't created in this app)
-                        if (!metadata.importedVersion && !metadata.createdVersion) {
-                            item.updateMetadata({ importedVersion: appVersion })
-                        }
-                    }
-                }
-            } catch (error) {
-                console.warn(
-                    "Failed to set the items' imported version:",
-                    error,
-                )
-            }
-
             // Auto-import VBSP instances for all items (runs once per item)
             await logger.section("Auto-importing VBSP instances", () => {
                 let totalImported = 0

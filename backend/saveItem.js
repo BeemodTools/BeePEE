@@ -6,6 +6,7 @@ const {
     updateEditorItemsWithVTF,
 } = require("./utils/vtfConverter")
 const { syncPaletteName } = require("./models/items")
+const { APP_VERSION } = require("./utils/keyvalues")
 
 /**
  * Handles VTF conversion for palette images referenced in editoritems.json
@@ -294,25 +295,20 @@ async function saveItem(item) {
             )
         }
 
-        // Update metadata lastModified timestamp if item has metadata
-        if (item.metadata) {
-            const metaPath = path.join(item.fullItemPath, "meta.json")
-            if (fs.existsSync(metaPath)) {
-                try {
-                    const metadata = JSON.parse(
-                        fs.readFileSync(metaPath, "utf-8"),
-                    )
-                    metadata.lastModified = new Date().toISOString()
-                    fs.writeFileSync(
-                        metaPath,
-                        JSON.stringify(metadata, null, 4),
-                    )
-                } catch (error) {
-                    console.warn(
-                        `Failed to update the modified time in the meta.json of "${item.name}":`,
-                        error,
-                    )
-                }
+        // The item's meta.json: when it was saved, and with which BeePEE
+        // (the Meta tab says)
+        const metaPath = path.join(item.fullItemPath, "meta.json")
+        if (fs.existsSync(metaPath)) {
+            try {
+                const metadata = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
+                metadata.lastModified = new Date().toISOString()
+                metadata.lastSavedVersion = APP_VERSION
+                fs.writeFileSync(metaPath, JSON.stringify(metadata, null, 4))
+            } catch (error) {
+                console.warn(
+                    `Failed to update the meta.json of "${item.name}":`,
+                    error,
+                )
             }
         }
     } catch (error) {

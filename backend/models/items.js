@@ -597,8 +597,9 @@ class Item {
                 )
             }
 
-            // Also reload instances
+            // Also reload instances, and meta.json (a save writes it)
             this.reloadInstances()
+            this.metadata = this.loadMetadata()
         } catch (error) {
             console.error(
                 `Failed to reload item "${this.name}" from disk:`,
@@ -2436,6 +2437,19 @@ class Item {
                                 delete map[key]
                             }
                         }
+                    }
+                }
+
+                // One noted when the package was opened (whether BeePEE made
+                // the item) has no dates yet: the files' are
+                if (!metadata.created || !metadata.lastModified) {
+                    const fileDates = this.getFileDates()
+                    if (!metadata.created) {
+                        metadata.created = fileDates.created.toISOString()
+                    }
+                    if (!metadata.lastModified) {
+                        metadata.lastModified =
+                            fileDates.lastModified.toISOString()
                     }
                 }
 

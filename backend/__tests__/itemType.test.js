@@ -70,6 +70,19 @@ describe("an item's type in its editoritems", () => {
             editoritemsOf(dir, "exposedcubedropper").Editor.SubType.Palette
                 .Tooltip,
         ).toBe("EXPOSED CUBE DROPPER")
+        // The Meta tab says this BeePEE made it
+        const { APP_VERSION } = require("../utils/keyvalues")
+        const meta = JSON.parse(
+            fs.readFileSync(
+                path.join(dir, "items", "exposedcubedropper", "meta.json"),
+                "utf8",
+            ),
+        )
+        expect(meta).toMatchObject({
+            madeWithBeePEE: true,
+            createdVersion: APP_VERSION,
+            lastSavedVersion: APP_VERSION,
+        })
     })
 
     test("becomes its ID when its package loads, if BeePEE gave it another", async () => {

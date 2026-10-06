@@ -20,6 +20,7 @@ const {
 } = require("../items/itemEditor")
 const { Item } = require("../models/items")
 const { descriptionValue } = require("../saveItem")
+const { APP_VERSION } = require("../utils/keyvalues")
 const { vmfStatsCache } = require("../utils/vmfParser")
 
 /** "1 instance", "3 instances" */
@@ -307,6 +308,12 @@ function register(ipcMain, mainWindow) {
                 }
 
                 const newItem = new Item({ packagePath, itemJSON })
+                // Made with this BeePEE (the Meta tab says so)
+                newItem.updateMetadata({
+                    madeWithBeePEE: true,
+                    createdVersion: APP_VERSION,
+                    lastSavedVersion: APP_VERSION,
+                })
                 const pkg = packages.find((p) => p.packageDir === packagePath)
                 if (pkg) {
                     pkg.items.push(newItem)
@@ -462,6 +469,12 @@ function register(ipcMain, mainWindow) {
                 }
 
                 const newItem = new Item({ packagePath, itemJSON })
+                // Made with this BeePEE (the Meta tab says so)
+                newItem.updateMetadata({
+                    madeWithBeePEE: true,
+                    createdVersion: APP_VERSION,
+                    lastSavedVersion: APP_VERSION,
+                })
                 const pkg = packages.find((p) => p.packageDir === packagePath)
                 if (pkg) {
                     pkg.items.push(newItem)
