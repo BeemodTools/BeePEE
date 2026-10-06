@@ -95,9 +95,6 @@ function pushBackSurfaces(object) {
 /** An entity marker's size, as a part of the window's height */
 const MARKER_SIZE = 0.032
 
-/** How much of a marker shows through what's in front of it */
-const HIDDEN_MARKER_OPACITY = 0.2
-
 /** A prop's model (brush entities' "*N" aren't) */
 const propModel = (entity) =>
     entity.model && !entity.model.startsWith("*") ? entity.model : null
@@ -279,41 +276,37 @@ function useMarkerTexture() {
 }
 
 /**
- * An entity's marker, the same size on screen at any distance: faint where
- * something is in front of it
+ * An entity's marker, the same size on screen at any distance, over
+ * everything: drawn last, and the pointer finds it first (markersFirst)
  */
 function EntityMarker({ entity, texture, onHover }) {
-    const scale = [MARKER_SIZE, MARKER_SIZE, 1]
     return (
-        <group position={entity.origin}>
-            <sprite scale={scale} renderOrder={19} raycast={() => null}>
-                <spriteMaterial
-                    map={texture}
-                    sizeAttenuation={false}
-                    depthTest={false}
-                    depthWrite={false}
-                    transparent
-                    opacity={HIDDEN_MARKER_OPACITY}
-                />
-            </sprite>
-            <sprite
-                scale={scale}
-                renderOrder={20}
-                onPointerOver={(e) => {
-                    e.stopPropagation()
-                    onHover(entity)
-                }}
-                onPointerOut={() => onHover(null)}>
-                <spriteMaterial
-                    map={texture}
-                    sizeAttenuation={false}
-                    depthWrite={false}
-                    transparent
-                />
-            </sprite>
-        </group>
+        <sprite
+            position={entity.origin}
+            scale={[MARKER_SIZE, MARKER_SIZE, 1]}
+            renderOrder={1000}
+            userData={{ marker: true }}
+            onPointerOver={(e) => {
+                e.stopPropagation()
+                onHover(entity)
+            }}
+            onPointerOut={() => onHover(null)}>
+            <spriteMaterial
+                map={texture}
+                sizeAttenuation={false}
+                depthTest={false}
+                depthWrite={false}
+                transparent
+            />
+        </sprite>
     )
 }
+
+/** What the pointer is on, entity markers first (they're drawn over the rest) */
+const markersFirst = (hits) => [
+    ...hits.filter((hit) => hit.object.userData.marker),
+    ...hits.filter((hit) => !hit.object.userData.marker),
+]
 
 /**
  * What's behind the surface: the brushes outlined, the props outlined in the
@@ -322,7 +315,13 @@ function EntityMarker({ entity, texture, onHover }) {
  */
 function BehindSurface({ behind, hasModel, model, framedRef, onHover }) {
     const texture = useMarkerTexture()
-    const { camera, controls } = useThree()
+    const { camera, controls, setEvents } = useThree()
+
+    // The pointer finds entity markers before what's in front of them
+    useEffect(() => {
+        setEvents({ filter: markersFirst })
+        return () => setEvents({ filter: undefined })
+    }, [setEvents])
     const [outlined, setOutlined] = useState(new Set())
     // Which props the model shows is known once it's loaded (or there's none)
     const known = !hasModel || Boolean(model)
