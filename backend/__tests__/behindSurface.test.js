@@ -63,6 +63,21 @@ describe("what an instance has behind its item's surface", () => {
         expect(behindSurface(vmf, FLOOR_ITEM)).toBeNull()
     })
 
+    test("entities VBSP takes out before it looks for leaks don't count", () => {
+        const vmf =
+            entity(2, { classname: "env_cubemap", origin: "0 0 -200" }) +
+            entity(3, { classname: "func_instance", origin: "0 0 -200" }) +
+            // A decal stays an entity
+            entity(4, { classname: "infodecal", origin: "0 0 -100" })
+        expect(behindSurface(vmf, FLOOR_ITEM)).toEqual({
+            depth: 36,
+            entityCount: 1,
+            entities: [{ classname: "infodecal", name: "", depth: 36 }],
+            brushCount: 0,
+            brushDepth: 0,
+        })
+    })
+
     test("a brush that shows in the room is seen, however far it goes in", () => {
         const vmf = world(
             // Only just in the wall

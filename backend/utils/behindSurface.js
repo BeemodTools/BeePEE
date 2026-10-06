@@ -23,16 +23,21 @@ const VOXEL = 128
 const TOLERANCE = 1
 
 /**
- * Entities a compile takes out (instance helpers), merges into the world's
- * brushes or turns into surfaces
+ * Entities VBSP takes out when it loads the map, before it looks for leaks
+ * (from every other entity's origin): instance helpers, ones it merges into
+ * the world's brushes, and ones it turns into something else (overlays,
+ * cubemaps, vis clusters). Any other entity counts, props too.
  */
 const COMPILED_AWAY = new Set([
+    "func_instance",
     "func_instance_parms",
     "func_instance_io_proxy",
     "func_detail",
+    "func_viscluster",
     "info_overlay",
     "info_overlay_transition",
-    "infodecal",
+    "info_no_dynamic_shadow",
+    "env_cubemap",
 ])
 
 /**
