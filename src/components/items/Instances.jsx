@@ -49,9 +49,19 @@ const units = (depth) => `${depth} unit${depth === 1 ? "" : "s"}`
  * backend's behindSurface.js): a warning for entities, which can leak the
  * map, a note for brushes alone, which are only hidden in the wall
  */
-function BehindSurfaceIcon({ behind }) {
+function BehindSurfaceIcon({ behind, onOpen }) {
+    // Opening its 3D view (which can make the instance's model first)
+    const [opening, setOpening] = useState(false)
     if (!behind) return null
     const leaks = behind.entityCount > 0
+    const open = async () => {
+        setOpening(true)
+        try {
+            await onOpen()
+        } finally {
+            setOpening(false)
+        }
+    }
     const more = behind.entityCount - behind.entities.length
     const brushes = `${behind.brushCount} brush${behind.brushCount === 1 ? "" : "es"}`
     return (
@@ -85,13 +95,26 @@ function BehindSurfaceIcon({ behind }) {
                             ? "An entity behind the wall can end up in the void, which makes the map leak."
                             : "Brushes in the wall are hidden, and don't make the map leak."}
                     </Box>
+                    <Box sx={{ mt: 0.5, fontWeight: "bold" }}>
+                        Click to see it in 3D
+                    </Box>
                 </Box>
             }>
-            {leaks ? (
-                <WarningIcon fontSize="small" color="warning" />
-            ) : (
-                <InfoIcon fontSize="small" color="info" />
-            )}
+            <span>
+                <IconButton
+                    size="small"
+                    onClick={open}
+                    disabled={opening}
+                    sx={{ p: 0.25 }}>
+                    {opening ? (
+                        <CircularProgress size={18} />
+                    ) : leaks ? (
+                        <WarningIcon fontSize="small" color="warning" />
+                    ) : (
+                        <InfoIcon fontSize="small" color="info" />
+                    )}
+                </IconButton>
+            </span>
         </Tooltip>
     )
 }
@@ -342,6 +365,33 @@ function Instances({
             pendingFiles: [],
             mode: "replace",
         })
+    }
+
+    // Open the 3D view of what an instance has behind the item's surface (its
+    // warning, clicked): a saved instance's, or the VMF of one added since
+    const openBehindSurface = async (instance, isPending) => {
+        const fileName = String(instance.Name ?? "").split(/[\\/]/).pop()
+        try {
+            const result = await window.package.showBehindSurface(item.id, {
+                ...(isPending
+                    ? { vmfPath: instance._filePath }
+                    : { instanceKey: instance.index }),
+                title: `What ${fileName} has behind the surface - ${item.name}`,
+            })
+            if (!result?.success) {
+                throw new Error(result?.error || "No reason given")
+            }
+        } catch (error) {
+            console.error(
+                `Couldn't show what ${fileName} has behind the surface:`,
+                error,
+            )
+            setAutopackNotice({
+                open: true,
+                severity: "error",
+                text: `Couldn't show what ${fileName} has behind the surface: ${error.message}`,
+            })
+        }
     }
 
     // Autopack an instance again: pack the custom files it uses that aren't
@@ -707,6 +757,12 @@ function Instances({
                                                     : behindSurface[
                                                           instance.index
                                                       ]
+                                            }
+                                            onOpen={() =>
+                                                openBehindSurface(
+                                                    instance,
+                                                    isPending,
+                                                )
                                             }
                                         />
 
@@ -1076,7 +1132,8 @@ function Instances({
                 </Box>
             </Dialog>
 
-            {/* How autopacking an instance again went */}
+            {/* How autopacking an instance again went, or why a 3D view of
+                what's behind the surface couldn't open */}
             <Snackbar
                 open={autopackNotice.open}
                 autoHideDuration={5000}

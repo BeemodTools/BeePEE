@@ -26,9 +26,9 @@ function SimpleGrid({ size = 20480, position = [0, -64, 0] }) {
     )
 }
 
-/** Frame the camera on a model: from the front-right, a little above */
+/** Frame the camera on a model (or a box): from the front-right, a little above */
 function frameModel(camera, controls, object) {
-    const box = new THREE.Box3().setFromObject(object)
+    const box = object.isBox3 ? object : new THREE.Box3().setFromObject(object)
     const size = box.getSize(new THREE.Vector3())
     const center = box.getCenter(new THREE.Vector3())
     const maxSize = Math.max(size.x, size.y, size.z)
@@ -55,9 +55,259 @@ async function fetchText(url) {
     return response.text()
 }
 
+// What's behind the surface the item is placed on (an instance's, from the
+// Instances tab's warning) is red: outlined brushes and props, and an X for
+// an entity without a model
+const BEHIND_COLOR = 0xff3b30
+
+/** A material for what's behind the surface: seen through the rest */
+const behindLineMaterial = () =>
+    new THREE.LineBasicMaterial({
+        color: BEHIND_COLOR,
+        depthTest: false,
+        transparent: true,
+        opacity: 0.9,
+    })
+
+/** A prop's model (brush entities' "*N" aren't) */
+const propModel = (entity) =>
+    entity.model && !entity.model.startsWith("*") ? entity.model : null
+
+/** More edges than this (like ivy's leaves) are outlined as a box instead */
+const MAX_OUTLINE_EDGES = 3000
+
+/** The 12 edges of a box, as line segments */
+function boxEdges(box) {
+    const { min, max } = box
+    const corner = (i) => [
+        i & 1 ? max.x : min.x,
+        i & 2 ? max.y : min.y,
+        i & 4 ? max.z : min.z,
+    ]
+    const points = []
+    for (let i = 0; i < 8; i++) {
+        for (const bit of [1, 2, 4]) {
+            if (!(i & bit)) points.push(...corner(i), ...corner(i | bit))
+        }
+    }
+    const geometry = new THREE.BufferGeometry()
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3))
+    return geometry
+}
+
+/** A model file's name, as the converter names its object in the OBJ */
+const modelBaseName = (model) =>
+    model
+        .replace(/\\/g, "/")
+        .split("/")
+        .pop()
+        .replace(/\.[^.]*$/, "")
+        .toLowerCase()
+
+/**
+ * Outline the props behind the surface in a loaded model: the mesh of each
+ * (the OBJ names a prop's mesh after its model) nearest to its origin
+ * @returns {{outlined: Set<number>, remove: Function}} the entities outlined
+ *   (by index), and a function that takes the outlines off
+ */
+function outlineProps(object, entities) {
+    const meshes = []
+    object.traverse((child) => {
+        if (child.isMesh) meshes.push(child)
+    })
+    const centerOf = new Map(
+        meshes.map((mesh) => {
+            mesh.geometry.computeBoundingBox()
+            return [mesh, mesh.geometry.boundingBox.getCenter(new THREE.Vector3())]
+        }),
+    )
+
+    const used = new Set()
+    const outlined = new Set()
+    const added = []
+    entities.forEach((entity, index) => {
+        if (!propModel(entity)) return
+        const name = modelBaseName(entity.model)
+        const origin = new THREE.Vector3(...entity.origin)
+        let nearest = null
+        for (const mesh of meshes) {
+            if (used.has(mesh) || mesh.name.toLowerCase() !== name) continue
+            const distance = centerOf.get(mesh).distanceTo(origin)
+            if (!nearest || distance < nearest.distance) {
+                nearest = { mesh, distance }
+            }
+        }
+        if (!nearest) return
+        used.add(nearest.mesh)
+        outlined.add(index)
+        nearest.mesh.userData.behind = entity
+
+        // A see-through or cut-out texture's edges (like leaves') are its
+        // cards', not its shape's: those are outlined as a box
+        const seeThrough = [nearest.mesh.material]
+            .flat()
+            .some((material) => material?.alphaTest > 0 || material?.transparent)
+        let edges = seeThrough
+            ? null
+            : new THREE.EdgesGeometry(nearest.mesh.geometry, 40)
+        if (!edges || edges.attributes.position.count / 2 > MAX_OUTLINE_EDGES) {
+            edges?.dispose()
+            edges = boxEdges(nearest.mesh.geometry.boundingBox)
+        }
+        const lines = new THREE.LineSegments(edges, behindLineMaterial())
+        lines.renderOrder = 10
+        lines.raycast = () => {}
+        nearest.mesh.add(lines)
+        added.push(lines)
+    })
+
+    const remove = () => {
+        for (const lines of added) {
+            lines.parent?.remove(lines)
+            lines.geometry.dispose()
+            lines.material.dispose()
+        }
+    }
+    return { outlined, remove }
+}
+
+/** The brushes behind the surface, outlined: each face's edges */
+function BrushOutlines({ brushes }) {
+    const geometry = useMemo(() => {
+        const points = []
+        for (const { faces } of brushes) {
+            for (const face of faces) {
+                face.forEach((point, i) => {
+                    points.push(...point, ...face[(i + 1) % face.length])
+                })
+            }
+        }
+        const lines = new THREE.BufferGeometry()
+        lines.setAttribute(
+            "position",
+            new THREE.Float32BufferAttribute(points, 3),
+        )
+        return lines
+    }, [brushes])
+    const material = useMemo(behindLineMaterial, [])
+    useEffect(
+        () => () => {
+            geometry.dispose()
+            material.dispose()
+        },
+        [geometry, material],
+    )
+    return (
+        <lineSegments
+            geometry={geometry}
+            material={material}
+            renderOrder={10}
+            raycast={() => null}
+        />
+    )
+}
+
+/** A red X, for an entity without a model */
+function useXTexture() {
+    const texture = useMemo(() => {
+        const canvas = document.createElement("canvas")
+        canvas.width = canvas.height = 64
+        const context = canvas.getContext("2d")
+        context.lineCap = "round"
+        for (const [color, width] of [
+            ["#1e1e1e", 18],
+            [`#${BEHIND_COLOR.toString(16).padStart(6, "0")}`, 10],
+        ]) {
+            context.strokeStyle = color
+            context.lineWidth = width
+            context.beginPath()
+            context.moveTo(12, 12)
+            context.lineTo(52, 52)
+            context.moveTo(52, 12)
+            context.lineTo(12, 52)
+            context.stroke()
+        }
+        return new THREE.CanvasTexture(canvas)
+    }, [])
+    useEffect(() => () => texture.dispose(), [texture])
+    return texture
+}
+
+/**
+ * What's behind the surface: the brushes outlined, the props outlined in the
+ * model, and an X for each other entity (or a prop the model doesn't show,
+ * like one hidden at the start)
+ */
+function BehindSurface({ behind, hasModel, model, framedRef, onHover }) {
+    const texture = useXTexture()
+    const { camera, controls } = useThree()
+    const [outlined, setOutlined] = useState(new Set())
+    // Which props the model shows is known once it's loaded (or there's none)
+    const known = !hasModel || Boolean(model)
+
+    useEffect(() => {
+        if (!model) return
+        const props = outlineProps(model, behind.entities)
+        setOutlined(props.outlined)
+        return props.remove
+    }, [model, behind])
+
+    // With no model, the camera is framed on what's behind the surface (once
+    // the controls it turns around are there)
+    useEffect(() => {
+        if (hasModel || framedRef.current || !controls) return
+        const box = new THREE.Box3()
+        for (const { faces } of behind.brushes) {
+            for (const face of faces) {
+                for (const point of face) box.expandByPoint(new THREE.Vector3(...point))
+            }
+        }
+        for (const { origin } of behind.entities) {
+            box.expandByPoint(new THREE.Vector3(...origin))
+        }
+        if (box.isEmpty()) return
+        frameModel(camera, controls, box.expandByScalar(64))
+        framedRef.current = true
+    }, [hasModel, behind, camera, controls, framedRef])
+
+    return (
+        <>
+            <BrushOutlines brushes={behind.brushes} />
+            {behind.entities.map((entity, index) =>
+                outlined.has(index) || (propModel(entity) && !known) ? null : (
+                    <sprite
+                        key={index}
+                        position={entity.origin}
+                        scale={[24, 24, 24]}
+                        renderOrder={20}
+                        onPointerOver={(e) => {
+                            e.stopPropagation()
+                            onHover(entity)
+                        }}
+                        onPointerOut={() => onHover(null)}>
+                        <spriteMaterial
+                            map={texture}
+                            depthTest={false}
+                            transparent
+                        />
+                    </sprite>
+                ),
+            )}
+        </>
+    )
+}
+
+/** What the info box says about something behind the surface */
+function describeBehind(entity) {
+    const name = entity.name ? ` "${entity.name}"` : ""
+    const model = entity.model && !entity.model.startsWith("*") ? ` (${entity.model})` : ""
+    const units = `${entity.depth} unit${entity.depth === 1 ? "" : "s"}`
+    return `${entity.classname}${name}${model}: ${units} behind the surface`
+}
+
 // An OBJ model from beep:// URLs. The camera is framed on the first model
 // only (framedRef), so switching segments keeps the view.
-function Model({ objUrl, mtlUrl, framedRef, onLoad, onError }) {
+function Model({ objUrl, mtlUrl, framedRef, onLoad, onError, onHover }) {
     const [model, setModel] = useState(null)
     const { camera, controls } = useThree()
     // The latest of these, without loading the model again when they change
@@ -107,7 +357,7 @@ function Model({ objUrl, mtlUrl, framedRef, onLoad, onError }) {
                     framedRef.current = true
                 }
                 setModel(object)
-                if (onLoad) onLoad()
+                if (onLoad) onLoad(object)
             } catch (error) {
                 if (cancelled) return
                 console.error(`Failed to load model ${objUrl}:`, error)
@@ -124,11 +374,32 @@ function Model({ objUrl, mtlUrl, framedRef, onLoad, onError }) {
     // Free the model shown before when it's replaced
     useEffect(() => () => disposeModel(model), [model])
 
-    return model ? <primitive object={model} /> : null
+    if (!model) return null
+    // Hovering a prop behind the surface (outlineProps marks them) says which
+    return onHover ? (
+        <primitive
+            object={model}
+            onPointerMove={(e) => onHover(e.object.userData.behind ?? null)}
+            onPointerOut={() => onHover(null)}
+        />
+    ) : (
+        <primitive object={model} />
+    )
 }
 
-// Scene setup component
-function Scene({ objUrl, mtlUrl, framedRef, onLoad, onError }) {
+// Scene setup component. With what an instance has behind its surface
+// (behind), the grid is that surface.
+function Scene({
+    objUrl,
+    mtlUrl,
+    framedRef,
+    onLoad,
+    onError,
+    behind,
+    loadedModel,
+    modelFailed,
+    onHover,
+}) {
     return (
         <>
             {/* Lighting */}
@@ -143,16 +414,29 @@ function Scene({ objUrl, mtlUrl, framedRef, onLoad, onError }) {
             <directionalLight position={[0, 5, -10]} intensity={0.3} />
 
             {/* Grid */}
-            <SimpleGrid />
+            <SimpleGrid position={[0, behind?.surface ?? -64, 0]} />
 
             {/* Model */}
-            <Model
-                objUrl={objUrl}
-                mtlUrl={mtlUrl}
-                framedRef={framedRef}
-                onLoad={onLoad}
-                onError={onError}
-            />
+            {objUrl && (
+                <Model
+                    objUrl={objUrl}
+                    mtlUrl={mtlUrl}
+                    framedRef={framedRef}
+                    onLoad={onLoad}
+                    onError={onError}
+                    onHover={behind ? onHover : null}
+                />
+            )}
+
+            {behind && (
+                <BehindSurface
+                    behind={behind}
+                    hasModel={Boolean(objUrl) && !modelFailed}
+                    model={loadedModel}
+                    framedRef={framedRef}
+                    onHover={onHover}
+                />
+            )}
 
             {/* Controls */}
             <OrbitControls
@@ -223,6 +507,9 @@ export default function ModelPreviewPage() {
     // Whether the camera was framed on a model yet: later models (segments)
     // keep the view
     const framedRef = useRef(false)
+    // The model shown, and what behind the surface the pointer is on
+    const [loadedModel, setLoadedModel] = useState(null)
+    const [hovered, setHovered] = useState(null)
 
     // Receive model data from main process
     useEffect(() => {
@@ -230,7 +517,8 @@ export default function ModelPreviewPage() {
             window.package.onModelPreviewData((data) => {
                 console.log(`Received model preview data for "${data?.title}"`)
                 setModelData(data)
-                setLoading(true)
+                // What's behind a surface can come without a model to load
+                setLoading(Boolean(data?.objUrl || data?.segments?.length))
                 setError(null)
             })
         }
@@ -281,9 +569,11 @@ export default function ModelPreviewPage() {
     }
 
     const { objUrl, mtlUrl } = getCurrentUrls()
+    const behind = modelData?.behindSurface ?? null
 
-    const handleLoad = () => {
+    const handleLoad = (object) => {
         setLoading(false)
+        setLoadedModel(object)
         setInfoText("Model loaded! Left-drag: orbit • Right-drag: pan • Wheel: zoom")
     }
 
@@ -295,7 +585,35 @@ export default function ModelPreviewPage() {
     return (
         <div style={styles.container}>
             {/* Info overlay */}
-            <div style={styles.info}>{loading ? "Loading model..." : infoText}</div>
+            {behind ? (
+                <div style={{ ...styles.info, maxWidth: 520 }}>
+                    <div>
+                        <span style={{ color: "#ff3b30", fontWeight: "bold" }}>Red</span>
+                        : what's behind the surface the item is placed on (the
+                        grid). An X is an entity there without a model.
+                    </div>
+                    <div style={{ marginTop: 4 }}>
+                        {`${behind.entities.length} ${behind.entities.length === 1 ? "entity" : "entities"} and ${behind.brushes.length} ${behind.brushes.length === 1 ? "brush" : "brushes"} behind it`}
+                    </div>
+                    {behind.modelError && (
+                        <div style={{ marginTop: 4 }}>
+                            No model to show: {behind.modelError}
+                        </div>
+                    )}
+                    <div style={{ marginTop: 4, fontWeight: "bold", minHeight: 15 }}>
+                        {hovered
+                            ? describeBehind(hovered)
+                            : "Point at an X or a red prop to see what it is"}
+                    </div>
+                    <div style={{ marginTop: 4, opacity: 0.7 }}>
+                        {loading
+                            ? "Loading model..."
+                            : "Left-drag: orbit • Right-drag: pan • Wheel: zoom"}
+                    </div>
+                </div>
+            ) : (
+                <div style={styles.info}>{loading ? "Loading model..." : infoText}</div>
+            )}
 
             {/* Segment selector */}
             <SegmentSelector
@@ -317,13 +635,17 @@ export default function ModelPreviewPage() {
                 style={{ background: "#1e1e1e" }}
             >
                 <Suspense fallback={null}>
-                    {objUrl && (
+                    {(objUrl || behind) && (
                         <Scene
                             objUrl={objUrl}
                             mtlUrl={mtlUrl}
                             framedRef={framedRef}
                             onLoad={handleLoad}
                             onError={handleError}
+                            behind={behind}
+                            loadedModel={loadedModel}
+                            modelFailed={Boolean(error)}
+                            onHover={setHovered}
                         />
                     )}
                 </Suspense>

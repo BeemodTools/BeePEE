@@ -540,7 +540,8 @@ function createChangelogWindow(mainWindow) {
  */
 function createModelPreviewWindow(modelData) {
     const { objPath, title = "Model Preview" } = modelData
-    const windowKey = objPath || `preview-${Date.now()}`
+    // One window per model (or per key, like a model shown another way)
+    const windowKey = modelData.key || objPath || `preview-${Date.now()}`
 
     // If window already exists for this model, focus it
     if (openModelPreviewWindows.has(windowKey)) {

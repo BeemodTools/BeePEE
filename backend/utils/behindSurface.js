@@ -125,20 +125,19 @@ const inEmbedded = (frame, point) =>
     )
 
 /**
- * What in a VMF is behind the surface, outside the voxels the item embeds
- * into
+ * The brushes and entities of a VMF that are behind the surface, outside the
+ * voxels the item embeds into, deepest first
  * @param {string} text - The VMF
  * @param {{surface: number, embedded: Object[]}} frame - From itemFrame
- * @returns {{depth: number, entityCount: number, entities: {classname: string, name: string, depth: number}[], brushCount: number, brushDepth: number}|null}
- *   depths in units behind the surface; null when nothing is behind it
+ * @returns {{brushes: {solid: Object, depth: number}[], entities: {entity: Object, origin: number[], depth: number}[]}}
+ *   depths in units behind the surface
  */
-function behindSurface(text, frame) {
+function partsBehind(text, frame) {
     const vmf = parseVmf(text)
     const limit = frame.surface - TOLERANCE
     const depthOf = (z) => Math.round(frame.surface - z)
 
-    let brushCount = 0
-    let brushDepth = 0
+    const brushes = []
     for (const solid of vmf.solids) {
         completeSolid(solid)
         let lowest = Infinity
@@ -150,8 +149,7 @@ function behindSurface(text, frame) {
             }
         }
         if (lowest !== Infinity) {
-            brushCount++
-            brushDepth = Math.max(brushDepth, depthOf(lowest))
+            brushes.push({ solid, depth: depthOf(lowest) })
         }
     }
 
@@ -165,22 +163,68 @@ function behindSurface(text, frame) {
             continue
         }
         if (origin[2] < limit && !inEmbedded(frame, origin)) {
-            entities.push({
-                classname: entity.classname,
-                name: entity.get("targetname") ?? "",
-                depth: depthOf(origin[2]),
-            })
+            entities.push({ entity, origin, depth: depthOf(origin[2]) })
         }
     }
 
-    if (brushCount === 0 && entities.length === 0) return null
+    brushes.sort((a, b) => b.depth - a.depth)
     entities.sort((a, b) => b.depth - a.depth)
+    return { brushes, entities }
+}
+
+/**
+ * What in a VMF is behind the surface, outside the voxels the item embeds
+ * into
+ * @param {string} text - The VMF
+ * @param {{surface: number, embedded: Object[]}} frame - From itemFrame
+ * @returns {{depth: number, entityCount: number, entities: {classname: string, name: string, depth: number}[], brushCount: number, brushDepth: number}|null}
+ *   depths in units behind the surface; null when nothing is behind it
+ */
+function behindSurface(text, frame) {
+    const { brushes, entities } = partsBehind(text, frame)
+    if (brushes.length === 0 && entities.length === 0) return null
+    const brushDepth = brushes.length > 0 ? brushes[0].depth : 0
     return {
         depth: Math.max(brushDepth, ...entities.map((e) => e.depth)),
         entityCount: entities.length,
-        entities: entities.slice(0, LISTED),
-        brushCount,
+        entities: entities.slice(0, LISTED).map(({ entity, depth }) => ({
+            classname: entity.classname,
+            name: entity.get("targetname") ?? "",
+            depth,
+        })),
+        brushCount: brushes.length,
         brushDepth,
+    }
+}
+
+/**
+ * What a VMF file has behind the surface, to show it (the Instances tab's
+ * 3D view of it): every brush there with its faces' corners, and every entity
+ * there with its origin and model, in the instance's coordinates
+ * @param {string} vmfPath
+ * @param {Object} frame - From itemFrame
+ * @returns {{surface: number, brushes: {depth: number, faces: number[][][]}[], entities: {classname: string, name: string, model: string, origin: number[], depth: number}[]}}
+ */
+function behindSurfaceParts(vmfPath, frame) {
+    const { brushes, entities } = partsBehind(
+        fs.readFileSync(vmfPath, "latin1"),
+        frame,
+    )
+    return {
+        surface: frame.surface,
+        brushes: brushes.map(({ solid, depth }) => ({
+            depth,
+            faces: solid.sides
+                .map((side) => side.points)
+                .filter((points) => points.length >= 3),
+        })),
+        entities: entities.map(({ entity, origin, depth }) => ({
+            classname: entity.classname,
+            name: entity.get("targetname") ?? "",
+            model: entity.get("model") ?? "",
+            origin,
+            depth,
+        })),
     }
 }
 
@@ -216,4 +260,9 @@ function instanceBehindSurface(vmfPath, frame) {
     return result
 }
 
-module.exports = { itemFrame, behindSurface, instanceBehindSurface }
+module.exports = {
+    itemFrame,
+    behindSurface,
+    behindSurfaceParts,
+    instanceBehindSurface,
+}

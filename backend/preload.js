@@ -221,6 +221,15 @@ contextBridge.exposeInMainWorld("package", {
     // with behindSurface by instance index
     getInstancesBehindSurface: (itemId) =>
         ipcRenderer.invoke("get-instances-behind-surface", { itemId }),
+    // Opens a 3D view of what an instance has behind the item's surface: a
+    // saved one's (instanceKey) or a VMF not saved yet (vmfPath)
+    showBehindSurface: (itemId, { instanceKey, vmfPath, title }) =>
+        ipcRenderer.invoke("show-behind-surface", {
+            itemId,
+            instanceKey,
+            vmfPath,
+            title,
+        }),
 
     // ========================================
     // INSTANCE NAMING FUNCTIONS

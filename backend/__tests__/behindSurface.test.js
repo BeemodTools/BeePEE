@@ -10,6 +10,7 @@ const path = require("path")
 const {
     itemFrame,
     behindSurface,
+    behindSurfaceParts,
     instanceBehindSurface,
 } = require("../utils/behindSurface")
 
@@ -119,6 +120,62 @@ describe("what an instance has behind its item's surface", () => {
             brushCount: 0,
             brushDepth: 0,
         })
+    })
+
+    test("is all there, with where it is, for its 3D view", () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "beepee-behind-"))
+        try {
+            const file = path.join(dir, "item.vmf")
+            fs.writeFileSync(
+                file,
+                world(
+                    boxSolid(2, [-64, -64, -96], [64, 64, -64]),
+                    // In front: not there
+                    boxSolid(3, [-64, -64, -64], [64, 64, -48]),
+                ) +
+                    entity(4, {
+                        classname: "prop_static",
+                        model: "models/props_bts/hanging_walkway_32a.mdl",
+                        origin: "16 32 -200",
+                    }) +
+                    entity(5, {
+                        classname: "logic_relay",
+                        targetname: "relay",
+                        origin: "0 0 -500",
+                    }) +
+                    entity(6, { classname: "light", origin: "0 0 0" }),
+            )
+            const parts = behindSurfaceParts(file, FLOOR_ITEM)
+            expect(parts.surface).toBe(-64)
+            // Deepest first
+            expect(parts.entities).toEqual([
+                {
+                    classname: "logic_relay",
+                    name: "relay",
+                    model: "",
+                    origin: [0, 0, -500],
+                    depth: 436,
+                },
+                {
+                    classname: "prop_static",
+                    name: "",
+                    model: "models/props_bts/hanging_walkway_32a.mdl",
+                    origin: [16, 32, -200],
+                    depth: 136,
+                },
+            ])
+            expect(parts.brushes).toHaveLength(1)
+            const [brush] = parts.brushes
+            expect(brush.depth).toBe(32)
+            // Its 6 faces' corners
+            expect(brush.faces).toHaveLength(6)
+            expect(brush.faces.every((face) => face.length === 4)).toBe(true)
+            const zs = brush.faces.flat().map((point) => point[2])
+            expect(Math.min(...zs)).toBe(-96)
+            expect(Math.max(...zs)).toBe(-64)
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true })
+        }
     })
 
     test("is checked again when the VMF changes", () => {

@@ -7,6 +7,10 @@ const fs = require("fs")
 const path = require("path")
 const { packages } = require("../packageManager")
 const { sendItemUpdateToEditor, createModelPreviewWindow } = require("../items/itemEditor")
+const { Instance } = require("../items/Instance")
+const { behindSurfaceParts } = require("../utils/behindSurface")
+const { convertVmfToObj } = require("../utils/vmf2obj")
+const { instanceModel, findItem } = require("./iconHandlers")
 const { Item } = require("../models/items")
 const { createIconPreviewWindow, loadOriginalItemJSON } = require("./shared")
 const { logger } = require("../utils/logger")
@@ -43,7 +47,87 @@ function toBeepUrl(p) {
     }
 }
 
+/**
+ * Open an instance's model with what it has behind the item's surface
+ * outlined (the Instances tab's warning, clicked): a saved instance's
+ * (instanceKey), or a VMF the item doesn't have saved yet (vmfPath). What's
+ * behind is turned as the converter turns the model (x, z, -y). With no model
+ * to show (an instance of only logic entities), it's shown on its own.
+ */
+async function showBehindSurface({ itemId, instanceKey, vmfPath, title }) {
+    const item = findItem(itemId)
+    const frame = item.instanceFrame()
+    if (!frame) {
+        throw new Error("This item's instances are meant to be outside the map")
+    }
+
+    let vmf = vmfPath
+    let model = null
+    let modelError = null
+    try {
+        if (vmf) {
+            // Made now, in the item's staging folder
+            const safeId = item.id.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase()
+            const folder = path.join(item.packagePath, ".bpee", safeId, "behind")
+            fs.rmSync(folder, { recursive: true, force: true })
+            model = await convertVmfToObj(vmf, {
+                outputDir: folder,
+                textureStyle: "cartoon",
+            })
+        } else {
+            const instance = item.instances?.[instanceKey]
+            if (!instance?.Name) throw new Error("Instance not found")
+            vmf = Instance.getCleanPath(item.packagePath, instance.Name)
+            // The icon maker's (kept until the VMF changes)
+            model = await instanceModel(item, instanceKey)
+        }
+    } catch (error) {
+        if (!vmf || !fs.existsSync(vmf)) throw error
+        console.warn(`No model of ${path.basename(vmf)} to show: ${error.message}`)
+        modelError = error.message
+    }
+
+    const parts = behindSurfaceParts(vmf, frame)
+    const turn = ([x, y, z]) => [x, z, -y]
+    createModelPreviewWindow({
+        key: `behind-surface:${vmf}`,
+        objPath: model?.objPath ?? null,
+        objUrl: model ? toBeepUrl(model.objPath) : null,
+        mtlUrl: model?.mtlPath ? toBeepUrl(model.mtlPath) : null,
+        title,
+        behindSurface: {
+            surface: parts.surface,
+            brushes: parts.brushes.map(({ depth, faces }) => ({
+                depth,
+                faces: faces.map((face) => face.map(turn)),
+            })),
+            entities: parts.entities.map((entity) => ({
+                ...entity,
+                origin: turn(entity.origin),
+            })),
+            modelError,
+        },
+    })
+}
+
 function register(ipcMain, mainWindow) {
+    // Show what an instance has behind the item's surface, in 3D
+    ipcMain.handle(
+        "show-behind-surface",
+        async (event, { itemId, instanceKey, vmfPath, title }) => {
+            try {
+                await showBehindSurface({ itemId, instanceKey, vmfPath, title })
+                return { success: true }
+            } catch (error) {
+                console.error(
+                    `Failed to show what an instance of item ${itemId} has behind its surface:`,
+                    error,
+                )
+                return { success: false, error: error.message }
+            }
+        },
+    )
+
     // Register icon preview handler
     ipcMain.handle(
         "show-icon-preview",
