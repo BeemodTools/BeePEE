@@ -5,7 +5,7 @@
             "date": "2026-10-6",
             "notes": [
                 "This is a BETA build - it is bug prone. If you encounter any bugs go to Help > Report Bug. Please stress test as much as you can!",
-                "This beta adds the Leak Finder. Please try it on your items and report anything it gets wrong."
+                "This beta adds the Leak Finder. Please note that the leak finder is in its basic stage."
             ],
             "changes": {
                 "added": [
