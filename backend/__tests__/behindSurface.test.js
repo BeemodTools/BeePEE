@@ -63,6 +63,16 @@ describe("what an instance has behind its item's surface", () => {
         expect(behindSurface(vmf, FLOOR_ITEM)).toBeNull()
     })
 
+    test("a brush that shows in the room is seen, however far it goes in", () => {
+        const vmf = world(
+            // Only just in the wall
+            boxSolid(2, [-64, -64, -71], [64, 64, -48]),
+            // Mostly in the wall
+            boxSolid(3, [-8, -8, -500], [8, 8, -32]),
+        )
+        expect(behindSurface(vmf, FLOOR_ITEM)).toBeNull()
+    })
+
     test("lists the entities and brushes behind it, and how far", () => {
         const vmf =
             world(boxSolid(2, [-64, -64, -96], [64, 64, -64])) +

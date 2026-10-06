@@ -8,8 +8,9 @@
  * that's still the surface it's on. Behind it is the wall, unless the item
  * embeds into those voxels (EmbeddedVoxels: Pos "0 0 0" is the voxel just
  * behind the surface, "0 0 -1" the one behind that). An entity out there is in
- * the void behind the wall, which makes the map leak; brushes there are only
- * hidden in the wall (some of Portal 2's own items go a few units in).
+ * the void behind the wall, which makes the map leak. A brush all out there is
+ * only hidden in the wall; one that shows in the room is seen (some of Portal
+ * 2's own items go a few units in).
  */
 
 const fs = require("fs")
@@ -137,20 +138,18 @@ function partsBehind(text, frame) {
     const limit = frame.surface - TOLERANCE
     const depthOf = (z) => Math.round(frame.surface - z)
 
+    // A brush is in the wall when all of it is. One that shows in the room
+    // (in front of the surface, or in the voxels the item embeds into) is
+    // seen, even if it only just goes into the wall.
+    const shows = (point) =>
+        point[2] > frame.surface + TOLERANCE || inEmbedded(frame, point)
     const brushes = []
     for (const solid of vmf.solids) {
         completeSolid(solid)
-        let lowest = Infinity
-        for (const side of solid.sides) {
-            for (const point of side.points) {
-                if (point[2] < limit && !inEmbedded(frame, point)) {
-                    lowest = Math.min(lowest, point[2])
-                }
-            }
-        }
-        if (lowest !== Infinity) {
-            brushes.push({ solid, depth: depthOf(lowest) })
-        }
+        const points = solid.sides.flatMap((side) => side.points)
+        if (points.length === 0 || points.some(shows)) continue
+        const lowest = Math.min(...points.map((point) => point[2]))
+        if (lowest < limit) brushes.push({ solid, depth: depthOf(lowest) })
     }
 
     // Brush entities have an origin too (where their brushes are), when
