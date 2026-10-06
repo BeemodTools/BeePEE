@@ -461,12 +461,24 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
     }
 
     // A model the Model Generator made: the chooser shows it as "Generate",
-    // with the generator to preview or remake it
+    // with the generator to preview or remake it. One in the item's own
+    // folder (its ID; variable models keep its odd characters) is, even when
+    // its preview isn't in the package, like one opened from a .bpee
+    const modelName =
+        typeof formData.modelName === "string" ? formData.modelName : ""
+    const ownModelFolders = item?.id
+        ? [
+              item.id.toLowerCase(),
+              item.id.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase(),
+          ]
+        : []
+    const isOwnModel = ownModelFolders.some((folder) =>
+        modelName.toLowerCase().startsWith(`bpee/${folder}/`),
+    )
     const isGeneratorModel =
-        typeof formData.modelName === "string" &&
-        formData.modelName.startsWith("bpee/") &&
-        objFileExists &&
-        formData.modelName !== iconModelPath
+        modelName.startsWith("bpee/") &&
+        (objFileExists || isOwnModel) &&
+        modelName !== iconModelPath
     const chooserValue = isGeneratorModel ? "Generate" : formData.modelName || ""
 
     return (
@@ -608,7 +620,7 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
                     )}
                 </Box>
 
-                {/* Model Generator - shown when "Generate" is selected OR the Model Generator's bpee/ model exists with OBJ files */}
+                {/* Model Generator - shown when "Generate" is selected OR the model is the Model Generator's */}
                 <Collapse in={formData.modelName === "Generate" || isGeneratorModel} timeout={300}>
                     <Divider sx={{ my: 1 }} />
 
@@ -687,7 +699,7 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
                                 }
                                 sx={{ m: 0, ml: -0.5 }}
                             />
-                            {/* If the Model Generator's bpee/ model exists with OBJ files, Preview becomes primary (large) button */}
+                            {/* For the Model Generator's model, Preview is the primary (large) button */}
                             {isGeneratorModel ? (
                                 <Stack direction="row" spacing={1}>
                                     <Tooltip
@@ -697,7 +709,7 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
                                                 : !portal2Status?.features?.modelGeneration
                                                   ? "Portal 2 required"
                                                   : !objFileExists
-                                                    ? "Generate model first"
+                                                    ? "Its preview isn't in this package: regenerate the model to see it"
                                                     : ""
                                         }>
                                         <span>
