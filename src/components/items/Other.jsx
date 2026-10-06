@@ -463,7 +463,8 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
     // A model the Model Generator made: the chooser shows it as "Generate",
     // with the generator to preview or remake it. One in the item's own
     // folder (its ID; variable models keep its odd characters) is, even when
-    // its preview isn't in the package, like one opened from a .bpee
+    // its preview isn't in the package, like one imported from a .bee_pack
+    // (a .bpee keeps the preview)
     const modelName =
         typeof formData.modelName === "string" ? formData.modelName : ""
     const ownModelFolders = item?.id
@@ -699,34 +700,34 @@ function Other({ item, formData, onUpdate, onUpdateOther, onModelGenerationStart
                                 }
                                 sx={{ m: 0, ml: -0.5 }}
                             />
-                            {/* For the Model Generator's model, Preview is the primary (large) button */}
+                            {/* For the Model Generator's model, Preview is the primary (large) button.
+                                Only when the package has its preview: a .bpee keeps it, a .bee_pack doesn't */}
                             {isGeneratorModel ? (
                                 <Stack direction="row" spacing={1}>
-                                    <Tooltip
-                                        title={
-                                            vbspVariables.length === 0
-                                                ? "Add at least one instance"
-                                                : !portal2Status?.features?.modelGeneration
-                                                  ? "Portal 2 required"
-                                                  : !objFileExists
-                                                    ? "Its preview isn't in this package: regenerate the model to see it"
-                                                    : ""
-                                        }>
-                                        <span>
-                                            <Button
-                                                variant="contained"
-                                                onClick={handlePreview}
-                                                disabled={
-                                                    !selectedInstanceKey ||
-                                                    !portal2Status?.features?.modelGeneration ||
-                                                    vbspVariables.length === 0 ||
-                                                    !objFileExists
-                                                }
-                                                startIcon={<Preview />}>
-                                                Preview
-                                            </Button>
-                                        </span>
-                                    </Tooltip>
+                                    {objFileExists && (
+                                        <Tooltip
+                                            title={
+                                                vbspVariables.length === 0
+                                                    ? "Add at least one instance"
+                                                    : !portal2Status?.features?.modelGeneration
+                                                      ? "Portal 2 required"
+                                                      : ""
+                                            }>
+                                            <span>
+                                                <Button
+                                                    variant="contained"
+                                                    onClick={handlePreview}
+                                                    disabled={
+                                                        !selectedInstanceKey ||
+                                                        !portal2Status?.features?.modelGeneration ||
+                                                        vbspVariables.length === 0
+                                                    }
+                                                    startIcon={<Preview />}>
+                                                    Preview
+                                                </Button>
+                                            </span>
+                                        </Tooltip>
+                                    )}
                                     <Tooltip
                                         title={
                                             vbspVariables.length === 0
