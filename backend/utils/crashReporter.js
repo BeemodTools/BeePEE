@@ -5,6 +5,7 @@ const { app } = require("electron")
 const { logger } = require("./logger")
 const { getCrashReportEndpoint } = require("./crashReportConfig")
 const { isBeta } = require("./betaInfo")
+const { getMachineId } = require("./machineId")
 const {
     getCurrentPackageDir,
     savePackageAsBpee,
@@ -372,6 +373,8 @@ async function submitCrashReport({ userDescription, errorDetails, contact }) {
                 redactPersonalInfo(JSON.stringify(errorDetails || null)),
             )
             formData.append("appVersion", packageJson.version)
+            // So BEE Bot can block a PC that spams reports (machineId.js)
+            formData.append("machineId", getMachineId())
             formData.append("channel", isBeta() ? "beta" : "stable")
             formData.append("timestamp", new Date().toISOString())
             formData.append("platform", process.platform)

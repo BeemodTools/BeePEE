@@ -254,7 +254,7 @@ export default function CrashReportPage() {
                     variant="caption"
                     sx={{ color: "rgba(255,255,255,0.5)" }}
                 >
-                    Please be as descriptive as possible - it helps a lot! Your logs and {failedPackage ? "the package that failed to open" : "current package"} will be included automatically (with your user name, PC name and other personal details taken out).
+                    Please be as descriptive as possible - it helps a lot! Your logs and {failedPackage ? "the package that failed to open" : "current package"} will be included automatically (with your user name, PC name and other personal details taken out), with an ID for this PC that doesn't say who you are, so spam can be blocked.
                 </Typography>
 
                 {/* Submission result feedback */}
