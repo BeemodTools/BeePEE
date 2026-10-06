@@ -373,8 +373,15 @@ async function submitCrashReport({ userDescription, errorDetails, contact }) {
                 redactPersonalInfo(JSON.stringify(errorDetails || null)),
             )
             formData.append("appVersion", packageJson.version)
-            // So BEE Bot can block a PC that spams reports (machineId.js)
-            formData.append("machineId", getMachineId())
+            // So BEE Bot can block a PC that spams reports (machineId.js;
+            // none without a SALT). The report goes without it if need be.
+            let machineId = null
+            try {
+                machineId = getMachineId()
+            } catch (error) {
+                console.warn(`Couldn't make this PC's machine ID: ${error.message}`)
+            }
+            if (machineId) formData.append("machineId", machineId)
             formData.append("channel", isBeta() ? "beta" : "stable")
             formData.append("timestamp", new Date().toISOString())
             formData.append("platform", process.platform)

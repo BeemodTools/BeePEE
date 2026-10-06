@@ -14,7 +14,10 @@ jest.mock("../utils/packagesDir", () => {
 })
 jest.mock("../utils/crashReportConfig", () => ({
     getCrashReportEndpoint: () => "https://reports.example/report",
+    getSalt: () => "test-salt",
 }))
+// The real .env stays unread
+jest.mock("dotenv", () => ({ config: () => ({}) }))
 jest.mock("../items/itemEditor", () => ({
     closeAllWindows: async () => {},
     createCrashReportWindow: jest.fn(),

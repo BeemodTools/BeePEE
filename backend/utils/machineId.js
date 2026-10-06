@@ -15,10 +15,24 @@ const crypto = require("crypto")
 const fs = require("fs")
 const path = require("path")
 const { execFileSync } = require("child_process")
+const { app } = require("electron")
 const { getSetting, setSetting } = require("./settings")
+const { getSalt } = require("./crashReportConfig")
 
-/** Hashed with the PC's ID: BeePEE's hash of it isn't any other app's */
-const SALT = "beepee-machine-id"
+// SALT, from .env. A build has it baked in by scripts/inject-config.js
+// (.env isn't packaged with the app); a dev run reads .env itself.
+if (!app?.isPackaged) {
+    require("dotenv").config({
+        path: path.join(__dirname, "..", "..", ".env"),
+        quiet: true,
+    })
+}
+
+/**
+ * What the PC's ID is hashed with, so BeePEE's hash of it isn't any other
+ * app's
+ */
+const saltOf = () => getSalt() || process.env.SALT || null
 
 /** The PC's own ID, or null when it can't be read */
 function readPcId() {
@@ -62,11 +76,17 @@ function readPcId() {
     return null
 }
 
-let machineId = null
+/** The ID, and the salt it was made with */
+let made = null
 
-/** BeePEE's ID for this PC: 16 hex characters */
+/**
+ * BeePEE's ID for this PC: 16 hex characters, or null with no SALT to hash
+ * it with
+ */
 function getMachineId() {
-    if (machineId) return machineId
+    const salt = saltOf()
+    if (!salt) return null
+    if (made?.salt === salt) return made.id
     let source = readPcId()
     if (!source) {
         source = getSetting("machineIdSeed")
@@ -75,12 +95,13 @@ function getMachineId() {
             setSetting("machineIdSeed", source)
         }
     }
-    machineId = crypto
+    const id = crypto
         .createHash("sha256")
-        .update(`${SALT}:${source}`)
+        .update(`${salt}:${source}`)
         .digest("hex")
         .slice(0, 16)
-    return machineId
+    made = { salt, id }
+    return id
 }
 
 module.exports = { getMachineId }

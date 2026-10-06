@@ -2,14 +2,15 @@
  * Injects crash report endpoints before build
  * Run with: node scripts/inject-config.js
  *
- * Reads CRASH_REPORT_ENDPOINT and CRASH_REPORT_ENDPOINT_BETA from .env
- * (or environment) and writes them to a GITIGNORED generated file that
+ * Reads CRASH_REPORT_ENDPOINT, CRASH_REPORT_ENDPOINT_BETA and SALT from
+ * .env (or environment) and writes them to a GITIGNORED generated file that
  * crashReportConfig.js reads at runtime. Tracked source is never touched,
- * so the real URLs can't be committed by accident.
+ * so the real values can't be committed by accident.
  */
 
 const fs = require("fs")
 const path = require("path")
+const dotenv = require("dotenv")
 
 const GENERATED_FILE = path.join(
     __dirname,
@@ -20,37 +21,13 @@ const GENERATED_FILE = path.join(
 )
 const ENV_FILE = path.join(__dirname, "..", ".env")
 
-/**
- * Parse .env file and return key-value pairs
- */
-function parseEnvFile(filePath) {
-    const env = {}
-    try {
-        if (!fs.existsSync(filePath)) return env
-        const content = fs.readFileSync(filePath, "utf-8")
-        for (const line of content.split("\n")) {
-            const trimmed = line.trim()
-            if (!trimmed || trimmed.startsWith("#")) continue
-            const eqIndex = trimmed.indexOf("=")
-            if (eqIndex === -1) continue
-            const key = trimmed.slice(0, eqIndex).trim()
-            const value = trimmed.slice(eqIndex + 1).trim()
-            env[key] = value
-        }
-    } catch (err) {
-        // Silently fail
-    }
-    return env
-}
-
 function injectConfig() {
-    const envVars = parseEnvFile(ENV_FILE)
-    // Environment variables take precedence over the .env file
-    const endpoint =
-        process.env.CRASH_REPORT_ENDPOINT || envVars.CRASH_REPORT_ENDPOINT
-    const endpointBeta =
-        process.env.CRASH_REPORT_ENDPOINT_BETA ||
-        envVars.CRASH_REPORT_ENDPOINT_BETA
+    // .env, under the environment: variables set there take precedence
+    dotenv.config({ path: ENV_FILE, quiet: true })
+    const endpoint = process.env.CRASH_REPORT_ENDPOINT
+    const endpointBeta = process.env.CRASH_REPORT_ENDPOINT_BETA
+    // What BeePEE's ID for the PC is hashed with (backend/utils/machineId.js)
+    const salt = process.env.SALT
 
     if (!endpoint) {
         console.warn(
@@ -64,9 +41,16 @@ function injectConfig() {
         )
     }
 
+    if (!salt) {
+        console.warn(
+            "WARN: SALT not set - bug reports from this build won't have a machine ID",
+        )
+    }
+
     const out = {}
     if (endpoint) out.endpoint = endpoint
     if (endpointBeta) out.endpointBeta = endpointBeta
+    if (salt) out.salt = salt
 
     fs.writeFileSync(GENERATED_FILE, JSON.stringify(out, null, 4), "utf-8")
     console.log(

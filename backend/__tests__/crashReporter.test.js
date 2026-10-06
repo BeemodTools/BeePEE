@@ -5,6 +5,8 @@ jest.mock("../packageManager", () => ({
     getCurrentPackageDir: jest.fn(),
     savePackageAsBpee: jest.fn(),
 }))
+// The real .env stays unread
+jest.mock("dotenv", () => ({ config: () => ({}) }))
 
 const fs = require("fs")
 const os = require("os")

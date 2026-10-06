@@ -6,7 +6,14 @@ const crypto = require("crypto")
 // BeePEE's settings, in a folder of the test's own
 let mockUserData
 jest.mock("electron", () => ({
-    app: { getPath: () => mockUserData },
+    app: { isPackaged: false, getPath: () => mockUserData },
+}))
+
+// The real .env stays unread: SALT is the test's
+let mockSalt = null
+jest.mock("dotenv", () => ({ config: () => ({}) }))
+jest.mock("../utils/crashReportConfig", () => ({
+    getSalt: () => mockSalt,
 }))
 
 // What reading the PC's ID gives: the real one, or a mocked one
@@ -34,14 +41,20 @@ const freshMachineId = () => {
 }
 
 describe("BeePEE's ID for the PC", () => {
+    const envSalt = process.env.SALT
+
     beforeEach(() => {
         mockUserData = fs.mkdtempSync(path.join(os.tmpdir(), "beepee-machine-id-"))
         mockReadPcId = null
+        mockSalt = "test-salt"
+        delete process.env.SALT
     })
 
     afterEach(() => {
         setPlatform(platform)
         fs.rmSync(mockUserData, { recursive: true, force: true })
+        if (envSalt === undefined) delete process.env.SALT
+        else process.env.SALT = envSalt
     })
 
     test("is 16 hex characters, the same every time", () => {
@@ -50,7 +63,7 @@ describe("BeePEE's ID for the PC", () => {
         expect(freshMachineId()).toBe(id)
     })
 
-    test("is a hash of Windows' MachineGuid, not the MachineGuid", () => {
+    test("is a hash of Windows' MachineGuid with the SALT, not the MachineGuid", () => {
         setPlatform("win32")
         const guid = "0b6f3c2e-1a2b-4c3d-8e9f-001122334455"
         mockReadPcId = () =>
@@ -59,11 +72,25 @@ describe("BeePEE's ID for the PC", () => {
         expect(id).toBe(
             crypto
                 .createHash("sha256")
-                .update(`beepee-machine-id:${guid}`)
+                .update(`test-salt:${guid}`)
                 .digest("hex")
                 .slice(0, 16),
         )
         expect(guid).not.toContain(id)
+        // Another SALT, another ID
+        mockSalt = "another-salt"
+        expect(freshMachineId()).not.toBe(id)
+    })
+
+    test("takes the SALT from the environment in a dev run (.env)", () => {
+        mockSalt = null
+        process.env.SALT = "dev-salt"
+        expect(freshMachineId()).toMatch(/^[0-9a-f]{16}$/)
+    })
+
+    test("is none without a SALT", () => {
+        mockSalt = null
+        expect(freshMachineId()).toBeNull()
     })
 
     test("is made from a random seed kept in the settings when the PC's ID can't be read", () => {

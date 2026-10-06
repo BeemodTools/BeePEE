@@ -4,8 +4,9 @@
  * Endpoints are injected at BUILD time by scripts/inject-config.js, which
  * writes them into crashEndpoints.generated.json - a gitignored file next
  * to this one. Real URLs never live in tracked source, so they can't be
- * committed by accident. Set CRASH_REPORT_ENDPOINT (stable) and
- * CRASH_REPORT_ENDPOINT_BETA (beta) in .env before building.
+ * committed by accident. Set CRASH_REPORT_ENDPOINT (stable),
+ * CRASH_REPORT_ENDPOINT_BETA (beta) and SALT (machineId.js's) in .env
+ * before building.
  */
 
 const fs = require("fs")
@@ -35,4 +36,13 @@ function getCrashReportEndpoint() {
     return g.endpoint || null
 }
 
-module.exports = { getCrashReportEndpoint }
+/**
+ * SALT, which BeePEE's ID for the PC is hashed with (machineId.js), as the
+ * build put it in
+ * @returns {string|null} null in a dev run (machineId.js reads .env then)
+ */
+function getSalt() {
+    return loadEndpoints().salt || null
+}
+
+module.exports = { getCrashReportEndpoint, getSalt }
