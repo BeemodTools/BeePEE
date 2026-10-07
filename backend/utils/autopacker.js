@@ -2,11 +2,18 @@
  * Autopacking: when an instance is added to an item, the files it uses that
  * aren't part of the game are copied into the package.
  *
- * What the instance needs: the models, materials, sounds and scripts its VMF
- * names (vmfAssetExtractor.js), plus everything those need: a model's other
- * files (.vvd, .phy, .ani, .vtx), materials, included models and gibs, a
- * material's textures and included materials (mdlDependencies.js), and the
- * sound files of custom soundscript entries.
+ * What the instance needs: the models, materials, sounds, scripts and particle
+ * systems its VMF names (vmfAssetExtractor.js), plus everything those need:
+ * - a model's other files (.vvd, .phy, .ani, .vtx), materials, included
+ *   models and gibs, a material's textures and included materials
+ *   (mdlDependencies.js)
+ * - the sound files of custom soundscript entries
+ * - for custom scripts: the scripts they include or run, and the particle
+ *   systems, models, materials and sounds they name (vscriptReferences.js)
+ * - for particle systems that only custom particle files have: those files
+ *   (not when the game or BEE2 has the system too, even if a custom file
+ *   redefines it), and the models and materials their systems draw with
+ *   (pcf.js)
  *
  * Where each file comes from, in the game's file index (VPKs first, then the
  * gameinfo.txt folders and the DLC folders, like the game):
@@ -36,6 +43,8 @@ const {
 const { parseKeyValues } = require("./vmfConverter/keyvalues")
 const { safeJoin } = require("./vmfConverter/resources")
 const { loadVpk } = require("./vmfConverter/vpk")
+const { readPcf } = require("./pcf")
+const { vscriptReferences } = require("./vscriptReferences")
 const { findPortal2Resources } = require("../data")
 const { logger } = require("./logger")
 
@@ -181,6 +190,62 @@ async function readSoundscripts(index, files) {
     return entries
 }
 
+/** What's in each particle file, by where it is and when it was written */
+const pcfContents = new Map()
+
+/**
+ * A particle file's systems, materials and models (see readPcf), read once
+ * per version of the file
+ * @param {Object} index - The game's file index
+ * @param {string} file - Its content path
+ */
+async function pcfContent(index, file) {
+    const source = index.source(file)
+    const location = source?.file ?? source?.vpk?.dirPath
+    let written = null
+    try {
+        written = fs.statSync(location).mtimeMs
+    } catch {}
+    const key = `${location}|${file}|${written}`
+    if (!pcfContents.has(key)) {
+        pcfContents.set(key, readPcf(await index.read(file)))
+    }
+    return pcfContents.get(key)
+}
+
+/**
+ * The particle systems the particle files define, by name: those in custom
+ * files and in the package's (with the files), and the game's and BEE2's
+ * @param {Object} index - The game's file index
+ * @param {(file: string) => string} where - Where a file comes from (see
+ *   sortInstanceFiles)
+ * @returns {Promise<{custom: Map<string, string[]>, others: Set<string>}>}
+ */
+async function particleSystems(index, where) {
+    const custom = new Map()
+    const others = new Set()
+    for (const file of index.filesUnder("particles")) {
+        if (!file.endsWith(".pcf")) continue
+        let content
+        try {
+            content = await pcfContent(index, file)
+        } catch (error) {
+            logger.debug(`Skipped ${file}, it can't be read: ${error.message}`)
+            continue
+        }
+        const kind = where(file)
+        for (const name of content.systems) {
+            if (kind === "custom" || kind === "inPackage") {
+                if (!custom.has(name)) custom.set(name, [])
+                custom.get(name).push(file)
+            } else {
+                others.add(name)
+            }
+        }
+    }
+    return { custom, others }
+}
+
 const folderInfos = new Map()
 
 /**
@@ -217,13 +282,14 @@ function gameFolderInfo(portal2Root) {
  * @param {string} portal2Root - Portal 2's install folder
  * @param {string} [packageDir] - The package the instance is added to: its
  *   files count as packed already
- * @returns {Promise<{references: Object, needed: string[], neededBy: Object<string, string>, custom: {file: string, source: string, fromVpk: boolean, read: () => Promise<Buffer>}[], inPackage: string[], baseGame: string[], bee2: string[], missing: string[], missingDependencies: string[]}>}
+ * @returns {Promise<{references: Object, needed: string[], neededBy: Object<string, string>, unknownParticles: string[], custom: {file: string, source: string, fromVpk: boolean, read: () => Promise<Buffer>}[], inPackage: string[], baseGame: string[], bee2: string[], missing: string[], missingDependencies: string[]}>}
  *   Content paths ("materials/x.vmt"); custom ones with where they are (a
  *   loose file or a VPK) and how to read them.
  *   missing: files the instance or its custom content needs that aren't
  *   anywhere (neededBy: what needs those that the instance doesn't name);
  *   missingDependencies: files the game's own content names that aren't
- *   anywhere (like gibs its models name but the game doesn't have)
+ *   anywhere (like gibs its models name but the game doesn't have);
+ *   unknownParticles: particle systems no particle file has
  */
 async function sortInstanceFiles(vmfPath, portal2Root, packageDir) {
     const references = extractAssetsFromVMF(vmfPath)
@@ -251,13 +317,91 @@ async function sortInstanceFiles(vmfPath, portal2Root, packageDir) {
         return "custom"
     }
 
-    const dependencies = await findDependencies(index, {
-        models: references.MODEL,
-        materials: references.MATERIAL.map((m) => `materials/${m}`),
-    })
+    // Which file needs each file the instance doesn't name itself (the first
+    // one found): what scripts include, what particle files draw with, ...
+    const requiredBy = new Map()
+    const noteNeed = (file, by) => {
+        if (file && by && !requiredBy.has(file)) requiredBy.set(file, by)
+    }
+    const models = [...references.MODEL]
+    const materials = references.MATERIAL.map((m) => `materials/${m}`)
+    const sounds = references.SOUND.map((sound) => `sound/${sound}`)
+    // Particle systems by name, with the script that names one
+    const particles = new Map(references.PARTICLE.map((name) => [name, null]))
+
+    // The scripts it names, the ones those include, and so on. Custom ones
+    // are read for what they use (the game's and BEE2's use their own).
+    const scripts = new Set()
+    const toRead = references.SCRIPT.map((script) => `scripts/${script}`)
+    while (toRead.length > 0) {
+        const script = toRead.shift()
+        if (scripts.has(script)) continue
+        scripts.add(script)
+        const kind = where(script)
+        if (kind !== "custom" && kind !== "inPackage") continue
+        if (!script.endsWith(".nut")) continue
+        const data = await index.read(script)
+        if (!data) continue
+        const uses = vscriptReferences(data.toString("utf8"))
+        for (const file of uses.scripts) {
+            noteNeed(file, script)
+            toRead.push(file)
+        }
+        for (const name of uses.particles) {
+            if (!particles.has(name)) particles.set(name, script)
+        }
+        for (const file of uses.models) {
+            noteNeed(file, script)
+            models.push(file)
+        }
+        for (const file of uses.materials) {
+            noteNeed(file, script)
+            materials.push(file)
+        }
+        for (const file of uses.sounds) {
+            noteNeed(file, script)
+            sounds.push(file)
+        }
+    }
+
+    // Particle systems that only custom particle files have: those files,
+    // and the models and materials their systems draw with
+    const particleFiles = new Set()
+    const unknownParticles = []
+    if (particles.size > 0) {
+        const systems = await particleSystems(index, where)
+        for (const [name, by] of particles) {
+            // The game's or BEE2's own, even when a custom file redefines it
+            if (systems.others.has(name)) continue
+            const files = systems.custom.get(name)
+            if (!files) {
+                unknownParticles.push(name)
+                continue
+            }
+            for (const file of files) {
+                noteNeed(file, by)
+                particleFiles.add(file)
+            }
+        }
+        for (const file of particleFiles) {
+            const content = await pcfContent(index, file)
+            for (const model of content.models) {
+                noteNeed(model, file)
+                models.push(model)
+            }
+            for (const material of content.materials) {
+                noteNeed(material, file)
+                materials.push(material)
+            }
+        }
+    }
+
+    const dependencies = await findDependencies(index, { models, materials })
+    for (const [file, by] of dependencies.requiredBy) noteNeed(file, by)
     const needed = new Set(dependencies.files)
-    for (const sound of references.SOUND) needed.add(`sound/${sound}`)
-    for (const script of references.SCRIPT) needed.add(`scripts/${script}`)
+    for (const sound of sounds) needed.add(sound)
+    for (const script of scripts) needed.add(script)
+    for (const file of particleFiles) needed.add(file)
 
     // What the instance names itself (the rest is what those need)
     const named = new Set([
@@ -323,7 +467,7 @@ async function sortInstanceFiles(vmfPath, portal2Root, packageDir) {
     for (const file of [...needed].sort()) {
         let kind = kindOf(file)
         if (kind === "missing" && !named.has(file)) {
-            const by = dependencies.requiredBy.get(file)
+            const by = requiredBy.get(file)
             const byKind = by && kindOf(by)
             if (byKind === "custom" || byKind === "inPackage")
                 neededBy[file] = by
@@ -341,7 +485,13 @@ async function sortInstanceFiles(vmfPath, portal2Root, packageDir) {
             read: () => index.read(file),
         })
     }
-    return { references, needed: [...needed].sort(), neededBy, ...sorted }
+    return {
+        references,
+        needed: [...needed].sort(),
+        neededBy,
+        unknownParticles: unknownParticles.sort(),
+        ...sorted,
+    }
 }
 
 /**
@@ -374,10 +524,10 @@ async function autopackInstance(instancePath, packageDir, itemName) {
                 portal2Resources.root,
                 packageDir,
             )
-            const { MODEL, MATERIAL, SOUND, SOUNDSCRIPT, SCRIPT } =
+            const { MODEL, MATERIAL, SOUND, SOUNDSCRIPT, SCRIPT, PARTICLE } =
                 files.references
             console.log(
-                `The instance uses ${plural(MODEL.length, "model")}, ${plural(MATERIAL.length, "material")}, ${plural(SOUND.length + SOUNDSCRIPT.length, "sound")} and ${plural(SCRIPT.length, "script")}`,
+                `The instance uses ${plural(MODEL.length, "model")}, ${plural(MATERIAL.length, "material")}, ${plural(SOUND.length + SOUNDSCRIPT.length, "sound")}, ${plural(SCRIPT.length, "script")} and ${plural(PARTICLE.length, "particle effect")}`,
             )
             console.log(
                 `They need ${plural(files.needed.length, "file")}: ${files.custom.length} to pack, ${files.inPackage.length} already in the package, ${files.baseGame.length} from the original game, ${files.bee2.length} from BEE2`,
@@ -399,6 +549,11 @@ async function autopackInstance(instancePath, packageDir, itemName) {
             if (files.missingDependencies.length > 0) {
                 logger.debug(
                     `${plural(files.missingDependencies.length, "file")} its models and materials name weren't found: ${listSome(files.missingDependencies)}`,
+                )
+            }
+            if (files.unknownParticles.length > 0) {
+                console.warn(
+                    `No particle file has ${files.unknownParticles.length === 1 ? "this particle effect" : `these ${files.unknownParticles.length} particle effects`}: ${listSome(files.unknownParticles)}`,
                 )
             }
 

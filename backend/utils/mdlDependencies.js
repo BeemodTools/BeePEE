@@ -401,7 +401,7 @@ function getIndex(searchPaths, folders = ["materials", "models"]) {
 
 /**
  * The game's file index: its VPKs, then its folders (see gameSearchPaths)
- * and `extraPaths`, with loose sound and script files too
+ * and `extraPaths`, with loose sound, script and particle files too
  * @param {string} portal2Root
  * @param {string[]} [extraPaths] - Searched after the game's own
  * @returns {Promise<import("./vmfConverter/resources").ResourceIndex>}
@@ -409,7 +409,7 @@ function getIndex(searchPaths, folders = ["materials", "models"]) {
 function gameIndex(portal2Root, extraPaths = []) {
     return getIndex(
         [...gameSearchPaths(portal2Root), ...extraPaths],
-        ["materials", "models", "sound", "scripts"],
+        ["materials", "models", "sound", "scripts", "particles"],
     )
 }
 

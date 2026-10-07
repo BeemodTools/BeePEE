@@ -71,6 +71,12 @@ class ResourceIndex {
         return fs.promises.readFile(source.file)
     }
 
+    /** Every content path under a folder ("particles"), subfolders too */
+    filesUnder(folder) {
+        const prefix = `${normalizeContentPath(folder).replace(/\/+$/, "")}/`
+        return [...this.files.keys()].filter((file) => file.startsWith(prefix))
+    }
+
     /**
      * List content paths in the same folder that start with a prefix,
      * e.g. "models/props/door." -> door.mdl, door.vvd, door.dx90.vtx ...

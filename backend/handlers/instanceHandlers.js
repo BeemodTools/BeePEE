@@ -832,7 +832,9 @@ function register(ipcMain, mainWindow) {
                       ? "SOUND"
                       : file.startsWith("scripts/")
                         ? "SCRIPT"
-                        : "MATERIAL",
+                        : file.startsWith("particles/")
+                          ? "PARTICLE"
+                          : "MATERIAL",
                 path: file,
             })
             const foundAssets = files.custom.map(({ file }) => asset(file))

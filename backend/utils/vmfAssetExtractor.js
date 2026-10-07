@@ -74,15 +74,16 @@ function usesModelKeyvalue(classname, keyvalues) {
 }
 
 /**
- * Extract the assets a VMF uses: the models, materials, sounds and scripts its
- * entities and brushes name
+ * Extract the assets a VMF uses: the models, materials, sounds, scripts and
+ * particle systems its entities and brushes name
  * @param {string} vmfPath - Path to the VMF file
- * @returns {{MODEL: string[], MATERIAL: string[], SOUND: string[], SOUNDSCRIPT: string[], SCRIPT: string[]}}
+ * @returns {{MODEL: string[], MATERIAL: string[], SOUND: string[], SOUNDSCRIPT: string[], SCRIPT: string[], PARTICLE: string[]}}
  *   MODEL: model paths ("models/props/x.mdl"). MATERIAL: material paths
  *   under materials/, without extension ("metal/black_wall_metal_002c").
  *   SOUND: sound files under sound/ ("ambient/hum.wav"). SOUNDSCRIPT: names
  *   of soundscript entries ("portal.button_down"). SCRIPT: script files
- *   under scripts/ ("vscripts/bee2/foo.nut").
+ *   under scripts/ ("vscripts/bee2/foo.nut"). PARTICLE: names of particle
+ *   systems (info_particle_system's effect_name, "portal_edge").
  */
 function extractAssetsFromVMF(vmfPath) {
     if (!fs.existsSync(vmfPath)) {
@@ -97,6 +98,7 @@ function extractAssetsFromVMF(vmfPath) {
             SOUND: new Set(),
             SOUNDSCRIPT: new Set(),
             SCRIPT: new Set(),
+            PARTICLE: new Set(),
         }
 
         const addMaterial = (value) => {
@@ -167,6 +169,9 @@ function extractAssetsFromVMF(vmfPath) {
                     for (const script of text.split(/\s+/)) addVScript(script)
                 } else if (name === "scriptfile") {
                     found.SCRIPT.add(slashes(text).replace(/^scripts\//, ""))
+                } else if (name === "effect_name") {
+                    // info_particle_system: a particle system, by name
+                    found.PARTICLE.add(text.toLowerCase())
                 } else if (
                     SOUND_KEYS.has(name) ||
                     (name === "message" &&

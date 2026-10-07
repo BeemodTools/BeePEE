@@ -12,6 +12,7 @@ const path = require("path")
 const { extractAssetsFromVMF } = require("../utils/vmfAssetExtractor")
 const { autopackInstance, sortInstanceFiles } = require("../utils/autopacker")
 const { buildMdl } = require("./helpers/buildMdl")
+const { buildPcf } = require("./helpers/buildPcf")
 
 /** A VPK (version 1) with every file stored in the directory file */
 function writeVpk(file, files) {
@@ -418,6 +419,7 @@ describe("autopacking", () => {
                 "vscripts/custom_in_game.nut",
                 "vscripts/stock/elevator.nut",
             ],
+            PARTICLE: [],
         })
     })
 
@@ -527,6 +529,173 @@ describe("autopacking", () => {
         const again = await autopackInstance(vmfPath, packageDir, "Thing")
         expect(again.success).toBe(true)
         expect(again.packedFiles).toEqual([])
+    })
+})
+
+describe("what custom scripts and particle effects need", () => {
+    let root
+    let packageDir
+    const instance = (name, entities) => {
+        const file = path.join(root, `${name}.vmf`)
+        write(file, entities.join("\n"))
+        return file
+    }
+
+    beforeAll(() => {
+        root = fs.mkdtempSync(path.join(os.tmpdir(), "beepee-autopack-fx-"))
+        mockRoot = root
+        const game = path.join(root, "portal2")
+        write(
+            path.join(game, "gameinfo.txt"),
+            `"GameInfo" { FileSystem { SearchPaths { Game |gameinfo_path|. } } }`,
+        )
+        // The game's own: a particle file (the older encoding), its
+        // materials and a script
+        writeVpk(path.join(game, "pak01_dir.vpk"), {
+            "particles/stock.pcf": buildPcf(
+                [
+                    { name: "stock_glow", material: "particle/glow.vmt" },
+                    { name: "shared_edge", material: "particle\\edge.vmt" },
+                ],
+                { version: 2 },
+            ),
+            "materials/particle/glow.vmt": '"SpriteCard" {}',
+            "materials/particle/edge.vmt": '"SpriteCard" {}',
+            "materials/sprites/stock_tex.vtf": "vtf",
+            "scripts/vscripts/stock/lib.nut": 'IncludeScript("stock/more")',
+        })
+        fs.utimesSync(path.join(game, "pak01_dir.vpk"), GAME_DAY, GAME_DAY)
+
+        // Custom particles, loose in the game's folder: one redefines the
+        // game's shared_edge, and draws a custom model with a custom material
+        write(
+            path.join(game, "particles/custom.pcf"),
+            buildPcf([
+                { name: "shared_edge", material: "particle/edge.vmt" },
+                {
+                    name: "Custom_Spark",
+                    material: "custom\\spark.vmt",
+                    models: ["custom\\gizmo.mdl"],
+                },
+            ]),
+        )
+        write(
+            path.join(game, "particles/unused.pcf"),
+            buildPcf([{ name: "unused_fx", material: "custom/unused.vmt" }]),
+        )
+        write(
+            path.join(game, "materials/custom/spark.vmt"),
+            '"SpriteCard" { "$basetexture" "custom/spark" }',
+        )
+        write(path.join(game, "materials/custom/spark.vtf"))
+        write(
+            path.join(game, "models/custom/gizmo.mdl"),
+            buildMdl("gizmo_skin", "models/custom/"),
+        )
+        write(path.join(game, "models/custom/gizmo.vvd"))
+        write(path.join(game, "models/custom/gizmo.dx90.vtx"))
+        // Its texture is the game's
+        write(
+            path.join(game, "materials/models/custom/gizmo_skin.vmt"),
+            '"VertexLitGeneric" { "$basetexture" "sprites/stock_tex" }',
+        )
+
+        // Custom scripts: one includes the other (which includes it back),
+        // the game's script and one that isn't anywhere
+        write(
+            path.join(game, "scripts/vscripts/custom/main.nut"),
+            [
+                'IncludeScript("custom/lib", getroottable())',
+                '// IncludeScript("custom/old")',
+                'DoIncludeScript("stock/lib", this)',
+                'IncludeScript("custom/gone")',
+            ].join("\n"),
+        )
+        write(
+            path.join(game, "scripts/vscripts/custom/lib.nut"),
+            [
+                'IncludeScript("custom/main")',
+                'DispatchParticleEffect("custom_spark", Vector(0, 0, 0), Vector(0, 0, 0))',
+                'self.PrecacheModel("models/custom/script_prop.mdl")',
+            ].join("\n"),
+        )
+        write(
+            path.join(game, "models/custom/script_prop.mdl"),
+            buildMdl("gizmo_skin", "models/custom/"),
+        )
+        write(path.join(game, "scripts/vscripts/custom/old.nut"))
+
+        packageDir = path.join(root, "package")
+        fs.mkdirSync(path.join(packageDir, "resources"), { recursive: true })
+    })
+
+    afterAll(() => {
+        fs.rmSync(root, { recursive: true, force: true })
+    })
+
+    test("follows the scripts' includes and the particle files' models", async () => {
+        const vmfPath = instance("gun", [
+            `entity { "id" "1" "classname" "logic_script" "vscripts" "custom/main" }`,
+            `entity { "id" "2" "classname" "info_particle_system" "effect_name" "Custom_Spark" }`,
+            `entity { "id" "3" "classname" "info_particle_system" "effect_name" "stock_glow" }`,
+            `entity { "id" "4" "classname" "info_particle_system" "effect_name" "nowhere_fx" }`,
+            `entity { "id" "5" "classname" "info_particle_system" "effect_name" "$effect" }`,
+        ])
+        expect(extractAssetsFromVMF(vmfPath).PARTICLE).toEqual([
+            "custom_spark",
+            "nowhere_fx",
+            "stock_glow",
+        ])
+
+        const files = await sortInstanceFiles(vmfPath, root, packageDir)
+        expect(files.custom.map(({ file }) => file)).toEqual([
+            "materials/custom/spark.vmt",
+            "materials/custom/spark.vtf",
+            "materials/models/custom/gizmo_skin.vmt",
+            "models/custom/gizmo.dx90.vtx",
+            "models/custom/gizmo.mdl",
+            "models/custom/gizmo.vvd",
+            "models/custom/script_prop.mdl",
+            "particles/custom.pcf",
+            "scripts/vscripts/custom/lib.nut",
+            "scripts/vscripts/custom/main.nut",
+        ])
+        // The game's script isn't read (its include isn't the instance's)
+        expect(files.baseGame).toEqual([
+            "materials/particle/edge.vmt",
+            "materials/sprites/stock_tex.vtf",
+            "scripts/vscripts/stock/lib.nut",
+        ])
+        expect(files.missing).toEqual(["scripts/vscripts/custom/gone.nut"])
+        expect(files.neededBy).toEqual({
+            "scripts/vscripts/custom/gone.nut": "scripts/vscripts/custom/main.nut",
+        })
+        expect(files.unknownParticles).toEqual(["nowhere_fx"])
+
+        const result = await autopackInstance(vmfPath, packageDir, "Gun")
+        expect(result.packedAssets).toBe(10)
+        const resources = path.join(packageDir, "resources")
+        for (const file of [
+            "particles/custom.pcf",
+            "scripts/vscripts/custom/lib.nut",
+            "models/custom/gizmo.dx90.vtx",
+        ]) {
+            expect(fs.existsSync(path.join(resources, file))).toBe(true)
+        }
+        expect(fs.existsSync(path.join(resources, "particles/unused.pcf"))).toBe(
+            false,
+        )
+    })
+
+    test("leaves custom particle files out for the game's own effects", async () => {
+        // custom.pcf redefines shared_edge, but the game has it
+        const vmfPath = instance("stock_fx", [
+            `entity { "id" "1" "classname" "info_particle_system" "effect_name" "shared_edge" }`,
+            `entity { "id" "2" "classname" "info_particle_system" "effect_name" "stock_glow" }`,
+        ])
+        const files = await sortInstanceFiles(vmfPath, root)
+        expect(files.custom).toEqual([])
+        expect(files.unknownParticles).toEqual([])
     })
 })
 
