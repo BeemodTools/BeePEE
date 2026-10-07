@@ -1,6 +1,31 @@
 {
     "versions": [
         {
+            "version": "1.2.0-beta.4",
+            "date": "2026-10-8",
+            "notes": [
+                "This is a BETA build - it is bug prone. If you encounter any bugs go to Help > Report Bug. Please stress test as much as you can!",
+                "Autopacking now follows scripts and particles. Please try Autopack again on items that use them."
+            ],
+            "changes": {
+                "added": [
+                    "BeePM name, version, BEE2 version and needed packages when making a package",
+                    "Export to BeePM (File menu)",
+                    "Package authors, set when the package is made"
+                ],
+                "fixed": [
+                    "Security fix for bug reports",
+                    "Autopacking missing scripts that other scripts include, and particles with their models and materials",
+                    "Launch BEEMod after export not working while BeePM is hooked (packages go in BeePM's dev folder now)",
+                    "Signage designer shapes being slightly off center, and white corners when zoomed out"
+                ],
+                "changed": [
+                    "BeePM Package Info is now part of Package Information",
+                    "Package version goes past the one on BeePM automatically"
+                ]
+            }
+        },
+        {
             "version": "1.2.0-beta.3",
             "date": "2026-10-6",
             "notes": [
@@ -16,9 +41,9 @@
                     "Instance names going back after saving",
                     "Removed instances coming back",
                     "Make Model failing on instances that weren't saved yet",
-                    "New items getting ITEM_CUBE as their type (old ones get fixed when the package opens)",
+                    "New items getting ITEM_CUBE as their type instead of their id",
                     "Items with inputs missing ConnectionCount, and blank names in Portal 2's palette",
-                    "Signage pictures not opening in the designer",
+                    "Signage pngs not opening in the designer",
                     "Being asked to name entities that can't have inputs or outputs"
                 ],
                 "changed": [
