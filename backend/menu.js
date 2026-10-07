@@ -57,6 +57,7 @@ const {
     setAuthorIfNone,
     authorNames,
 } = require("./utils/packageAuthor")
+const { bee2ExportFolder } = require("./utils/bee2Packages")
 
 // Window the menu was built for (needed to rebuild when settings change)
 let menuMainWindow = null
@@ -608,45 +609,17 @@ function createMainMenu(mainWindow) {
                             }
 
                             let filePath
+                            // Into BeePM's packages folder (it hooked BEE2)
+                            let exportedToBeePm = false
 
                             if (exportToBeemod) {
-                                // Read BEEMod config to find packages directory
-                                let packagesDir = path.join(beemodPath, "packages") // default
-
-                                try {
-                                    const configPath = path.join(
-                                        process.env.APPDATA || "",
-                                        "BEEMOD2",
-                                        "config",
-                                        "config.cfg"
-                                    )
-                                    if (fs.existsSync(configPath)) {
-                                        const configContent = fs.readFileSync(configPath, "utf-8")
-                                        const packageMatch = configContent.match(/^package=(.+)$/m)
-                                        if (packageMatch) {
-                                            const packageSetting = packageMatch[1].trim()
-                                            // Check if it's absolute or relative
-                                            if (path.isAbsolute(packageSetting)) {
-                                                packagesDir = packageSetting
-                                            } else {
-                                                // Relative to BEEMod folder
-                                                packagesDir = path.join(beemodPath, packageSetting)
-                                            }
-                                        }
-                                    }
-                                } catch (err) {
-                                    console.warn(
-                                        `Failed to read BEEMod's config.cfg, using the default packages folder ${packagesDir}:`,
-                                        err,
-                                    )
-                                }
-
-                                // Export to packages/BeePEE subfolder
-                                const beemodPackagesDir = path.join(packagesDir, "BeePEE")
-                                if (!fs.existsSync(beemodPackagesDir)) {
-                                    fs.mkdirSync(beemodPackagesDir, { recursive: true })
-                                }
-                                filePath = path.join(beemodPackagesDir, getCurrentPackageName() + ".bee_pack")
+                                // The packages folder BEE2 loads, in a BeePEE
+                                // folder, or BeePM's dev folder when BeePM has
+                                // hooked BEE2 to its own packages folder
+                                const { folder, beePm } = bee2ExportFolder(beemodPath)
+                                exportedToBeePm = beePm
+                                fs.mkdirSync(folder, { recursive: true })
+                                filePath = path.join(folder, getCurrentPackageName() + ".bee_pack")
 
                                 // Kill BEE2.exe if running to release file locks
                                 await killBeemod()
@@ -697,7 +670,9 @@ function createMainMenu(mainWindow) {
                                     )
                                 }
                                 dialog.showMessageBox(mainWindow, {
-                                    message: `Package exported to BEEMod packages folder!`,
+                                    message: exportedToBeePm
+                                        ? "Package exported to BeePM's dev packages folder!"
+                                        : "Package exported to BEEMod packages folder!",
                                     type: "info",
                                 })
                             } else if (openFolder) {
