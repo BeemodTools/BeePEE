@@ -67,6 +67,7 @@ const { createMainMenu } = require("../menu")
 const { BEEPM_DOWNLOAD_URL } = require("../utils/beePmApp")
 
 describe("Export to BeePM", () => {
+    const env = { ...process.env }
     let dir
     let fileMenu
 
@@ -74,8 +75,31 @@ describe("Export to BeePM", () => {
     const exportToBeePm = () =>
         fileMenu.find((item) => item.id === "export-beepm").click()
 
+    /** Log in to BeePM on this "PC" (its app's login file) */
+    const logInToBeePm = (handle, displayName = null) => {
+        const configDir = path.join(process.env.BEEPM_HOME, "config")
+        fs.mkdirSync(configDir, { recursive: true })
+        fs.writeFileSync(
+            path.join(configDir, "credentials-app.json"),
+            JSON.stringify({ user: { handle, displayName }, token: "x", encrypted: true }),
+        )
+    }
+
+    /** Give the package an author in its info.json */
+    const setAuthor = (Author) => {
+        const infoPath = path.join(mockPackageDir, "info.json")
+        const info = JSON.parse(fs.readFileSync(infoPath, "utf8"))
+        fs.writeFileSync(infoPath, JSON.stringify({ ...info, Author }))
+    }
+
+    const authorNow = () =>
+        JSON.parse(fs.readFileSync(path.join(mockPackageDir, "info.json"), "utf8"))
+            .Author
+
     beforeEach(() => {
         dir = fs.mkdtempSync(path.join(os.tmpdir(), "beepee-export-beepm-"))
+        // Never the real BeePM login on this PC: nobody's logged in
+        process.env.BEEPM_HOME = path.join(dir, "beepm")
         mockUserData = path.join(dir, "userData")
         mockPackageDir = path.join(dir, "packages", "BETTER_UNDERGROUND_A1B2")
         fs.mkdirSync(mockPackageDir, { recursive: true })
@@ -96,6 +120,84 @@ describe("Export to BeePM", () => {
 
     afterEach(() => {
         fs.rmSync(dir, { recursive: true, force: true })
+        process.env = { ...env }
+    })
+
+    describe("checks the author against the BeePM login", () => {
+        test("goes on when the author is them", async () => {
+            logInToBeePm("areng", "Areng Dev")
+            for (const author of ["areng", "@Areng", "Areng & friends", "Areng Dev"]) {
+                setAuthor(author)
+                await exportToBeePm()
+            }
+            expect(mockShowMessageBox).not.toHaveBeenCalled()
+            expect(mockExport).toHaveBeenCalledTimes(4)
+        })
+
+        test("warns when it's someone else, and exports only when told to", async () => {
+            logInToBeePm("areng")
+            setAuthor("Someone Else")
+
+            mockShowMessageBox.mockResolvedValueOnce({ response: 1 })
+            await exportToBeePm()
+            expect(mockShowMessageBox.mock.calls[0][1]).toMatchObject({
+                type: "warning",
+                message:
+                    "This package's author is Someone Else, but you're logged in to BeePM as @areng.",
+                detail: "It'll be published under @areng.",
+                buttons: ["Export Anyway", "Cancel"],
+                defaultId: 1,
+            })
+            expect(mockExport).not.toHaveBeenCalled()
+
+            mockShowMessageBox.mockResolvedValueOnce({ response: 0 })
+            await exportToBeePm()
+            expect(mockExport).toHaveBeenCalledTimes(1)
+            expect(authorNow()).toBe("Someone Else")
+        })
+
+        test("offers their handle when there's no author", async () => {
+            logInToBeePm("areng")
+            setAuthor("Unknown")
+
+            // Cancel
+            mockShowMessageBox.mockResolvedValueOnce({ response: 2 })
+            await exportToBeePm()
+            expect(mockShowMessageBox.mock.calls[0][1]).toMatchObject({
+                message: "This package has no author.",
+                buttons: ["Use @areng", "Export Without", "Cancel"],
+            })
+            expect(mockExport).not.toHaveBeenCalled()
+
+            // Export without one
+            mockShowMessageBox.mockResolvedValueOnce({ response: 1 })
+            await exportToBeePm()
+            expect(mockExport).toHaveBeenCalledTimes(1)
+            expect(authorNow()).toBe("Unknown")
+
+            // Use @areng: set, then exported
+            mockShowMessageBox.mockResolvedValueOnce({ response: 0 })
+            await exportToBeePm()
+            expect(authorNow()).toBe("areng")
+            expect(mockExport).toHaveBeenCalledTimes(2)
+
+            // And it's them now
+            mockShowMessageBox.mockClear()
+            await exportToBeePm()
+            expect(mockShowMessageBox).not.toHaveBeenCalled()
+        })
+
+        test("doesn't ask when nobody's logged in to BeePM", async () => {
+            setAuthor("Someone Else")
+            await exportToBeePm()
+            fs.writeFileSync(
+                path.join(mockPackageDir, "info.json"),
+                JSON.stringify({ ID: "X", Name: "No Author" }),
+            )
+            await exportToBeePm()
+            expect(mockShowMessageBox).not.toHaveBeenCalled()
+            expect(mockExport).toHaveBeenCalledTimes(2)
+        })
     })
 
     test("is in File, after Export Package", () => {

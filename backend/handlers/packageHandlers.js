@@ -29,11 +29,7 @@ const {
     publishedOnBeePm,
 } = require("../utils/beePackage")
 const { beePmHandle } = require("../utils/beePmApp")
-
-/** Whether a package has an author ("Unknown" is what older BeePEE wrote for none) */
-const hasAuthor = (author) =>
-    typeof author === "string" &&
-    !["", "unknown"].includes(author.trim().toLowerCase())
+const { hasAuthor } = require("../utils/packageAuthor")
 
 function register(ipcMain, mainWindow) {
     // Open create package window

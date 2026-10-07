@@ -50,7 +50,13 @@ const {
     BEEPM_DOWNLOAD_URL,
     isBeePmInstalled,
     publishWithBeePm,
+    beePmLogin,
 } = require("./utils/beePmApp")
+const {
+    readAuthor,
+    setAuthorIfNone,
+    authorNames,
+} = require("./utils/packageAuthor")
 
 // Window the menu was built for (needed to rebuild when settings change)
 let menuMainWindow = null
@@ -201,6 +207,48 @@ async function backupBeforeExport(currentPackageDir) {
     }
 }
 
+// Before exporting to BeePM: the package's author against who's logged in to
+// BeePM (who it'll be published under). Only a heads-up, since an author can
+// be a display name, a team or credit someone else, and BeePM itself checks
+// who may publish. Without a BeePM login there's nothing to check.
+// Returns whether to go on.
+async function authorFitsBeePmLogin(win, currentPackageDir) {
+    const login = beePmLogin()
+    if (!login) return true
+    const { handle } = login
+    const author = readAuthor(currentPackageDir)
+
+    if (!author) {
+        const { response } = await dialog.showMessageBox(win, {
+            type: "question",
+            buttons: [`Use @${handle}`, "Export Without", "Cancel"],
+            defaultId: 0,
+            cancelId: 2,
+            title: "No Author",
+            message: "This package has no author.",
+            detail: "Use your BeePM handle? It can't be changed afterwards. For another name, cancel and set it in Edit > Package Information.",
+        })
+        if (response === 2) return false
+        if (response === 0 && setAuthorIfNone(currentPackageDir, handle)) {
+            // Written to the working package, not the .bpee
+            global.titleManager?.setUnsavedChanges(true)
+        }
+        return true
+    }
+
+    if (authorNames(author, login)) return true
+    const { response } = await dialog.showMessageBox(win, {
+        type: "warning",
+        buttons: ["Export Anyway", "Cancel"],
+        defaultId: 1,
+        cancelId: 1,
+        title: "Different Author",
+        message: `This package's author is ${author}, but you're logged in to BeePM as @${handle}.`,
+        detail: `It'll be published under @${handle}.`,
+    })
+    return response === 0
+}
+
 // Export the package as a .bee_pack and open it in BeePM's Publish, where
 // the author reviews it and publishes it. Without BeePM, offers its GitHub.
 async function exportToBeePm(win) {
@@ -220,6 +268,8 @@ async function exportToBeePm(win) {
         if (response === 0) await shell.openExternal(BEEPM_DOWNLOAD_URL)
         return
     }
+
+    if (!(await authorFitsBeePmLogin(win, currentPackageDir))) return
 
     // BeePM reads it from here when it checks and publishes it
     const filePath = path.join(

@@ -53,19 +53,25 @@ function beePmHome(env = process.env) {
 }
 
 /**
- * The handle of whoever's logged in to BeePM on this PC (the app's login,
- * else the CLI's), or null. Only the handle is taken from the login file;
- * its token is never used or kept.
+ * Who's logged in to BeePM on this PC (the app's login, else the CLI's):
+ * { handle, displayName }, or null. Only those are taken from the login
+ * file; its token is never used or kept.
  */
-function beePmHandle(env = process.env) {
+function beePmLogin(env = process.env) {
     const configDir = path.join(beePmHome(env), "config")
     for (const file of ["credentials-app.json", "credentials.json"]) {
         try {
             let text = fs.readFileSync(path.join(configDir, file), "utf8")
             // After a byte order mark
             if (text.charCodeAt(0) === 0xfeff) text = text.slice(1)
-            const handle = JSON.parse(text)?.user?.handle
-            if (typeof handle === "string" && HANDLE.test(handle)) return handle
+            const { handle, displayName } = JSON.parse(text)?.user ?? {}
+            if (typeof handle === "string" && HANDLE.test(handle)) {
+                return {
+                    handle,
+                    displayName:
+                        typeof displayName === "string" ? displayName : null,
+                }
+            }
         } catch {
             // Not logged in with this one
         }
@@ -73,11 +79,15 @@ function beePmHandle(env = process.env) {
     return null
 }
 
+/** The handle of whoever's logged in to BeePM on this PC, or null */
+const beePmHandle = (env = process.env) => beePmLogin(env)?.handle ?? null
+
 module.exports = {
     BEEPM_DOWNLOAD_URL,
     isBeePmInstalled,
     beePmPublishUrl,
     publishWithBeePm,
     beePmHome,
+    beePmLogin,
     beePmHandle,
 }
