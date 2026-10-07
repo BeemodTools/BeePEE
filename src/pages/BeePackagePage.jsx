@@ -2,21 +2,23 @@ import { useState, useEffect } from "react"
 import {
     Box,
     Typography,
-    TextField,
     Button,
     Stack,
     Alert,
     CircularProgress,
-    Divider,
 } from "@mui/material"
-import { CheckCircle, Close, Info } from "@mui/icons-material"
+import { CheckCircle, Close } from "@mui/icons-material"
+import BeePmFields from "../components/BeePmFields"
+import {
+    nameProblem,
+    newBeePmFields,
+    savedBeePmFields,
+    versionProblem,
+} from "../utils/beePm"
 
 function BeePackagePage() {
-    const [id, setId] = useState("")
-    const [name, setName] = useState("")
-    const [author, setAuthor] = useState("")
-    const [version, setVersion] = useState("1.0.0")
-    const [compatibleWith, setCompatibleWith] = useState(">=2.4.41")
+    const [fields, setFields] = useState(() => newBeePmFields())
+    const [packageId, setPackageId] = useState("")
     const [loading, setLoading] = useState(true)
     const [saving, setSaving] = useState(false)
     const [error, setError] = useState(null)
@@ -30,11 +32,8 @@ function BeePackagePage() {
                 const result = await window.package.getBeePackageInfo()
 
                 if (result.success) {
-                    setId(result.info.id || "")
-                    setName(result.info.name || "")
-                    setAuthor(result.info.author || "")
-                    setVersion(result.info.version || "1.0.0")
-                    setCompatibleWith(result.info.compatibleWith || ">=2.4.41")
+                    setFields(result.info)
+                    setPackageId(result.packageId || "")
                     setFileExists(result.exists)
                 } else {
                     setError(result.error || "Failed to load bee-package info")
@@ -56,13 +55,9 @@ function BeePackagePage() {
         setSaving(true)
 
         try {
-            const result = await window.package.saveBeePackageInfo({
-                id,
-                name,
-                author,
-                version,
-                compatibleWith,
-            })
+            const result = await window.package.saveBeePackageInfo(
+                savedBeePmFields(fields),
+            )
 
             if (result.success) {
                 setSuccess(true)
@@ -135,7 +130,7 @@ function BeePackagePage() {
 
             {/* Content */}
             <Box sx={{ flex: 1, overflow: "auto", p: 3 }}>
-                <Stack spacing={2.5}>
+                <Stack spacing={3}>
                     {error && (
                         <Alert severity="error" onClose={() => setError(null)}>
                             {error}
@@ -143,77 +138,19 @@ function BeePackagePage() {
                     )}
 
                     {success && (
-                        <Alert severity="success">
-                            bee-package.json saved successfully!
-                        </Alert>
+                        <Alert severity="success">Saved bee-package.json</Alert>
                     )}
 
-                    <Alert severity="info" icon={<Info />}>
-                        This file is used by BeePM to identify your package.
-                        Fill in the required fields below.
-                    </Alert>
+                    <Typography variant="body2" color="text.secondary">
+                        For publishing it on BeePM. Its name and description
+                        there come from Edit &gt; Package Information.
+                    </Typography>
 
-                    <TextField
-                        label="Package ID"
-                        value={id}
-                        onChange={(e) =>
-                            setId(e.target.value.toUpperCase().replace(/[^A-Z0-9_]/g, "_"))
-                        }
-                        placeholder="MY_PACKAGE_ID"
-                        fullWidth
-                        required
+                    <BeePmFields
+                        value={fields}
+                        onChange={(changed) => setFields(changed)}
                         disabled={saving}
-                        helperText="Uppercase, alphanumeric + underscores only"
-                        InputProps={{
-                            sx: { fontFamily: "monospace" },
-                        }}
-                    />
-
-                    <TextField
-                        label="Display Name"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder="My Awesome Package"
-                        fullWidth
-                        required
-                        disabled={saving}
-                        helperText="Human-readable name (letters, numbers, spaces)"
-                    />
-
-                    <TextField
-                        label="Author"
-                        value={author}
-                        onChange={(e) =>
-                            setAuthor(e.target.value.replace(/[^a-zA-Z0-9]/g, ""))
-                        }
-                        placeholder="GitHubUsername"
-                        fullWidth
-                        required
-                        disabled={saving}
-                        helperText="Your GitHub username (alphanumeric only)"
-                    />
-
-                    <Divider />
-
-                    <TextField
-                        label="Version"
-                        value={version}
-                        onChange={(e) => setVersion(e.target.value)}
-                        placeholder="1.0.0"
-                        fullWidth
-                        required
-                        disabled={saving}
-                        helperText="Semantic version (e.g., 1.0.0, 2.1.3)"
-                    />
-
-                    <TextField
-                        label="Compatible With"
-                        value={compatibleWith}
-                        onChange={(e) => setCompatibleWith(e.target.value)}
-                        placeholder=">=2.4.41"
-                        fullWidth
-                        disabled={saving}
-                        helperText="BEE2 version specifier (e.g., >=2.4.41, ^2.4.46)"
+                        packageId={packageId}
                     />
                 </Stack>
             </Box>
@@ -241,10 +178,8 @@ function BeePackagePage() {
                         onClick={handleSave}
                         disabled={
                             saving ||
-                            !id.trim() ||
-                            !name.trim() ||
-                            !author.trim() ||
-                            !version.trim()
+                            !!nameProblem(fields.name) ||
+                            !!versionProblem(fields.version)
                         }
                         startIcon={<CheckCircle />}
                         sx={{ minWidth: 120 }}>

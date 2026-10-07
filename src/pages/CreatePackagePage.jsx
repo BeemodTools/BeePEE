@@ -1,12 +1,37 @@
 import { useState } from "react"
-import { Box, Typography, TextField, Button, Stack, Alert } from "@mui/material"
+import {
+    Box,
+    Typography,
+    TextField,
+    Button,
+    Stack,
+    Alert,
+    Divider,
+} from "@mui/material"
 import { CheckCircle, Close } from "@mui/icons-material"
+import BeePmFields from "../components/BeePmFields"
+import {
+    beePmName,
+    nameProblem,
+    newBeePmFields,
+    savedBeePmFields,
+    versionProblem,
+} from "../utils/beePm"
 
 function CreatePackagePage() {
     const [name, setName] = useState("")
     const [description, setDescription] = useState("")
+    const [beePm, setBeePm] = useState(() => newBeePmFields())
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState(null)
+
+    const handleNameChange = (newName) => {
+        // The BeePM name follows the package's until it's changed
+        if (!beePm.name || beePm.name === beePmName(name)) {
+            setBeePm({ ...beePm, name: beePmName(newName) })
+        }
+        setName(newName)
+    }
 
     const handleCreate = async () => {
         setError(null)
@@ -16,6 +41,7 @@ function CreatePackagePage() {
             const result = await window.electron.invoke("create-package", {
                 name,
                 description,
+                beePackage: savedBeePmFields(beePm),
             })
 
             if (result.success) {
@@ -64,7 +90,7 @@ function CreatePackagePage() {
 
             {/* Content */}
             <Box sx={{ flex: 1, overflow: "auto", p: 3 }}>
-                <Stack spacing={3}>
+                <Stack spacing={2.5}>
                     {error && (
                         <Alert severity="error" onClose={() => setError(null)}>
                             {error}
@@ -74,7 +100,7 @@ function CreatePackagePage() {
                     <TextField
                         label="Package Name"
                         value={name}
-                        onChange={(e) => setName(e.target.value)}
+                        onChange={(e) => handleNameChange(e.target.value)}
                         placeholder="My Awesome Package"
                         fullWidth
                         required
@@ -89,7 +115,7 @@ function CreatePackagePage() {
                         placeholder="Adds custom items and styles to Portal 2"
                         fullWidth
                         multiline
-                        rows={4}
+                        rows={3}
                         disabled={loading}
                         helperText="What does this package add?"
                     />
@@ -113,6 +139,25 @@ function CreatePackagePage() {
                                 : "PACKAGE_NAME_XXXX"}
                         </Typography>
                     </Box>
+
+                    <Divider />
+
+                    <Box>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                            BeePM
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            You can change these later in Edit &gt; BeePM
+                            Package Info.
+                        </Typography>
+                    </Box>
+
+                    <BeePmFields
+                        value={beePm}
+                        onChange={(fields) => setBeePm(fields)}
+                        disabled={loading}
+                        quietEmptyName={!name.trim()}
+                    />
                 </Stack>
             </Box>
 
@@ -137,7 +182,12 @@ function CreatePackagePage() {
                         variant="contained"
                         color="primary"
                         onClick={handleCreate}
-                        disabled={loading || !name.trim()}
+                        disabled={
+                            loading ||
+                            !name.trim() ||
+                            !!nameProblem(beePm.name) ||
+                            !!versionProblem(beePm.version)
+                        }
                         startIcon={<CheckCircle />}
                         sx={{ minWidth: 120 }}>
                         {loading ? "Creating..." : "Create"}

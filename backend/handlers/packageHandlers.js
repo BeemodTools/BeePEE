@@ -21,6 +21,12 @@ const {
 } = require("../items/itemEditor")
 const { getPackagesDir } = require("../utils/packagesDir")
 const { getLastSavedBpeePath, setLastSavedBpeePath } = require("./shared")
+const {
+    problemWith,
+    readBeePackage,
+    writeBeePackage,
+    searchBeePm,
+} = require("../utils/beePackage")
 
 function register(ipcMain, mainWindow) {
     // Open create package window
@@ -54,11 +60,14 @@ function register(ipcMain, mainWindow) {
     // Create package
     ipcMain.handle(
         "create-package",
-        async (event, { name, description, author }) => {
+        async (event, { name, description, author, beePackage }) => {
             try {
                 if (!name?.trim()) {
                     throw new Error("Package name is required")
                 }
+                // Its bee-package.json (BeePM's), checked before anything's made
+                const beePackageProblem = beePackage && problemWith(beePackage)
+                if (beePackageProblem) throw new Error(beePackageProblem)
 
                 const packagesDir = getPackagesDir()
 
@@ -100,6 +109,7 @@ function register(ipcMain, mainWindow) {
                     infoPath,
                     JSON.stringify(packageInfo, null, 2),
                 )
+                if (beePackage) writeBeePackage(packagePath, beePackage)
                 console.log(`Created package "${name}" in ${packagePath}`)
 
                 // Load the package
@@ -336,7 +346,7 @@ function register(ipcMain, mainWindow) {
         }
     })
 
-    // Get bee-package.json info (or defaults from info.json)
+    // The package's bee-package.json fields (made from its name when it has none)
     ipcMain.handle("get-bee-package-info", async () => {
         try {
             const currentPackageDir = getCurrentPackageDir()
@@ -344,32 +354,21 @@ function register(ipcMain, mainWindow) {
                 return { success: false, error: "No package loaded" }
             }
 
-            const beePackagePath = path.join(currentPackageDir, "bee-package.json")
             const infoPath = path.join(currentPackageDir, "info.json")
+            const packageInfo = fs.existsSync(infoPath)
+                ? JSON.parse(fs.readFileSync(infoPath, "utf-8"))
+                : {}
 
-            // Check if bee-package.json exists
-            if (fs.existsSync(beePackagePath)) {
-                const beePackage = JSON.parse(fs.readFileSync(beePackagePath, "utf-8"))
-                return { success: true, info: beePackage, exists: true }
+            const { exists, ...info } = readBeePackage(
+                currentPackageDir,
+                packageInfo.Name,
+            )
+            return {
+                success: true,
+                info,
+                exists,
+                packageId: packageInfo.ID || "",
             }
-
-            // Generate defaults from info.json
-            if (!fs.existsSync(infoPath)) {
-                return { success: false, error: "info.json not found" }
-            }
-
-            const packageInfo = JSON.parse(fs.readFileSync(infoPath, "utf-8"))
-
-            // Generate default bee-package.json structure
-            const defaultBeePackage = {
-                id: packageInfo.ID || "",
-                name: packageInfo.Name || "",
-                author: packageInfo.Author || "",
-                version: "1.0.0",
-                compatibleWith: ">=2.4.41",
-            }
-
-            return { success: true, info: defaultBeePackage, exists: false }
         } catch (error) {
             return { success: false, error: error.message }
         }
@@ -383,37 +382,21 @@ function register(ipcMain, mainWindow) {
                 return { success: false, error: "No package loaded" }
             }
 
-            const beePackagePath = path.join(currentPackageDir, "bee-package.json")
-
-            // Validate required fields
-            if (!beePackageData.id?.trim()) {
-                return { success: false, error: "Package ID is required" }
-            }
-            if (!beePackageData.name?.trim()) {
-                return { success: false, error: "Package name is required" }
-            }
-            if (!beePackageData.author?.trim()) {
-                return { success: false, error: "Author is required" }
-            }
-            if (!beePackageData.version?.trim()) {
-                return { success: false, error: "Version is required" }
-            }
-
-            // Build the bee-package.json object
-            const beePackage = {
-                id: beePackageData.id.trim(),
-                name: beePackageData.name.trim(),
-                author: beePackageData.author.trim(),
-                version: beePackageData.version.trim(),
-                compatibleWith: beePackageData.compatibleWith?.trim() || ">=2.4.41",
-            }
-
-            fs.writeFileSync(beePackagePath, JSON.stringify(beePackage, null, 2))
+            writeBeePackage(currentPackageDir, beePackageData)
 
             // Written to the working package, not the .bpee
             global.titleManager?.setUnsavedChanges(true)
 
             return { success: true }
+        } catch (error) {
+            return { success: false, error: error.message }
+        }
+    })
+
+    // Packages in BeePM, for what a package needs
+    ipcMain.handle("search-beepm-packages", async (event, query) => {
+        try {
+            return { success: true, packages: await searchBeePm(query) }
         } catch (error) {
             return { success: false, error: error.message }
         }

@@ -11,7 +11,7 @@ let crashReportWindow = null // Track the crash report window
 let beePackageWindow = null // Track the bee-package.json editor window
 let setupWindow = null // Track the setup window
 let settingsWindow = null // Track the settings window
-const { BrowserWindow, app, Menu } = require("electron")
+const { BrowserWindow, app, Menu, screen } = require("electron")
 const { logger } = require("../utils/logger")
 
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
@@ -403,6 +403,16 @@ function createSignageDesignerWindow(mainWindow, editPayload = null) {
     }
 }
 
+/** A window's content height, at most what fits on the main screen */
+function heightOnScreen(height) {
+    try {
+        // Room for the title bar
+        return Math.min(height, screen.getPrimaryDisplay().workArea.height - 40)
+    } catch {
+        return height
+    }
+}
+
 function createPackageCreationWindow(mainWindow) {
     // If window already exists, focus it
     if (createPackageWindow && !createPackageWindow.isDestroyed()) {
@@ -411,8 +421,10 @@ function createPackageCreationWindow(mainWindow) {
     }
 
     createPackageWindow = new BrowserWindow({
-        width: 500,
-        height: 650,
+        // The page's size, with its BeePM fields (bee-package.json)
+        useContentSize: true,
+        width: 484,
+        height: heightOnScreen(890),
         title: "BeePEE - Create New Package",
         webPreferences: {
             nodeIntegration: false,
@@ -701,7 +713,7 @@ function createBeePackageWindow(mainWindow) {
 
     beePackageWindow = new BrowserWindow({
         width: 550,
-        height: 600,
+        height: 640,
         title: "BeePEE - BeePM Package Info",
         webPreferences: {
             nodeIntegration: false,

@@ -425,6 +425,8 @@ contextBridge.exposeInMainWorld("package", {
     getBeePackageInfo: () => ipcRenderer.invoke("get-bee-package-info"),
     saveBeePackageInfo: (beePackageData) =>
         ipcRenderer.invoke("save-bee-package-info", beePackageData),
+    // { success, packages: [{ name, displayName, latest, beeId }] }
+    searchBeePm: (query) => ipcRenderer.invoke("search-beepm-packages", query),
 
     // ========================================
     // SETTINGS FUNCTIONS
