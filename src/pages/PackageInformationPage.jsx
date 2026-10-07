@@ -15,8 +15,10 @@ import { CheckCircle, Close, LockOutlined } from "@mui/icons-material"
 import BeePmFields from "../components/BeePmFields"
 import {
     beePmName,
+    compareVersions,
     nameProblem,
     newBeePmFields,
+    nextVersion,
     savedBeePmFields,
     versionProblem,
 } from "../utils/beePm"
@@ -52,9 +54,14 @@ function PackageInformationPage() {
     const [description, setDescription] = useState("")
     const [packageId, setPackageId] = useState("")
     const [author, setAuthor] = useState("")
+    // Whether it has an author: then it's locked, else it can be typed once
+    const [authorSet, setAuthorSet] = useState(true)
     const [beePm, setBeePm] = useState(() => newBeePmFields())
     // Whether it has a bee-package.json yet (its BeePM name is picked then)
     const [beePmExists, setBeePmExists] = useState(false)
+    // The highest version BeePM has of it, when it has it: the version has to
+    // be newer
+    const [publishedVersion, setPublishedVersion] = useState(null)
     const [loading, setLoading] = useState(true)
     const [saving, setSaving] = useState(false)
     const [error, setError] = useState(null)
@@ -71,7 +78,8 @@ function PackageInformationPage() {
                     setPackageId(result.info.id || "")
                     setName(result.info.name || "")
                     setDescription(result.info.description || "")
-                    setAuthor(result.info.author || "")
+                    setAuthorSet(!!result.authorSet)
+                    setAuthor(result.authorSet ? result.info.author : "")
                     setBeePm(
                         result.beePackage ?? newBeePmFields(result.info.name),
                     )
@@ -92,6 +100,31 @@ function PackageInformationPage() {
         loadPackageInfo()
     }, [])
 
+    // When BeePM has it already, the version goes past BeePM's, like BeePM
+    // picks it when publishing (1.0.1 there -> 1.0.2)
+    useEffect(() => {
+        if (!packageId) return
+        let cancelled = false
+        window.package
+            ?.getBeePmPublished?.(packageId)
+            .then((result) => {
+                const version = result?.success ? result.published?.version : null
+                if (cancelled || !version) return
+                setPublishedVersion(version)
+                setBeePm((fields) =>
+                    compareVersions(fields.version, version) > 0
+                        ? fields
+                        : { ...fields, version: nextVersion(version) },
+                )
+            })
+            .catch((err) =>
+                console.warn("Failed to check BeePM for this package:", err),
+            )
+        return () => {
+            cancelled = true
+        }
+    }, [packageId])
+
     const handleNameChange = (newName) => {
         // Without a bee-package.json, the BeePM name follows the package's
         // until it's changed
@@ -110,12 +143,15 @@ function PackageInformationPage() {
             const result = await window.electron.invoke("update-package-info", {
                 name,
                 description,
+                // Only when it has none yet
+                author: authorSet ? undefined : author.trim() || undefined,
                 beePackage: savedBeePmFields(beePm),
             })
 
             if (result.success) {
                 setSuccess(true)
                 setBeePmExists(true)
+                if (author.trim()) setAuthorSet(true)
                 console.log(`Updated package info for "${name}"`)
 
                 // Close window after a short delay
@@ -206,12 +242,24 @@ function PackageInformationPage() {
                             helperText="A descriptive name for your package"
                             sx={{ flex: 3 }}
                         />
-                        <LockedField
-                            label="Author"
-                            value={author || "Unknown"}
-                            helperText="Can't be changed"
-                            sx={{ flex: 2 }}
-                        />
+                        {authorSet ? (
+                            <LockedField
+                                label="Author"
+                                value={author}
+                                helperText="Can't be changed"
+                                sx={{ flex: 2 }}
+                            />
+                        ) : (
+                            <TextField
+                                label="Author"
+                                value={author}
+                                onChange={(e) => setAuthor(e.target.value)}
+                                placeholder="Who made it"
+                                disabled={saving}
+                                helperText="Locked once saved"
+                                sx={{ flex: 2 }}
+                            />
+                        )}
                     </Stack>
 
                     <TextField
@@ -243,6 +291,7 @@ function PackageInformationPage() {
                         onChange={(fields) => setBeePm(fields)}
                         disabled={saving}
                         packageId={packageId}
+                        publishedVersion={publishedVersion}
                     />
                 </Stack>
             </Box>
@@ -272,7 +321,7 @@ function PackageInformationPage() {
                             saving ||
                             !name.trim() ||
                             !!nameProblem(beePm.name) ||
-                            !!versionProblem(beePm.version)
+                            !!versionProblem(beePm.version, publishedVersion)
                         }
                         startIcon={<CheckCircle />}
                         sx={{ minWidth: 120 }}>

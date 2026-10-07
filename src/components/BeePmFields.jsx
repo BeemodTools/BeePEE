@@ -192,7 +192,8 @@ function NeedsField({ dependencies, onChange, disabled, packageId }) {
  * A package's bee-package.json fields: its name on BeePM, version, the BEE2
  * versions it works with and the BeePM packages it needs.
  * onChange(fields). quietEmptyName: no error for an empty name
- * (a new package's, until it's named).
+ * (a new package's, until it's named). publishedVersion: the highest version
+ * BeePM has of it, which the version has to be newer than.
  */
 function BeePmFields({
     value,
@@ -200,11 +201,12 @@ function BeePmFields({
     disabled = false,
     packageId = "",
     quietEmptyName = false,
+    publishedVersion = null,
 }) {
     const change = (changes) => onChange({ ...value, ...changes })
     const nameError =
         quietEmptyName && !value.name ? null : nameProblem(value.name)
-    const versionError = versionProblem(value.version)
+    const versionError = versionProblem(value.version, publishedVersion)
 
     return (
         <Stack spacing={2.5}>
@@ -258,7 +260,10 @@ function BeePmFields({
                     required
                     disabled={disabled}
                     error={!!versionError}
-                    helperText={versionError ?? " "}
+                    helperText={
+                        versionError ??
+                        (publishedVersion ? `BeePM has ${publishedVersion}` : " ")
+                    }
                     sx={{ flex: 1 }}
                     slotProps={{ htmlInput: { spellCheck: false } }}
                 />

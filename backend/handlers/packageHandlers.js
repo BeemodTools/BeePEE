@@ -26,8 +26,14 @@ const {
     readBeePackage,
     writeBeePackage,
     searchBeePm,
+    publishedOnBeePm,
 } = require("../utils/beePackage")
 const { beePmHandle } = require("../utils/beePmApp")
+
+/** Whether a package has an author ("Unknown" is what older BeePEE wrote for none) */
+const hasAuthor = (author) =>
+    typeof author === "string" &&
+    !["", "unknown"].includes(author.trim().toLowerCase())
 
 function register(ipcMain, mainWindow) {
     // Open create package window
@@ -174,6 +180,8 @@ function register(ipcMain, mainWindow) {
                     author: packageInfo.Author,
                     path: currentPackageDir,
                 },
+                // Without one, it can be set once here
+                authorSet: hasAuthor(packageInfo.Author),
                 beePackage,
                 beePackageExists,
             }
@@ -183,10 +191,10 @@ function register(ipcMain, mainWindow) {
     })
 
     // Update package info, and its bee-package.json with beePackage. The
-    // author stays: it's set when the package is made.
+    // author is set once: when the package is made, or here when it has none.
     ipcMain.handle(
         "update-package-info",
-        async (event, { name, description, beePackage }) => {
+        async (event, { name, description, author, beePackage }) => {
             try {
                 const currentPackageDir = getCurrentPackageDir()
                 if (!currentPackageDir) {
@@ -210,6 +218,9 @@ function register(ipcMain, mainWindow) {
                 // Update fields
                 if (name !== undefined) packageInfo.Name = name
                 if (description !== undefined) packageInfo.Desc = description
+                if (author?.trim() && !hasAuthor(packageInfo.Author)) {
+                    packageInfo.Author = author.trim()
+                }
 
                 fs.writeFileSync(infoPath, JSON.stringify(packageInfo, null, 2))
                 if (beePackage) writeBeePackage(currentPackageDir, beePackage)
@@ -369,6 +380,16 @@ function register(ipcMain, mainWindow) {
 
     // Who's logged in to BeePM on this PC: a new package's author
     ipcMain.handle("get-beepm-handle", async () => ({ handle: beePmHandle() }))
+
+    // The package BeePM has with this BEE2 ID and its highest version, for
+    // the next version (null when BeePM has none)
+    ipcMain.handle("beepm-published", async (event, beeId) => {
+        try {
+            return { success: true, published: await publishedOnBeePm(beeId) }
+        } catch (error) {
+            return { success: false, error: error.message }
+        }
+    })
 
     // Packages in BeePM, for what a package needs
     ipcMain.handle("search-beepm-packages", async (event, query) => {

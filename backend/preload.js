@@ -424,6 +424,9 @@ contextBridge.exposeInMainWorld("package", {
     // ========================================
     // { handle } of whoever's logged in to BeePM on this PC (null if nobody)
     getBeePmHandle: () => ipcRenderer.invoke("get-beepm-handle"),
+    // { success, published: { name, version } } of the package BeePM has
+    // with a BEE2 ID (null when it has none)
+    getBeePmPublished: (beeId) => ipcRenderer.invoke("beepm-published", beeId),
     // { success, packages: [{ name, displayName, latest, beeId }] }
     searchBeePm: (query) => ipcRenderer.invoke("search-beepm-packages", query),
 

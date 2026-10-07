@@ -172,6 +172,69 @@ function writeBeePackage(packageDir, fields) {
     return beePackage
 }
 
+/** Compare two versions by semver's precedence: < 0 when a is older than b */
+function compareVersions(a, b) {
+    const parse = (version) => {
+        const [core, pre] = String(version).split("+")[0].split(/-(.*)/s)
+        return { parts: core.split(".").map(Number), pre: pre ? pre.split(".") : [] }
+    }
+    const x = parse(a)
+    const y = parse(b)
+    for (let i = 0; i < 3; i++) {
+        if (x.parts[i] !== y.parts[i]) return x.parts[i] - y.parts[i]
+    }
+    // A prerelease comes before its release
+    if (!x.pre.length || !y.pre.length) return y.pre.length - x.pre.length
+    for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+        const [p, q] = [x.pre[i], y.pre[i]]
+        if (p === undefined || q === undefined) return p === undefined ? -1 : 1
+        if (p === q) continue
+        const [pNumber, qNumber] = [/^\d+$/.test(p), /^\d+$/.test(q)]
+        if (pNumber && qNumber) return Number(p) - Number(q)
+        // Numbers come before words
+        if (pNumber !== qNumber) return pNumber ? -1 : 1
+        return p < q ? -1 : 1
+    }
+    return 0
+}
+
+/** GET a registry path's JSON (null when BeePM doesn't have it) */
+async function registryJson(pathAndQuery) {
+    const response = await fetch(`${REGISTRY_URL}${pathAndQuery}`, {
+        signal: AbortSignal.timeout(8000),
+    })
+    if (response.status === 404) return null
+    if (!response.ok) throw new Error(`BeePM answered ${response.status}`)
+    return response.json()
+}
+
+/**
+ * The package BeePM has with a BEE2 ID, and its highest version: found the
+ * way BeePM finds it when it suggests a new version (one package with that
+ * ID, every version it lists)
+ * @returns {Promise<{name: string, version: string|null}|null>} null when
+ *   BeePM has none (or more than one)
+ * @throws {Error} when BeePM can't be reached
+ */
+async function publishedOnBeePm(beeId) {
+    if (!String(beeId ?? "").trim()) return null
+    const lookup = await registryJson(
+        `/v1/lookup?beeId=${encodeURIComponent(String(beeId).trim())}`,
+    )
+    const names = lookup?.packages ?? []
+    if (names.length !== 1) return null
+    const parsed = parsePackageName(names[0])
+    if (!parsed) return null
+    const doc = await registryJson(
+        `/v1/packages/${parsed.scope}/${encodeURIComponent(parsed.name)}`,
+    )
+    const versions = Object.keys(doc?.versions ?? {}).filter((v) => VERSION.test(v))
+    return {
+        name: names[0],
+        version: versions.sort(compareVersions).pop() ?? null,
+    }
+}
+
 /**
  * Packages in BeePM that match a search (all of them for "")
  * @returns {Promise<{name: string, displayName: string, latest: string|null, beeId: string|null}[]>}
@@ -202,4 +265,6 @@ module.exports = {
     readBeePackage,
     writeBeePackage,
     searchBeePm,
+    compareVersions,
+    publishedOnBeePm,
 }

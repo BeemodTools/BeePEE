@@ -33,9 +33,53 @@ export function nameProblem(name) {
         : "Letters, numbers, - _ and ., starting and ending with a letter or number"
 }
 
-/** What's wrong with the version, or null */
-export function versionProblem(version) {
-    return VERSION.test(version) ? null : "Like 1.0.0"
+/** Compare two versions by semver's precedence: < 0 when a is older than b */
+export function compareVersions(a, b) {
+    const parse = (version) => {
+        const [core, pre] = String(version).split("+")[0].split(/-(.*)/s)
+        return { parts: core.split(".").map(Number), pre: pre ? pre.split(".") : [] }
+    }
+    const x = parse(a)
+    const y = parse(b)
+    for (let i = 0; i < 3; i++) {
+        if (x.parts[i] !== y.parts[i]) return x.parts[i] - y.parts[i]
+    }
+    // A prerelease comes before its release
+    if (!x.pre.length || !y.pre.length) return y.pre.length - x.pre.length
+    for (let i = 0; i < Math.max(x.pre.length, y.pre.length); i++) {
+        const [p, q] = [x.pre[i], y.pre[i]]
+        if (p === undefined || q === undefined) return p === undefined ? -1 : 1
+        if (p === q) continue
+        const [pNumber, qNumber] = [/^\d+$/.test(p), /^\d+$/.test(q)]
+        if (pNumber && qNumber) return Number(p) - Number(q)
+        // Numbers come before words
+        if (pNumber !== qNumber) return pNumber ? -1 : 1
+        return p < q ? -1 : 1
+    }
+    return 0
+}
+
+/**
+ * The version after one BeePM has, the way BeePM picks it (semver's patch
+ * bump): 1.0.1 -> 1.0.2, and 2.0.0-beta.1 -> 2.0.0
+ */
+export function nextVersion(version) {
+    const [major, minor, patch] = String(version).split(/[-+]/)[0].split(".").map(Number)
+    return /-/.test(String(version).split("+")[0])
+        ? `${major}.${minor}.${patch}`
+        : `${major}.${minor}.${patch + 1}`
+}
+
+/**
+ * What's wrong with the version, or null. publishedVersion: the highest one
+ * BeePM has, which it has to be newer than.
+ */
+export function versionProblem(version, publishedVersion = null) {
+    if (!VERSION.test(version)) return "Like 1.0.0"
+    if (publishedVersion && compareVersions(version, publishedVersion) <= 0) {
+        return `BeePM has ${publishedVersion}`
+    }
+    return null
 }
 
 /** The fields a new package starts with */

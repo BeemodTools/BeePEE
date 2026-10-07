@@ -29,6 +29,8 @@ const {
     readBeePackage,
     writeBeePackage,
     searchBeePm,
+    compareVersions,
+    publishedOnBeePm,
 } = require("../utils/beePackage")
 const { getPackagesDir } = require("../utils/packagesDir")
 const { register } = require("../handlers/packageHandlers")
@@ -226,6 +228,59 @@ describe("bee-package.json", () => {
         global.fetch = jest.fn(async () => ({ ok: false, status: 503 }))
         await expect(searchBeePm("")).rejects.toThrow(/503/)
     })
+
+    test("orders versions like semver", () => {
+        const order = [
+            "1.0.0-alpha",
+            "1.0.0-alpha.1",
+            "1.0.0-alpha.beta",
+            "1.0.0-beta",
+            "1.0.0-beta.2",
+            "1.0.0-beta.11",
+            "1.0.0-rc.1",
+            "1.0.0",
+            "1.0.2",
+            "1.0.10",
+            "1.2.0",
+            "2.0.0",
+        ]
+        expect([...order].reverse().sort(compareVersions)).toEqual(order)
+        expect(compareVersions("1.0.0", "1.0.0")).toBe(0)
+    })
+
+    test("finds the highest version BeePM has of a package", async () => {
+        const answers = {
+            "/v1/lookup?beeId=BETTER_UNDERGROUND": {
+                packages: ["@areng/better-underground-assets"],
+            },
+            "/v1/packages/areng/better-underground-assets": {
+                latest: "1.0.1",
+                // Every version, the highest one too even when it's a
+                // prerelease or pulled
+                versions: { "1.0.0": {}, "1.0.1": {}, "1.1.0-beta.1": {} },
+            },
+            "/v1/lookup?beeId=FORKED": { packages: ["@a/x", "@b/x"] },
+            "/v1/lookup?beeId=NEW_ONE": { packages: [] },
+        }
+        global.fetch = jest.fn(async (url) => {
+            const answer = answers[url.replace(/^https?:\/\/[^/]+/, "")]
+            return answer
+                ? { ok: true, status: 200, json: async () => answer }
+                : { ok: false, status: 404 }
+        })
+
+        await expect(publishedOnBeePm("BETTER_UNDERGROUND")).resolves.toEqual({
+            name: "@areng/better-underground-assets",
+            version: "1.1.0-beta.1",
+        })
+        // Nothing to go by: none, or more than one with that ID
+        await expect(publishedOnBeePm("NEW_ONE")).resolves.toBeNull()
+        await expect(publishedOnBeePm("FORKED")).resolves.toBeNull()
+        await expect(publishedOnBeePm("")).resolves.toBeNull()
+
+        global.fetch = jest.fn(async () => ({ ok: false, status: 500 }))
+        await expect(publishedOnBeePm("BETTER_UNDERGROUND")).rejects.toThrow(/500/)
+    })
 })
 
 describe("a package's information", () => {
@@ -388,6 +443,41 @@ describe("a package's information", () => {
             }),
         ).toEqual({ success: false, error: expect.stringMatching(/version/) })
         expect(infoOf(packageId).Name).toBe("Better Underground Assets 2")
+    })
+
+    test("without an author, gets one typed once", async () => {
+        const { packageId } = await handlers["create-package"](null, {
+            name: "Old Package",
+            author: "Placeholder",
+            beePackage: { ...valid, name: "old-package" },
+        })
+        mockPackageDir = path.join(getPackagesDir(), packageId)
+        // What older BeePEE wrote when it didn't ask
+        const infoPath = path.join(mockPackageDir, "info.json")
+        fs.writeFileSync(
+            infoPath,
+            JSON.stringify({ ...infoOf(packageId), Author: "Unknown" }),
+        )
+        expect(await handlers["get-package-info"]()).toMatchObject({
+            authorSet: false,
+        })
+
+        await handlers["update-package-info"](null, { author: "  Areng  " })
+        expect(infoOf(packageId).Author).toBe("Areng")
+        expect(await handlers["get-package-info"]()).toMatchObject({
+            authorSet: true,
+        })
+
+        // Then it's locked
+        await handlers["update-package-info"](null, { author: "Someone Else" })
+        expect(infoOf(packageId).Author).toBe("Areng")
+
+        // Missing altogether is the same, and a blank one sets nothing
+        const { Author: _author, ...withoutAuthor } = infoOf(packageId)
+        fs.writeFileSync(infoPath, JSON.stringify(withoutAuthor))
+        expect((await handlers["get-package-info"]()).authorSet).toBe(false)
+        await handlers["update-package-info"](null, { author: "   " })
+        expect(infoOf(packageId).Author).toBeUndefined()
     })
 })
 
