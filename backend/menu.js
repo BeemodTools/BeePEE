@@ -47,6 +47,11 @@ const { isDev } = require("./utils/isDev.js")
 const { ensurePackagesDir } = require("./utils/packagesDir")
 const { logger } = require("./utils/logger")
 const { getSetting } = require("./utils/settings")
+const {
+    BEEPM_DOWNLOAD_URL,
+    isBeePmInstalled,
+    publishWithBeePm,
+} = require("./utils/beePmApp")
 
 // Window the menu was built for (needed to rebuild when settings change)
 let menuMainWindow = null
@@ -57,6 +62,7 @@ const PACKAGE_MENU_IDS = [
     "save-package",
     "save-package-as",
     "export-package",
+    "export-beepm",
     "package-information",
     "beepm-package-info",
     "import-items",
@@ -157,6 +163,89 @@ async function confirmUnsavedChanges(win, discardLabel) {
         console.error("Failed to save the package:", err)
         dialog.showErrorBox("Save Failed", err.message)
         return false
+    }
+}
+
+// Back the package up as a .bpee before it's exported, when that setting is
+// on (the 10 newest are kept). A failed backup doesn't stop the export.
+async function backupBeforeExport(currentPackageDir) {
+    if (!getSetting("autoBackupBeforeExport", true)) return
+    try {
+        const backupsDir = path.join(app.getPath("userData"), "backups")
+        fs.mkdirSync(backupsDir, { recursive: true })
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+        const backupPath = path.join(
+            backupsDir,
+            `${getCurrentPackageName()}-${stamp}.bpee`,
+        )
+        await savePackageAsBpee(currentPackageDir, backupPath)
+        console.log(`Saved a backup before exporting: ${backupPath}`)
+
+        // Keep only the 10 most recent backups
+        const backups = fs
+            .readdirSync(backupsDir)
+            .filter((f) => f.endsWith(".bpee"))
+            .map((f) => ({
+                name: f,
+                path: path.join(backupsDir, f),
+                time: fs.statSync(path.join(backupsDir, f)).mtime.getTime(),
+            }))
+            .sort((a, b) => b.time - a.time)
+        for (const old of backups.slice(10)) {
+            try {
+                fs.unlinkSync(old.path)
+            } catch (err) {
+                console.warn(`Failed to delete old backup ${old.name}:`, err)
+            }
+        }
+    } catch (err) {
+        console.warn("Failed to back up the package, exporting anyway:", err)
+    }
+}
+
+// Export the package as a .bee_pack and open it in BeePM's Publish, where
+// the author reviews it and publishes it. Without BeePM, offers its GitHub.
+async function exportToBeePm(win) {
+    const currentPackageDir = getCurrentPackageDir()
+    if (!currentPackageDir) return
+
+    if (!isBeePmInstalled()) {
+        const { response } = await dialog.showMessageBox(win, {
+            type: "info",
+            buttons: ["Open GitHub", "Cancel"],
+            defaultId: 0,
+            cancelId: 1,
+            title: "BeePM Not Found",
+            message: "BeePM isn't installed.",
+            detail: "Get it from GitHub, then export to BeePM again.",
+        })
+        if (response === 0) await shell.openExternal(BEEPM_DOWNLOAD_URL)
+        return
+    }
+
+    // BeePM reads it from here when it checks and publishes it
+    const filePath = path.join(
+        app.getPath("userData"),
+        "beepm",
+        `${getCurrentPackageName()}.bee_pack`,
+    )
+    try {
+        await backupBeforeExport(currentPackageDir)
+        await exportPackageAsBeePack(currentPackageDir, filePath)
+    } catch (err) {
+        // The in-app export progress dialog already reported this failure
+        console.error("Failed to export the package for BeePM:", err)
+        return
+    }
+    try {
+        await publishWithBeePm(filePath)
+        console.log(`Opened ${filePath} in BeePM`)
+    } catch (err) {
+        console.error("Failed to open BeePM:", err)
+        dialog.showErrorBox(
+            "Failed to Open BeePM",
+            `${err.message}\n\nThe package was exported to ${filePath}`,
+        )
     }
 }
 
@@ -539,59 +628,7 @@ function createMainMenu(mainWindow) {
                                 filePath = result.filePath
                             }
 
-                            // Auto-backup the package as .bpee before exporting
-                            if (getSetting("autoBackupBeforeExport", true)) {
-                                try {
-                                    const backupsDir = path.join(
-                                        app.getPath("userData"),
-                                        "backups",
-                                    )
-                                    fs.mkdirSync(backupsDir, { recursive: true })
-                                    const stamp = new Date()
-                                        .toISOString()
-                                        .replace(/[:.]/g, "-")
-                                    const backupPath = path.join(
-                                        backupsDir,
-                                        `${getCurrentPackageName()}-${stamp}.bpee`,
-                                    )
-                                    await savePackageAsBpee(
-                                        currentPackageDir,
-                                        backupPath,
-                                    )
-                                    console.log(
-                                        `Saved a backup before exporting: ${backupPath}`,
-                                    )
-
-                                    // Keep only the 10 most recent backups
-                                    const backups = fs
-                                        .readdirSync(backupsDir)
-                                        .filter((f) => f.endsWith(".bpee"))
-                                        .map((f) => ({
-                                            name: f,
-                                            path: path.join(backupsDir, f),
-                                            time: fs
-                                                .statSync(path.join(backupsDir, f))
-                                                .mtime.getTime(),
-                                        }))
-                                        .sort((a, b) => b.time - a.time)
-                                    for (const old of backups.slice(10)) {
-                                        try {
-                                            fs.unlinkSync(old.path)
-                                        } catch (err) {
-                                            console.warn(
-                                                `Failed to delete old backup ${old.name}:`,
-                                                err,
-                                            )
-                                        }
-                                    }
-                                } catch (err) {
-                                    console.warn(
-                                        "Failed to back up the package, exporting anyway:",
-                                        err,
-                                    )
-                                }
-                            }
-
+                            await backupBeforeExport(currentPackageDir)
                             await exportPackageAsBeePack(currentPackageDir, filePath)
 
                             // Open folder or launch BEEMod based on settings
@@ -630,6 +667,11 @@ function createMainMenu(mainWindow) {
                             console.error("Failed to export the package:", err)
                         }
                     },
+                },
+                {
+                    id: "export-beepm",
+                    label: "Export to BeePM...",
+                    click: () => exportToBeePm(mainWindow),
                 },
                 { type: "separator" },
                 {
