@@ -1998,6 +1998,15 @@ function SignageDesigner({
                             overflow: "auto",
                             display: "flex",
                         }}>
+                    {/* The canvas's frame, around it rather than its border:
+                        the canvas is then exactly the sign (disp square) for
+                        its layers, backplate, clip and pointer math */}
+                    <Box
+                        sx={{
+                            border: dropHint ? `2px solid ${gold}` : "2px dashed #555",
+                            flexShrink: 0,
+                            m: "auto",
+                        }}>
                     {/* Canvas */}
                     <Box
                         ref={canvasRef}
@@ -2024,7 +2033,7 @@ function SignageDesigner({
                             width: disp,
                             height: disp,
                             position: "relative",
-                            borderRadius: 2,
+                            // Square like the sign: no corners past its own
                             background: "#ffffff",
                             backgroundImage: (() => {
                                 const grid = `linear-gradient(rgba(0,0,0,0.09) 1px,transparent 1px),linear-gradient(90deg,rgba(0,0,0,0.09) 1px,transparent 1px)`
@@ -2044,7 +2053,6 @@ function SignageDesigner({
                                     parts.push("100% 100%")
                                 return parts.join(",") || "auto"
                             })(),
-                            border: dropHint ? `2px solid ${gold}` : "2px dashed #555",
                             boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.12)",
                             // clip, not hidden: a hidden box can still be
                             // scrolled, and typing text past the canvas edge
@@ -2052,8 +2060,6 @@ function SignageDesigner({
                             // every layer off the grid and throwing off the
                             // pointer math (toCanvas ignores this box's scroll)
                             overflow: "clip",
-                            flexShrink: 0,
-                            m: "auto",
                         }}>
                         {layers.length === 0 && !dropHint && (
                             <Box
@@ -2357,6 +2363,7 @@ function SignageDesigner({
                                     </>
                                 )
                             })()}
+                    </Box>
                     </Box>
 
                     {/* Marquee - drawn at viewport level (not clipped by the
