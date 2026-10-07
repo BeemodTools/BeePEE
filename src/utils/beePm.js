@@ -1,7 +1,7 @@
 /**
- * bee-package.json fields (BeePM's) for the Create Package and BeePM Package
- * Info windows. The names and checks are backend/utils/beePackage.js's, which
- * checks them again when it writes the file.
+ * bee-package.json fields (BeePM's) for the Create Package and Package
+ * Information windows. The names and checks are backend/utils/beePackage.js's,
+ * which checks them again when it writes the file.
  */
 
 /** A package's name in BeePM: lowercase a-z 0-9 . _ -, 1-64, alphanumeric at both ends */

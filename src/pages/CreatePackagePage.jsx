@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import {
     Box,
     Typography,
@@ -7,8 +7,9 @@ import {
     Stack,
     Alert,
     Divider,
+    InputAdornment,
 } from "@mui/material"
-import { CheckCircle, Close } from "@mui/icons-material"
+import { CheckCircle, Close, LockOutlined } from "@mui/icons-material"
 import BeePmFields from "../components/BeePmFields"
 import {
     beePmName,
@@ -21,9 +22,21 @@ import {
 function CreatePackagePage() {
     const [name, setName] = useState("")
     const [description, setDescription] = useState("")
+    const [author, setAuthor] = useState("")
+    // The author is whoever's logged in to BeePM on this PC, when someone is
+    const [beePmHandle, setBeePmHandle] = useState(null)
     const [beePm, setBeePm] = useState(() => newBeePmFields())
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState(null)
+
+    useEffect(() => {
+        window.package
+            ?.getBeePmHandle?.()
+            .then(({ handle }) => {
+                if (handle) setBeePmHandle(handle)
+            })
+            .catch((err) => console.warn("Failed to check the BeePM login:", err))
+    }, [])
 
     const handleNameChange = (newName) => {
         // The BeePM name follows the package's until it's changed
@@ -41,6 +54,7 @@ function CreatePackagePage() {
             const result = await window.electron.invoke("create-package", {
                 name,
                 description,
+                author: beePmHandle ?? author.trim(),
                 beePackage: savedBeePmFields(beePm),
             })
 
@@ -97,16 +111,41 @@ function CreatePackagePage() {
                         </Alert>
                     )}
 
-                    <TextField
-                        label="Package Name"
-                        value={name}
-                        onChange={(e) => handleNameChange(e.target.value)}
-                        placeholder="My Awesome Package"
-                        fullWidth
-                        required
-                        disabled={loading}
-                        helperText="A descriptive name for your package"
-                    />
+                    <Stack direction="row" spacing={2}>
+                        <TextField
+                            label="Package Name"
+                            value={name}
+                            onChange={(e) => handleNameChange(e.target.value)}
+                            placeholder="My Awesome Package"
+                            required
+                            disabled={loading}
+                            helperText="A descriptive name for your package"
+                            sx={{ flex: 3 }}
+                        />
+                        <TextField
+                            label="Author"
+                            value={beePmHandle ?? author}
+                            onChange={(e) => setAuthor(e.target.value)}
+                            placeholder="Your name"
+                            required
+                            disabled={loading || !!beePmHandle}
+                            helperText={
+                                beePmHandle
+                                    ? "Your BeePM handle"
+                                    : "Can't be changed later"
+                            }
+                            sx={{ flex: 2 }}
+                            slotProps={{
+                                input: {
+                                    endAdornment: beePmHandle ? (
+                                        <InputAdornment position="end">
+                                            <LockOutlined fontSize="small" />
+                                        </InputAdornment>
+                                    ) : undefined,
+                                },
+                            }}
+                        />
+                    </Stack>
 
                     <TextField
                         label="Description"
@@ -147,8 +186,8 @@ function CreatePackagePage() {
                             BeePM
                         </Typography>
                         <Typography variant="body2" color="text.secondary">
-                            You can change these later in Edit &gt; BeePM
-                            Package Info.
+                            You can change these later in Edit &gt; Package
+                            Information.
                         </Typography>
                     </Box>
 
@@ -185,6 +224,7 @@ function CreatePackagePage() {
                         disabled={
                             loading ||
                             !name.trim() ||
+                            !(beePmHandle ?? author.trim()) ||
                             !!nameProblem(beePm.name) ||
                             !!versionProblem(beePm.version)
                         }

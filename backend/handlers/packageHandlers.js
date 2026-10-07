@@ -27,6 +27,7 @@ const {
     writeBeePackage,
     searchBeePm,
 } = require("../utils/beePackage")
+const { beePmHandle } = require("../utils/beePmApp")
 
 function register(ipcMain, mainWindow) {
     // Open create package window
@@ -65,6 +66,10 @@ function register(ipcMain, mainWindow) {
                 if (!name?.trim()) {
                     throw new Error("Package name is required")
                 }
+                // Whoever's logged in to BeePM, else who they typed. It can't
+                // be changed once the package is made.
+                const packageAuthor = beePmHandle() ?? author?.trim()
+                if (!packageAuthor) throw new Error("Author is required")
                 // Its bee-package.json (BeePM's), checked before anything's made
                 const beePackageProblem = beePackage && problemWith(beePackage)
                 if (beePackageProblem) throw new Error(beePackageProblem)
@@ -100,7 +105,7 @@ function register(ipcMain, mainWindow) {
                     ID: packageId,
                     Name: name,
                     Desc: description || "",
-                    Author: author || "Unknown",
+                    Author: packageAuthor,
                     Item: [],
                 }
 
@@ -155,6 +160,11 @@ function register(ipcMain, mainWindow) {
             }
 
             const packageInfo = JSON.parse(fs.readFileSync(infoPath, "utf-8"))
+            // Its bee-package.json fields (made from its name when it has none)
+            const { exists: beePackageExists, ...beePackage } = readBeePackage(
+                currentPackageDir,
+                packageInfo.Name,
+            )
             return {
                 success: true,
                 info: {
@@ -164,16 +174,19 @@ function register(ipcMain, mainWindow) {
                     author: packageInfo.Author,
                     path: currentPackageDir,
                 },
+                beePackage,
+                beePackageExists,
             }
         } catch (error) {
             return { success: false, error: error.message }
         }
     })
 
-    // Update package info
+    // Update package info, and its bee-package.json with beePackage. The
+    // author stays: it's set when the package is made.
     ipcMain.handle(
         "update-package-info",
-        async (event, { name, description, author }) => {
+        async (event, { name, description, beePackage }) => {
             try {
                 const currentPackageDir = getCurrentPackageDir()
                 if (!currentPackageDir) {
@@ -184,6 +197,11 @@ function register(ipcMain, mainWindow) {
                 if (!fs.existsSync(infoPath)) {
                     return { success: false, error: "info.json not found" }
                 }
+                // Checked before anything's written
+                const beePackageProblem = beePackage && problemWith(beePackage)
+                if (beePackageProblem) {
+                    return { success: false, error: beePackageProblem }
+                }
 
                 const packageInfo = JSON.parse(
                     fs.readFileSync(infoPath, "utf-8"),
@@ -192,9 +210,12 @@ function register(ipcMain, mainWindow) {
                 // Update fields
                 if (name !== undefined) packageInfo.Name = name
                 if (description !== undefined) packageInfo.Desc = description
-                if (author !== undefined) packageInfo.Author = author
 
                 fs.writeFileSync(infoPath, JSON.stringify(packageInfo, null, 2))
+                if (beePackage) writeBeePackage(currentPackageDir, beePackage)
+
+                // Written to the working package, not the .bpee
+                global.titleManager?.setUnsavedChanges(true)
 
                 return { success: true }
             } catch (error) {
@@ -346,52 +367,8 @@ function register(ipcMain, mainWindow) {
         }
     })
 
-    // The package's bee-package.json fields (made from its name when it has none)
-    ipcMain.handle("get-bee-package-info", async () => {
-        try {
-            const currentPackageDir = getCurrentPackageDir()
-            if (!currentPackageDir) {
-                return { success: false, error: "No package loaded" }
-            }
-
-            const infoPath = path.join(currentPackageDir, "info.json")
-            const packageInfo = fs.existsSync(infoPath)
-                ? JSON.parse(fs.readFileSync(infoPath, "utf-8"))
-                : {}
-
-            const { exists, ...info } = readBeePackage(
-                currentPackageDir,
-                packageInfo.Name,
-            )
-            return {
-                success: true,
-                info,
-                exists,
-                packageId: packageInfo.ID || "",
-            }
-        } catch (error) {
-            return { success: false, error: error.message }
-        }
-    })
-
-    // Save bee-package.json
-    ipcMain.handle("save-bee-package-info", async (event, beePackageData) => {
-        try {
-            const currentPackageDir = getCurrentPackageDir()
-            if (!currentPackageDir) {
-                return { success: false, error: "No package loaded" }
-            }
-
-            writeBeePackage(currentPackageDir, beePackageData)
-
-            // Written to the working package, not the .bpee
-            global.titleManager?.setUnsavedChanges(true)
-
-            return { success: true }
-        } catch (error) {
-            return { success: false, error: error.message }
-        }
-    })
+    // Who's logged in to BeePM on this PC: a new package's author
+    ipcMain.handle("get-beepm-handle", async () => ({ handle: beePmHandle() }))
 
     // Packages in BeePM, for what a package needs
     ipcMain.handle("search-beepm-packages", async (event, query) => {

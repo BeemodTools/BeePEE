@@ -14,7 +14,6 @@ import ModelPreviewPage from "./pages/ModelPreviewPage"
 import LoadingPopup from "./components/LoadingPopup"
 import UpdateNotification from "./components/UpdateNotification"
 import CrashReportPage from "./pages/CrashReportPage"
-import BeePackagePage from "./pages/BeePackagePage"
 import SignageEditor from "./components/SignageEditor"
 import SignageDesignerPage from "./pages/SignageDesignerPage"
 import ImportItemsPage from "./pages/ImportItemsPage"
@@ -34,7 +33,6 @@ function App() {
     const showChangelog = routeParam === "changelog"
     const showModelPreview = routeParam === "model-preview"
     const showCrashReport = routeParam === "crash-report"
-    const showBeePackage = routeParam === "bee-package"
     const showSignageEditor = routeParam === "signage-editor"
     const showSignageDesigner = routeParam === "signage-designer"
     const showImportItems = routeParam === "import-items"
@@ -163,9 +161,6 @@ function App() {
             ) : showCrashReport ? (
                 // Show CrashReportPage directly for production windows
                 <CrashReportPage />
-            ) : showBeePackage ? (
-                // Show BeePackagePage directly for production windows
-                <BeePackagePage />
             ) : showSignageEditor ? (
                 // Show SignageEditor directly for production windows
                 <SignageProvider>
@@ -236,10 +231,6 @@ function App() {
                             <Route
                                 path="/crash-report"
                                 element={<CrashReportPage />}
-                            />
-                            <Route
-                                path="/bee-package"
-                                element={<BeePackagePage />}
                             />
                             <Route
                                 path="/signage-editor"

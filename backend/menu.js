@@ -40,7 +40,6 @@ const {
     createPackageInformationWindow,
     createChangelogWindow,
     createCrashReportWindow,
-    createBeePackageWindow,
     createSettingsWindow,
 } = require("./items/itemEditor")
 const { isDev } = require("./utils/isDev.js")
@@ -64,7 +63,6 @@ const PACKAGE_MENU_IDS = [
     "export-package",
     "export-beepm",
     "package-information",
-    "beepm-package-info",
     "import-items",
 ]
 
@@ -716,23 +714,6 @@ function createMainMenu(mainWindow) {
                             return
                         }
                         createPackageInformationWindow(mainWindow)
-                    },
-                },
-                {
-                    id: "beepm-package-info",
-                    label: "BeePM Package Info...",
-                    accelerator: "Ctrl+Shift+B",
-                    click: () => {
-                        const currentPackageDir = getCurrentPackageDir()
-                        if (!currentPackageDir) {
-                            dialog.showMessageBox(mainWindow, {
-                                type: "info",
-                                message: "No package is currently open",
-                                detail: "Please open or create a package first",
-                            })
-                            return
-                        }
-                        createBeePackageWindow(mainWindow)
                     },
                 },
                 { type: "separator" },

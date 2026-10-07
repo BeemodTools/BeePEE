@@ -420,11 +420,10 @@ contextBridge.exposeInMainWorld("package", {
     isUpdateAvailable: () => ipcRenderer.invoke("is-update-available"),
 
     // ========================================
-    // BEE PACKAGE INFO FUNCTIONS
+    // BEEPM FUNCTIONS
     // ========================================
-    getBeePackageInfo: () => ipcRenderer.invoke("get-bee-package-info"),
-    saveBeePackageInfo: (beePackageData) =>
-        ipcRenderer.invoke("save-bee-package-info", beePackageData),
+    // { handle } of whoever's logged in to BeePM on this PC (null if nobody)
+    getBeePmHandle: () => ipcRenderer.invoke("get-beepm-handle"),
     // { success, packages: [{ name, displayName, latest, beeId }] }
     searchBeePm: (query) => ipcRenderer.invoke("search-beepm-packages", query),
 

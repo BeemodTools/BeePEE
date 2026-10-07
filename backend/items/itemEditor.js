@@ -8,7 +8,6 @@ let signageDesignerWindow = null // Track the signage designer window
 let packageInformationWindow = null // Track the package information window
 let changelogWindow = null // Track the changelog window
 let crashReportWindow = null // Track the crash report window
-let beePackageWindow = null // Track the bee-package.json editor window
 let setupWindow = null // Track the setup window
 let settingsWindow = null // Track the settings window
 const { BrowserWindow, app, Menu, screen } = require("electron")
@@ -467,8 +466,10 @@ function createPackageInformationWindow(mainWindow) {
     }
 
     packageInformationWindow = new BrowserWindow({
-        width: 500,
-        height: 650,
+        // The page's size, with its BeePM fields (bee-package.json)
+        useContentSize: true,
+        width: 484,
+        height: heightOnScreen(890),
         title: "BeePEE - Package Information",
         webPreferences: {
             nodeIntegration: false,
@@ -699,49 +700,6 @@ function createCrashReportWindow(errorDetails, { replace = false } = {}) {
             })
         }, 100)
     })
-}
-
-/**
- * Create the bee-package.json editor window
- */
-function createBeePackageWindow(mainWindow) {
-    // If window already exists, focus it
-    if (beePackageWindow && !beePackageWindow.isDestroyed()) {
-        beePackageWindow.focus()
-        return
-    }
-
-    beePackageWindow = new BrowserWindow({
-        width: 550,
-        height: 640,
-        title: "BeePEE - BeePM Package Info",
-        webPreferences: {
-            nodeIntegration: false,
-            contextIsolation: true,
-            preload: path.join(__dirname, "..", "preload.js"),
-        },
-        devTools: isDev,
-        skipTaskbar: false,
-        minimizable: true,
-        maximizable: false,
-        resizable: true,
-        autoHideMenuBar: true,
-    })
-
-    beePackageWindow.on("closed", () => {
-        beePackageWindow = null
-    })
-
-    if (isDev) {
-        beePackageWindow.loadURL(`http://localhost:5173/?route=bee-package`)
-    } else {
-        const appPath = app.getAppPath()
-        beePackageWindow.loadFile(path.join(appPath, "dist", "index.html"), {
-            query: { route: "bee-package" },
-        })
-    }
-
-    beePackageWindow.setMenuBarVisibility(false)
 }
 
 /**
@@ -1118,8 +1076,6 @@ module.exports = {
     getChangelogWindow: () => changelogWindow,
     createCrashReportWindow,
     getCrashReportWindow: () => crashReportWindow,
-    createBeePackageWindow,
-    getBeePackageWindow: () => beePackageWindow,
     createModelPreviewWindow,
     closeAllModelPreviewWindows,
     closeAllEditorWindows,

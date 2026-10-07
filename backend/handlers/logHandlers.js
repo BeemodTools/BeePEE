@@ -11,7 +11,6 @@ const LEVELS = new Set(["info", "warn", "error", "debug"])
 /** Window names for routes that don't read well title-cased */
 const WINDOW_NAMES = {
     editor: "Item Editor",
-    "bee-package": "BEE Package",
 }
 
 /**
