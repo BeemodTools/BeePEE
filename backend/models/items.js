@@ -26,6 +26,7 @@ const {
     LAST_TIMER,
     DEFAULT_COLORS,
     hasColors,
+    colorDefaults,
     colorGroupId,
     withColors,
 } = require("../utils/itemColors")
@@ -1437,6 +1438,8 @@ class Item {
                     defaultValue: "1",
                     type: "colors",
                     customValue: "1",
+                    // Each timer value's default color
+                    colors: this.getColorDefaults(),
                     index: variables.length,
                 })
             }
@@ -1556,7 +1559,7 @@ class Item {
 
             // Write back to file
             this.saveEditorItems(editorItems)
-            this.saveColors(Boolean(colorVariable))
+            this.saveColors(Boolean(colorVariable), colorVariable?.colors)
 
             // Auto-generate VBSP conditions for ButtonType if needed
             if (hasButtonType) {
@@ -1588,6 +1591,16 @@ class Item {
         }
     }
 
+    /** Its default colors: each timer value's, as players get them in BEE2 */
+    getColorDefaults() {
+        try {
+            const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
+            return colorDefaults(info, this.id)
+        } catch {
+            return colorDefaults({}, this.id)
+        }
+    }
+
     /** The ID of its colors' group as info.json has it (see colorGroupId) */
     getColorGroupId() {
         try {
@@ -1600,12 +1613,13 @@ class Item {
 
     /**
      * Give the item its colors, or take them out: a timer color widget in
-     * its config group in info.json, which BEE2 shows in its ItemVar menu
+     * its config group in info.json, which BEE2 shows in its ItemVar menu.
+     * `defaults`: each timer value's default color (kept when not given).
      */
-    saveColors(on) {
+    saveColors(on, defaults) {
         const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
         const before = JSON.stringify(info)
-        withColors(info, { itemId: this.id, itemName: this.name, on })
+        withColors(info, { itemId: this.id, itemName: this.name, on, defaults })
         if (JSON.stringify(info) === before) return
         fs.writeFileSync(this.infoPath, JSON.stringify(info, null, 2))
     }

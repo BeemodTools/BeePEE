@@ -13,6 +13,7 @@ const { Package } = require("../models/package")
 const {
     DEFAULT_COLORS,
     hasColors,
+    colorDefaults,
     colorGroupId,
     withColors,
 } = require("../utils/itemColors")
@@ -131,6 +132,51 @@ describe("an item's colors", () => {
         ).toEqual({ ID: "TEST" })
     })
 
+    test("have defaults the item sets, each timer value's (the Cube Coloriser's for the rest)", () => {
+        const info = {}
+        withColors(info, {
+            itemId: "ITEM_BOMB",
+            itemName: "Bomb",
+            on: true,
+            // BEE2 reads "#rrggbb" too; it saves "R G B"
+            defaults: { 3: "255 0 0", 7: "#00ff80", 8: "not a color" },
+        })
+        expect(info.ConfigGroup.Widget.Default).toEqual({
+            ...DEFAULT_COLORS,
+            3: "255 0 0",
+            7: "0 255 128",
+        })
+        expect(colorDefaults(info, "ITEM_BOMB")).toEqual(
+            info.ConfigGroup.Widget.Default,
+        )
+
+        // Saving without defaults (a rename) keeps them
+        withColors(info, { itemId: "ITEM_BOMB", itemName: "Bombs", on: true })
+        expect(info.ConfigGroup.Name).toBe("Bombs - Color")
+        expect(info.ConfigGroup.Widget.Default[3]).toBe("255 0 0")
+
+        // One default for every timer value, or none: read as each one's
+        const one = {
+            ConfigGroup: {
+                ID: "ITEM_BOMB",
+                Widget: { ...colorWidget, default: "#0000ff" },
+            },
+        }
+        delete one.ConfigGroup.Widget.Default
+        expect(Object.values(colorDefaults(one, "ITEM_BOMB"))).toEqual(
+            Array(28).fill("0 0 255"),
+        )
+        expect(colorDefaults({}, "ITEM_BOMB")).toEqual(DEFAULT_COLORS)
+        // Written back under the key it had
+        withColors(one, {
+            itemId: "ITEM_BOMB",
+            on: true,
+            defaults: { 3: "1 2 3" },
+        })
+        expect(one.ConfigGroup.Widget.default[3]).toBe("1 2 3")
+        expect(one.ConfigGroup.Widget.Default).toBeUndefined()
+    })
+
     describe("of an item", () => {
         let dir
         let itemDir
@@ -233,6 +279,27 @@ describe("an item's colors", () => {
                     ],
                 ],
             ])
+
+            // The default colors set in the Variables tab
+            const defaults = { ...DEFAULT_COLORS, 3: "255 255 255" }
+            expect(item.getVariables()[1].colors).toEqual(DEFAULT_COLORS)
+            expect(
+                item.saveVariables([
+                    {
+                        presetKey: "TimerDelay",
+                        customValue: "3",
+                        type: "number",
+                    },
+                    {
+                        presetKey: "Color",
+                        customValue: "1",
+                        type: "colors",
+                        colors: defaults,
+                    },
+                ]),
+            ).toBe(true)
+            expect(info().ConfigGroup.Widget.Default).toEqual(defaults)
+            expect(item.getVariables()[1].colors).toEqual(defaults)
 
             // Taking the variable out takes them out
             expect(

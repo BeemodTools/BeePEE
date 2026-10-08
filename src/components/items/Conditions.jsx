@@ -75,6 +75,7 @@ import {
 } from "@dnd-kit/sortable"
 import { useSortable } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
+import { COLOR_TIMERS } from "../../utils/timerColors"
 
 // Block Validation Functions
 const validateBlock = (
@@ -868,9 +869,6 @@ const itemVariables = (formData = {}) =>
 /** Whether the item has colors (its Color variable) */
 const itemHasColors = (formData = {}) =>
     itemVariables(formData).some((v) => v?.type === "colors")
-
-/** The timer values with a color: BEE2's 3 to 30 */
-const COLOR_TIMERS = Array.from({ length: 28 }, (_, i) => String(i + 3))
 
 /**
  * Whether the item's instance has the fixup: its own variables' are all it

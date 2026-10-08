@@ -29,7 +29,10 @@ const COLOR_WIDGET = "color"
 const FIRST_TIMER = 3
 const LAST_TIMER = 30
 
-/** Each timer value's color until players pick their own: the Cube Coloriser's */
+/**
+ * Each timer value's color until players pick their own, unless the item
+ * sets its own: the Cube Coloriser's (src/utils/timerColors.js has them too)
+ */
 const DEFAULT_COLORS = {
     3: "25 25 230",
     4: "230 25 25",
@@ -114,13 +117,54 @@ function colorGroupId(info, itemId) {
 const groupName = (itemName) => `${itemName} - Color`
 
 /**
+ * A color as BEE2 saves players' picks ("255 128 0"), from that or
+ * "#ff8000" (BEE2 reads both), or null when it's neither
+ */
+function rgbOf(value) {
+    const text = String(value ?? "").trim()
+    const hex = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(text)
+    const parts = hex
+        ? hex.slice(1).map((part) => parseInt(part, 16))
+        : text.split(/\s+/).map(Number)
+    if (parts.length !== 3 || parts.some((n) => !Number.isFinite(n))) {
+        return null
+    }
+    return parts.map((n) => Math.min(255, Math.max(0, Math.round(n)))).join(" ")
+}
+
+/**
+ * Every timer value's default color: `colors`' (an object of timer value
+ * to color, or one color for all), and the Cube Coloriser's for the rest
+ */
+function fullColors(colors) {
+    const each = (timer) =>
+        rgbOf(
+            colors && typeof colors === "object"
+                ? valueOf(colors, String(timer))
+                : colors,
+        ) ?? DEFAULT_COLORS[timer]
+    return Object.fromEntries(
+        Object.keys(DEFAULT_COLORS).map((timer) => [timer, each(timer)]),
+    )
+}
+
+/** The item's default colors (each timer value's), as info.json has them */
+function colorDefaults(info, itemId) {
+    const widget = asList(valueOf(itemGroup(info, itemId), "Widget")).find(
+        (each) => widgetId(each) === COLOR_WIDGET,
+    )
+    return fullColors(valueOf(widget, "Default"))
+}
+
+/**
  * A package's info.json with the item's colors in it, or taken out. Other
  * widgets in the item's group, and other groups, stay; colors that were
- * there keep how they were written. The group goes by the item's name
+ * there keep how they were written, but their defaults are `defaults` when
+ * given (each timer value's color). The group goes by the item's name
  * unless it has other widgets too.
  * @returns {Object} The info, changed in place
  */
-function withColors(info, { itemId, itemName, on }) {
+function withColors(info, { itemId, itemName, on, defaults }) {
     const groups = asList(info.ConfigGroup)
     let group = itemGroup(info, itemId)
     if (!group) {
@@ -142,6 +186,12 @@ function withColors(info, { itemId, itemName, on }) {
               Default: { ...DEFAULT_COLORS },
           })
         : null
+    if (color && defaults) {
+        const key =
+            Object.keys(color).find((k) => k.toLowerCase() === "default") ??
+            "Default"
+        color[key] = fullColors(defaults)
+    }
     if (on && itemName && kept.length === 0) group.Name = groupName(itemName)
 
     const all = color ? [color, ...kept] : kept
@@ -162,6 +212,7 @@ module.exports = {
     LAST_TIMER,
     DEFAULT_COLORS,
     hasColors,
+    colorDefaults,
     colorGroupId,
     withColors,
 }

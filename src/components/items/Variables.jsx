@@ -33,6 +33,7 @@ import {
     Info,
     Code,
     Palette,
+    RestartAlt,
 } from "@mui/icons-material"
 import {
     DndContext,
@@ -50,6 +51,12 @@ import {
 } from "@dnd-kit/sortable"
 import { useSortable } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
+import {
+    COLOR_TIMERS,
+    DEFAULT_TIMER_COLORS,
+    rgbToHex,
+    hexToRgb,
+} from "../../utils/timerColors"
 
 // Custom modifier to restrict drag movement to parent bounds
 const restrictToParentBounds = ({
@@ -69,8 +76,84 @@ const restrictToParentBounds = ({
     }
 }
 
+/**
+ * An item's default colors, one for each timer value, where BEE2's ItemVar
+ * menu has them (rows of 10, from timer 3): click one to change it
+ */
+function TimerColors({ colors, onChange }) {
+    const current = { ...DEFAULT_TIMER_COLORS, ...colors }
+    const coloriser = COLOR_TIMERS.every(
+        (timer) =>
+            rgbToHex(current[timer]) === rgbToHex(DEFAULT_TIMER_COLORS[timer]),
+    )
+
+    return (
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+            <Box
+                sx={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(10, 14px)",
+                    gap: "3px",
+                }}>
+                {COLOR_TIMERS.map((timer) => (
+                    <Tooltip key={timer} title={`Timer ${timer}`}>
+                        <Box
+                            component="label"
+                            sx={{
+                                gridColumn: ((Number(timer) - 1) % 10) + 1,
+                                gridRow:
+                                    Math.floor((Number(timer) - 1) / 10) + 1,
+                                position: "relative",
+                                width: 14,
+                                height: 14,
+                                borderRadius: "3px",
+                                boxSizing: "border-box",
+                                border: "1px solid #555",
+                                cursor: "pointer",
+                                backgroundColor: rgbToHex(current[timer]),
+                            }}>
+                            <input
+                                type="color"
+                                value={rgbToHex(current[timer])}
+                                onChange={(e) =>
+                                    onChange({
+                                        ...current,
+                                        [timer]: hexToRgb(e.target.value),
+                                    })
+                                }
+                                style={{
+                                    position: "absolute",
+                                    inset: 0,
+                                    width: "100%",
+                                    height: "100%",
+                                    opacity: 0,
+                                    cursor: "pointer",
+                                }}
+                            />
+                        </Box>
+                    </Tooltip>
+                ))}
+            </Box>
+            {!coloriser && (
+                <Tooltip title="Use the Cube Coloriser's colors">
+                    <IconButton
+                        size="small"
+                        onClick={() => onChange({ ...DEFAULT_TIMER_COLORS })}>
+                        <RestartAlt fontSize="small" />
+                    </IconButton>
+                </Tooltip>
+            )}
+        </Box>
+    )
+}
+
 // Sortable Variable Item Component
-function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
+function SortableVariableItem({
+    variable,
+    onUpdateValue,
+    onUpdateColors,
+    onDelete,
+}) {
     const {
         attributes,
         listeners,
@@ -160,7 +243,7 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
                                     whiteSpace: "nowrap",
                                 }}>
                                 {variable.type === "colors"
-                                    ? "A color for each timer value, 3 to 30"
+                                    ? "Default colors:"
                                     : "Default value:"}
                             </Typography>
                             {variable.type === "boolean" ? (
@@ -215,7 +298,14 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
                                         ))}
                                     </Select>
                                 </FormControl>
-                            ) : variable.type === "colors" ? null : (
+                            ) : variable.type === "colors" ? (
+                                <TimerColors
+                                    colors={variable.colors}
+                                    onChange={(colors) =>
+                                        onUpdateColors(variable.id, colors)
+                                    }
+                                />
+                            ) : (
                                 <TextField
                                     size="small"
                                     type={
@@ -456,6 +546,10 @@ function Variables({ item, formData, onUpdateVariables }) {
             type: preset.type,
             enumValues: preset.enumValues,
             customValue: preset.defaultValue,
+            // The Color variable: each timer value's default color
+            ...(preset.type === "colors"
+                ? { colors: { ...DEFAULT_TIMER_COLORS } }
+                : {}),
         }
 
         const updatedVariables = [...variables, newVariable]
@@ -490,6 +584,15 @@ function Variables({ item, formData, onUpdateVariables }) {
 
         const updatedVariables = variables.map((v) =>
             v.id === variableId ? { ...v, customValue: processedValue } : v,
+        )
+        setVariables(updatedVariables)
+        onUpdateVariables(updatedVariables)
+    }
+
+    // The Color variable's default colors
+    const handleUpdateVariableColors = (variableId, colors) => {
+        const updatedVariables = variables.map((v) =>
+            v.id === variableId ? { ...v, colors } : v,
         )
         setVariables(updatedVariables)
         onUpdateVariables(updatedVariables)
@@ -589,6 +692,9 @@ function Variables({ item, formData, onUpdateVariables }) {
                                           variable={variable}
                                           onUpdateValue={
                                               handleUpdateVariableValue
+                                          }
+                                          onUpdateColors={
+                                              handleUpdateVariableColors
                                           }
                                           onDelete={handleDeleteVariable}
                                       />
