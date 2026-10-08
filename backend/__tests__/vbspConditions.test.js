@@ -412,6 +412,164 @@ describe("VBSP conditions", () => {
         expect(item.getConditions().blocks).toEqual([fixup])
     })
 
+    test("with an If/Else run its Else only on the item's instances", async () => {
+        const item = await loadItem(null)
+        const grate = {
+            id: "grate",
+            type: "ifElse",
+            variable: "$start_enabled",
+            operator: "==",
+            value: "1",
+            thenBlocks: [
+                { id: "on", type: "changeInstance", instanceName: "instances/on.vmf" },
+            ],
+            elseBlocks: [
+                { id: "off", type: "changeInstance", instanceName: "instances/off.vmf" },
+            ],
+        }
+        const style = {
+            id: "style",
+            type: "ifHasElse",
+            value: "MyStyleVar",
+            thenBlocks: [{ id: "a", type: "addOverlay", overlayName: "instances/a.vmf" }],
+            elseBlocks: [{ id: "b", type: "addOverlay", overlayName: "instances/b.vmf" }],
+        }
+        const plainIf = {
+            id: "plain",
+            type: "if",
+            variable: "$start_enabled",
+            value: "1",
+            thenBlocks: [{ id: "c", type: "addOverlay", overlayName: "instances/c.vmf" }],
+        }
+        item.saveConditions({ blocks: [grate, style, plainIf] })
+        const instance = ["Instance", "<ITEM_BOMB>"]
+        // BEE2 runs a condition's Else for every instance any test fails on,
+        // the Instance test too: the If/Else is a condition of its own in
+        // the one that has the Instance test
+        expect(keyvalues(conditionsIn(fs.readFileSync(cfg, "utf8")))).toEqual([
+            [
+                "Condition",
+                [
+                    instance,
+                    [
+                        "Condition",
+                        [
+                            ["instVar", "$start_enabled == 1"],
+                            ["Result", [["changeInstance", "instances/on.vmf"]]],
+                            ["Else", [["changeInstance", "instances/off.vmf"]]],
+                        ],
+                    ],
+                ],
+            ],
+            [
+                "Condition",
+                [
+                    instance,
+                    [
+                        "Condition",
+                        [
+                            ["styleVar", "MyStyleVar"],
+                            ["Result", [["addOverlay", "instances/a.vmf"]]],
+                            ["Else", [["addOverlay", "instances/b.vmf"]]],
+                        ],
+                    ],
+                ],
+            ],
+            // Without an Else, the tests sit next to the Instance test
+            [
+                "Condition",
+                [
+                    instance,
+                    ["instVar", "$start_enabled == 1"],
+                    ["Result", [["addOverlay", "instances/c.vmf"]]],
+                ],
+            ],
+        ])
+        expect(item.getConditions().blocks).toEqual([grate, style, plainIf])
+    })
+
+    test("written with the Else next to the Instance test are fixed when the package opens", async () => {
+        const grate = {
+            id: "grate",
+            type: "ifElse",
+            variable: "$start_enabled",
+            operator: "==",
+            value: "1",
+            thenBlocks: [
+                { id: "on", type: "changeInstance", instanceName: "instances/on.vmf" },
+            ],
+            elseBlocks: [
+                { id: "off", type: "changeInstance", instanceName: "instances/off.vmf" },
+            ],
+        }
+        // As BeePEE wrote it up to 1.2.0-beta.4: BEE2 changed every other
+        // instance in the map to off.vmf
+        const old = [
+            '"Conditions"',
+            "{",
+            '\t"Condition"',
+            "\t{",
+            '\t\t"Instance" "<ITEM_BOMB>"',
+            '\t\t"instVar" "$start_enabled == 1"',
+            '\t\t"Result"',
+            "\t\t{",
+            '\t\t\t"changeInstance" "instances/on.vmf"',
+            "\t\t}",
+            '\t\t"Else"',
+            "\t\t{",
+            '\t\t\t"changeInstance" "instances/off.vmf"',
+            "\t\t}",
+            "\t}",
+            "}",
+            "",
+        ].join("\n")
+        fs.mkdirSync(itemDir, { recursive: true })
+        fs.writeFileSync(
+            path.join(itemDir, "meta.json"),
+            JSON.stringify({ vbsp_blocks: [grate] }),
+        )
+        const item = await loadItem(old)
+
+        expect(keyvalues(conditionsIn(fs.readFileSync(cfg, "utf8")))).toEqual([
+            [
+                "Condition",
+                [
+                    ["Instance", "<ITEM_BOMB>"],
+                    [
+                        "Condition",
+                        [
+                            ["instVar", "$start_enabled == 1"],
+                            ["Result", [["changeInstance", "instances/on.vmf"]]],
+                            ["Else", [["changeInstance", "instances/off.vmf"]]],
+                        ],
+                    ],
+                ],
+            ],
+        ])
+        expect(item.getConditions().blocks).toEqual([grate])
+        // Once fixed, there's nothing more to fix
+        expect(item.repairConditions()).toBe(false)
+    })
+
+    test("an Else someone wrote themselves stays as it is", async () => {
+        // Not written from the editor's blocks: the package's own text
+        const own = [
+            '"Conditions"',
+            "{",
+            '\t"Condition"',
+            "\t{",
+            '\t\t"Instance" "<ITEM_BOMB>"',
+            '\t\t"instVar" "$start_enabled == 1"',
+            '\t\t"Else" { "changeInstance" "instances/off.vmf" }',
+            "\t}",
+            "}",
+            "",
+        ].join("\n")
+        const item = await loadItem(own)
+        expect(fs.readFileSync(cfg, "utf8")).toBe(own)
+        expect(item.repairConditions()).toBe(false)
+    })
+
     test("ButtonType's switch changes each case to its instance", async () => {
         const item = await loadItem(null)
         item.autoGenerateButtonTypeConditions({

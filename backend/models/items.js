@@ -68,6 +68,10 @@ const RESULT_BLOCKS = new Set([
     "randomSelection",
 ])
 
+/** Whether a condition (as a JS object) has an Else */
+const hasElse = (condition) =>
+    Object.keys(condition ?? {}).some((key) => key.toLowerCase() === "else")
+
 /** A block BeePEE can't write, as it writes it */
 function unknownBlock(block) {
     return { unknown: { type: block.type, data: block } }
@@ -1859,9 +1863,9 @@ class Item {
      * written right when saved)
      */
     writesConditionsOf(text, blocks) {
-        return [false, true].some((legacy) => {
+        return [{}, { elseWithInstance: true }, { legacy: true }].some((options) => {
             try {
-                const written = this.vbspTextWith(text, blocks, { legacy })
+                const written = this.vbspTextWith(text, blocks, options)
                 return sameEntries(
                     conditionEntries(written),
                     conditionEntries(text),
@@ -1940,9 +1944,13 @@ class Item {
      * Each top-level block as the VBSP condition it writes (with an Instance
      * test for this item), and null for a raw block (its text is its
      * condition). With legacy, as BeePEE wrote them before some blocks were
-     * fixed (see writesConditionsOf).
+     * fixed (see writesConditionsOf); with elseWithInstance, an If/Else's
+     * Else next to the Instance test, as BeePEE wrote it up to 1.2.0-beta.4.
      */
-    blockConditions(blockList, { legacy = false } = {}) {
+    blockConditions(
+        blockList,
+        { legacy = false, elseWithInstance = false } = {},
+    ) {
         const applyTimerLogic = (variableName, value) => {
             if (!variableName) return value
             const cleanVariableName = variableName.replace(/^\\$/, "")
@@ -2362,6 +2370,14 @@ class Item {
         return blockList.map((block) => {
             if (block.type === RAW_BLOCK) return null
             const vbsp = convertBlockToVbsp(block)
+            // An If/Else goes in a condition of its own, under the Instance
+            // test: BEE2 runs a condition's Else on every instance any of its
+            // tests fails on, the Instance test too, so next to it the Else
+            // ran on every other instance in the map (and on every instance
+            // of maps without the item)
+            if (hasElse(vbsp) && !legacy && !elseWithInstance) {
+                return { ...topLevelInstanceTest, Condition: vbsp }
+            }
             // A result goes in a Result block: on a condition's own level,
             // BEE2 reads everything but Condition and Switch as a test
             const result =
@@ -2373,6 +2389,40 @@ class Item {
                 ...(result ? { Result: vbsp } : vbsp),
             }
         })
+    }
+
+    /**
+     * Rewrite conditions BeePEE wrote with an If/Else's Else next to the
+     * item's Instance test (up to 1.2.0-beta.4), whose results BEE2 ran on
+     * every other instance in the map: only ones written from the editor's
+     * blocks, which are written the way they're fixed (see blockConditions)
+     * @returns {boolean} Whether they were rewritten
+     */
+    repairConditions() {
+        const { blocks, error } = this.getConditions()
+        if (error || !blocks.some((block) => block.type !== RAW_BLOCK)) {
+            return false
+        }
+        const elseNextToInstance = this.blockConditions(blocks, {
+            elseWithInstance: true,
+        }).some(hasElse)
+        if (!elseNextToInstance) return false
+        const current = this.readVbspText()
+        if (!current) return false
+        const fixed = this.vbspTextWith(current.text, blocks)
+        if (
+            sameEntries(
+                conditionEntries(fixed),
+                conditionEntries(current.text),
+            )
+        ) {
+            return false
+        }
+        this.saveConditions({ blocks })
+        console.log(
+            `Fixed the conditions of "${this.name}": its Else ran on every other instance in the map`,
+        )
+        return true
     }
 
     // Convert blocks to VBSP format

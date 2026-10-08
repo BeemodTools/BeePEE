@@ -161,6 +161,26 @@ class Package {
                 }
             }
 
+            // And the If/Else conditions BeePEE wrote whose Else ran on every
+            // other instance in the map, not in a VBSP config other items use
+            // too (its Instance test names one item)
+            const configUsers = new Map()
+            for (const item of this.items) {
+                const file = item.paths?.vbsp_cfg
+                configUsers.set(file, (configUsers.get(file) ?? 0) + 1)
+            }
+            for (const item of this.items) {
+                if (configUsers.get(item.paths?.vbsp_cfg) !== 1) continue
+                try {
+                    item.repairConditions()
+                } catch (error) {
+                    console.warn(
+                        `Failed to fix the conditions of "${item.name}":`,
+                        error,
+                    )
+                }
+            }
+
             // Auto-import VBSP instances for all items (runs once per item)
             await logger.section("Auto-importing VBSP instances", () => {
                 let totalImported = 0
