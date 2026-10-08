@@ -10,7 +10,12 @@ const path = require("path")
 const { parse } = require("../utils/keyvalues")
 const { convertJsonToVdf } = require("../packageManager")
 const { Package } = require("../models/package")
-const { MAX_COLORS, colorCount, withColors } = require("../utils/itemColors")
+const {
+    MAX_COLORS,
+    colorCount,
+    colorGroupId,
+    withColors,
+} = require("../utils/itemColors")
 
 /** Entries as [key, value or children] */
 const keyvalues = (entries) =>
@@ -321,6 +326,39 @@ describe("an item's colors", () => {
             ])
             // And they're the editor's blocks when it opens them again
             expect(item.getConditions().blocks).toEqual(blocks)
+        })
+
+        test("are fetched from their group's ID as it's written (BEE2 matches it exactly)", async () => {
+            const item = await loadItem()
+            fs.writeFileSync(
+                path.join(dir, "info.json"),
+                JSON.stringify({
+                    ...info(),
+                    ConfigGroup: {
+                        ID: "Item_Bomb",
+                        Name: "Bomb",
+                        Widget: color(1, "1 2 3"),
+                    },
+                }),
+            )
+            expect(colorGroupId(info(), "ITEM_BOMB")).toBe("Item_Bomb")
+            expect(colorGroupId({}, "ITEM_BOMB")).toBe("ITEM_BOMB")
+
+            item.saveConditions({
+                blocks: [
+                    {
+                        id: "set",
+                        type: "setColor",
+                        variable: "$item_color",
+                        color: "1",
+                    },
+                ],
+            })
+            const text = fs.readFileSync(
+                path.join(itemDir, "vbsp_config.cfg"),
+                "utf8",
+            )
+            expect(text).toMatch(/"ID"\s+"Item_Bomb"/)
         })
     })
 })

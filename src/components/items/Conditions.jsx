@@ -859,14 +859,34 @@ const validateSetInstVarBlock = (block) => {
     return errors
 }
 
-/** How many colors the item has (its Color variable; 0 without one) */
-const itemColorCount = (formData = {}) => {
-    const variables = Array.isArray(formData.variables)
+/** The item's variables, as a list */
+const itemVariables = (formData = {}) =>
+    Array.isArray(formData.variables)
         ? formData.variables
         : Object.values(formData.variables ?? {})
-    const color = variables.find((v) => v?.type === "colors")
+
+/** How many colors the item has (its Color variable; 0 without one) */
+const itemColorCount = (formData = {}) => {
+    const color = itemVariables(formData).find((v) => v?.type === "colors")
     if (!color) return 0
     return Math.min(30, Math.max(1, Math.round(Number(color.customValue) || 1)))
+}
+
+/**
+ * Whether the item's instance has the fixup: its own variables' are all it
+ * has for sure (BEE2 stops compiling on a color matching one it doesn't have)
+ */
+const itemHasFixup = (formData, fixup) => {
+    const name = String(fixup ?? "")
+        .replace(/^\$/, "")
+        .toLowerCase()
+    return itemVariables(formData).some(
+        (v) =>
+            v?.type !== "colors" &&
+            String(v?.fixupName ?? "")
+                .replace(/^\$/, "")
+                .toLowerCase() === name,
+    )
 }
 
 const validateSetColorBlock = (block, formData = {}) => {
@@ -894,6 +914,12 @@ const validateSetColorBlock = (block, formData = {}) => {
                 type: "error",
                 message:
                     "Set Color must have a fixup whose value picks the color",
+                field: "matchVariable",
+            })
+        } else if (!itemHasFixup(formData, block.matchVariable)) {
+            errors.push({
+                type: "error",
+                message: `Set Color matches ${block.matchVariable}, which this item doesn't have: BEE2 would stop compiling`,
                 field: "matchVariable",
             })
         }
@@ -2032,8 +2058,12 @@ function SetColorBlock({
     const matching = color === "match"
     // A color the item doesn't have anymore stays shown (and is warned about)
     const shown = Math.max(count, matching ? 0 : Number(color) || 1, 1)
-    // So does a fixup it doesn't have anymore
-    const fixups = availableVariables.filter((v) => v.fixupName)
+    // Only the item's own variables' fixups: BEE2 stops compiling on one
+    // its instance doesn't have (one it doesn't have anymore stays shown, and
+    // is an error)
+    const fixups = availableVariables.filter(
+        (v) => v.fixupName && !v.isSystemVariable,
+    )
     if (
         block.matchVariable &&
         !fixups.some((v) => v.fixupName === block.matchVariable)
@@ -2093,6 +2123,11 @@ function SetColorBlock({
                                     e.target.value,
                                 )
                             }>
+                            {fixups.length === 0 && (
+                                <MenuItem disabled value="__none">
+                                    Add a variable in the Variables tab first
+                                </MenuItem>
+                            )}
                             {fixups.map((variable) => (
                                 <MenuItem
                                     key={variable.fixupName}
@@ -2104,14 +2139,7 @@ function SetColorBlock({
                                             gap: 1,
                                             py: 0.5,
                                         }}>
-                                        {variable.isSystemVariable ? (
-                                            <Hive
-                                                fontSize="small"
-                                                sx={{ color: "#FFC107" }}
-                                            />
-                                        ) : (
-                                            <Code fontSize="small" />
-                                        )}
+                                        <Code fontSize="small" />
                                         <Typography variant="body2">
                                             {variable.displayName}
                                         </Typography>

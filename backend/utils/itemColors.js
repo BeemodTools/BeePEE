@@ -96,6 +96,16 @@ function colorCount(info, itemId) {
     return count
 }
 
+/**
+ * The ID of the item's config group as info.json has it, or the item's ID
+ * without one. GetItemConfig has to match it exactly: BEE2 keeps the
+ * players' colors under the group's ID as written.
+ */
+function colorGroupId(info, itemId) {
+    const group = itemGroup(info, itemId)
+    return group ? String(valueOf(group, "ID")) : itemId
+}
+
 /** A color's default ("25 25 230") */
 const defaultColor = (n) =>
     DEFAULT_COLORS[(Math.max(1, n) - 1) % DEFAULT_COLORS.length]
@@ -164,6 +174,7 @@ module.exports = {
     MAX_COLORS,
     colorWidgetId,
     colorCount,
+    colorGroupId,
     defaultColor,
     withColors,
 }

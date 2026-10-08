@@ -23,6 +23,7 @@ const {
 const {
     MAX_COLORS,
     colorCount,
+    colorGroupId,
     colorWidgetId,
     defaultColor,
     withColors,
@@ -1589,6 +1590,16 @@ class Item {
         }
     }
 
+    /** The ID of its colors' group as info.json has it (see colorGroupId) */
+    getColorGroupId() {
+        try {
+            const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
+            return colorGroupId(info, this.id)
+        } catch {
+            return this.id
+        }
+    }
+
     /**
      * Give the item `count` colors (0 takes them out): color widgets in its
      * config group in info.json, which BEE2 shows in its ItemVar menu
@@ -2371,8 +2382,9 @@ class Item {
                     // One of the item's colors (its config group), into a
                     // fixup: a set one ("color3"), or the one matching a
                     // fixup's value ("color$timer_delay": BEE2 fills in the
-                    // fixup). A value without its own color gets Color 1's
-                    // default.
+                    // fixup, and stops compiling when the instance has no
+                    // such fixup). A value without its own color gets
+                    // Color 1's default.
                     const withDollar = (name) =>
                         name.startsWith("$") ? name : `$${name}`
                     const into = String(block.variable ?? "").trim()
@@ -2389,7 +2401,7 @@ class Item {
                     if (!into || !name) return {}
                     return {
                         GetItemConfig: {
-                            ID: this.id,
+                            ID: this.getColorGroupId(),
                             Name: name,
                             ResultVar: withDollar(into),
                             Default: defaultColor(1),
