@@ -1,6 +1,18 @@
 {
     "versions": [
         {
+            "version": "1.2.0-beta.5",
+            "date": "2026-10-8",
+            "notes": [
+                "This is a BETA build - it is bug prone. If you encounter any bugs go to Help > Report Bug. Please stress test as much as you can!"
+            ],
+            "changes": {
+                "fixed": [
+                    "If/Else conditions running on every instance in the map, which could make maps leak (items are converted automatically when their package is opened, just export it again)"
+                ]
+            }
+        },
+        {
             "version": "1.2.0-beta.4",
             "date": "2026-10-8",
             "notes": [
