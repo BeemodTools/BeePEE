@@ -17,6 +17,38 @@ export const DEFAULT_TIMER_COLORS = Object.fromEntries(
     COLOR_TIMERS.map((timer) => [timer, EMPTY_COLOR]),
 )
 
+/** Colors to start from: BEE2's Cube Coloriser's (its timers 3 to 30) */
+export const PRESET_COLORS = [
+    "25 25 230",
+    "230 25 25",
+    "25 230 25",
+    "230 230 25",
+    "230 25 230",
+    "25 230 230",
+    "25 25 25",
+    "128 128 128",
+    "230 230 230",
+    "25 25 128",
+    "25 128 25",
+    "25 128 128",
+    "25 128 230",
+    "25 230 128",
+    "128 25 25",
+    "128 25 128",
+    "128 25 230",
+    "128 128 25",
+    "128 128 230",
+    "128 230 25",
+    "128 230 128",
+    "128 230 230",
+    "230 25 128",
+    "230 128 25",
+    "230 128 128",
+    "230 128 230",
+    "230 230 128",
+    "32 192 32",
+].map(rgbToHex)
+
 /** "255 128 0" (how BEE2 saves colors) as "#ff8000" */
 export function rgbToHex(rgb) {
     const parts = String(rgb ?? "")

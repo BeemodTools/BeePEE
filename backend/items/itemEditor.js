@@ -241,9 +241,9 @@ function createTimerColorsWindow(item, colors) {
 
     const editorWindow = openEditors.get(item.id)
     const window = new BrowserWindow({
-        // The 28 swatches, and the buttons
-        width: 560,
-        height: 400,
+        // The 28 swatches, the color picker beside them, and the buttons
+        width: 880,
+        height: 520,
         useContentSize: true,
         title: `Default Colors: ${item.name}`,
         backgroundColor: "#1e1e1e",
