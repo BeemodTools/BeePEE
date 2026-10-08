@@ -5,7 +5,11 @@
 const { dialog } = require("electron")
 const { packages } = require("../packageManager")
 const { findPortal2Resources } = require("../data")
-const { sendItemUpdateToEditor } = require("../items/itemEditor")
+const {
+    sendItemUpdateToEditor,
+    createTimerColorsWindow,
+    sendTimerColorsToEditor,
+} = require("../items/itemEditor")
 
 function register(ipcMain, mainWindow) {
     // Input management handlers
@@ -269,6 +273,36 @@ function register(ipcMain, mainWindow) {
             return { success: false, error: error.message }
         }
     })
+
+    // The Default Colors window of an item's Color variable, with the
+    // colors its editor has
+    ipcMain.handle("open-timer-colors", async (event, { itemId, colors }) => {
+        try {
+            const item = packages
+                .flatMap((p) => p.items)
+                .find((i) => i.id === itemId)
+            if (!item) throw new Error("Item not found")
+            createTimerColorsWindow(item, colors)
+            return { success: true }
+        } catch (error) {
+            console.error(
+                `Failed to open the Default Colors of ${itemId}:`,
+                error,
+            )
+            return { success: false, error: error.message }
+        }
+    })
+
+    // Its colors, to the item's editor (which saves them with the item)
+    ipcMain.handle(
+        "timer-colors-send-to-editor",
+        async (event, { itemId, colors }) => {
+            if (sendTimerColorsToEditor(itemId, colors)) {
+                return { success: true }
+            }
+            return { success: false, error: "The item's editor isn't open" }
+        },
+    )
 
     // Instance names handlers
     ipcMain.handle("get-instance-names", async (event, { itemId }) => {

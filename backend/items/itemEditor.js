@@ -2,6 +2,7 @@ const openEditors = new Map()
 const openSignageEditors = new Map() // Track signage editor windows
 const openModelPreviewWindows = new Map() // Track model preview windows
 const openIconMakers = new Map() // Track icon maker windows (one per item)
+const openTimerColors = new Map() // Track Default Colors windows (one per item)
 let createItemWindow = null // Track the create item window
 let createPackageWindow = null // Track the create package window
 let signageDesignerWindow = null // Track the signage designer window
@@ -117,8 +118,10 @@ function createItemEditor(item, mainWindow) {
 
     window.on("closed", () => {
         openEditors.delete(item.id)
-        // Its icon maker hands the icons it makes to this window
+        // Its icon maker hands the icons it makes to this window, and its
+        // Default Colors window the colors
         closeIconMakerWindow(item.id)
+        closeTimerColorsWindow(item.id)
     })
 
     if (isDev) {
@@ -216,6 +219,87 @@ function sendMadeIconToEditor(itemId, icon) {
     const editorWindow = openEditors.get(itemId)
     if (editorWindow && !editorWindow.isDestroyed()) {
         editorWindow.webContents.send("icon-made", icon)
+        editorWindow.focus()
+        return true
+    }
+    return false
+}
+
+/**
+ * An item's Default Colors window (item editor > Variables > Color): the
+ * color players start with for each timer value in BEE2's ItemVar menu.
+ * @param {Object} item
+ * @param {Object} colors - Timer value to "R G B", as the item's editor has them
+ */
+function createTimerColorsWindow(item, colors) {
+    const existing = openTimerColors.get(item.id)
+    if (existing && !existing.isDestroyed()) {
+        if (existing.isMinimized()) existing.restore()
+        existing.focus()
+        return existing
+    }
+
+    const editorWindow = openEditors.get(item.id)
+    const window = new BrowserWindow({
+        // The 28 swatches, and the buttons
+        width: 560,
+        height: 400,
+        useContentSize: true,
+        title: `Default Colors: ${item.name}`,
+        backgroundColor: "#1e1e1e",
+        // Above the item's editor
+        parent:
+            editorWindow && !editorWindow.isDestroyed()
+                ? editorWindow
+                : undefined,
+        webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            preload: path.join(__dirname, "..", "preload.js"),
+        },
+        skipTaskbar: false,
+        minimizable: false,
+        maximizable: false,
+        resizable: false,
+        autoHideMenuBar: true,
+    })
+
+    openTimerColors.set(item.id, window)
+
+    window.on("closed", () => {
+        if (openTimerColors.get(item.id) === window) {
+            openTimerColors.delete(item.id)
+        }
+    })
+
+    const query = {
+        route: "timer-colors",
+        itemId: item.id,
+        itemName: item.name,
+        colors: JSON.stringify(colors ?? {}),
+    }
+    if (isDev) {
+        window.loadURL(`http://localhost:5173/?${new URLSearchParams(query)}`)
+    } else {
+        const appPath = app.getAppPath()
+        window.loadFile(path.join(appPath, "dist", "index.html"), { query })
+    }
+
+    window.setMenuBarVisibility(false)
+    return window
+}
+
+function closeTimerColorsWindow(itemId) {
+    const window = openTimerColors.get(itemId)
+    if (window && !window.isDestroyed()) window.close()
+}
+
+// Hands the Default Colors window's colors to the item's editor window,
+// which applies them on Save. Returns false when that editor isn't open.
+function sendTimerColorsToEditor(itemId, colors) {
+    const editorWindow = openEditors.get(itemId)
+    if (editorWindow && !editorWindow.isDestroyed()) {
+        editorWindow.webContents.send("timer-colors-picked", colors)
         editorWindow.focus()
         return true
     }
@@ -1060,6 +1144,8 @@ module.exports = {
     openEditors,
     createIconMakerWindow,
     sendMadeIconToEditor,
+    createTimerColorsWindow,
+    sendTimerColorsToEditor,
     createSignageEditor,
     sendSignageUpdateToEditor,
     sendStagedDesignToEditor,

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import {
     Box,
     Typography,
@@ -33,7 +33,6 @@ import {
     Info,
     Code,
     Palette,
-    RestartAlt,
 } from "@mui/icons-material"
 import {
     DndContext,
@@ -51,12 +50,7 @@ import {
 } from "@dnd-kit/sortable"
 import { useSortable } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import {
-    COLOR_TIMERS,
-    DEFAULT_TIMER_COLORS,
-    rgbToHex,
-    hexToRgb,
-} from "../../utils/timerColors"
+import { DEFAULT_TIMER_COLORS } from "../../utils/timerColors"
 
 // Custom modifier to restrict drag movement to parent bounds
 const restrictToParentBounds = ({
@@ -76,82 +70,11 @@ const restrictToParentBounds = ({
     }
 }
 
-/**
- * An item's default colors, one for each timer value, where BEE2's ItemVar
- * menu has them (rows of 10, from timer 3): click one to change it
- */
-function TimerColors({ colors, onChange }) {
-    const current = { ...DEFAULT_TIMER_COLORS, ...colors }
-    const coloriser = COLOR_TIMERS.every(
-        (timer) =>
-            rgbToHex(current[timer]) === rgbToHex(DEFAULT_TIMER_COLORS[timer]),
-    )
-
-    return (
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
-            <Box
-                sx={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(10, 14px)",
-                    gap: "3px",
-                }}>
-                {COLOR_TIMERS.map((timer) => (
-                    <Tooltip key={timer} title={`Timer ${timer}`}>
-                        <Box
-                            component="label"
-                            sx={{
-                                gridColumn: ((Number(timer) - 1) % 10) + 1,
-                                gridRow:
-                                    Math.floor((Number(timer) - 1) / 10) + 1,
-                                position: "relative",
-                                width: 14,
-                                height: 14,
-                                borderRadius: "3px",
-                                boxSizing: "border-box",
-                                border: "1px solid #555",
-                                cursor: "pointer",
-                                backgroundColor: rgbToHex(current[timer]),
-                            }}>
-                            <input
-                                type="color"
-                                value={rgbToHex(current[timer])}
-                                onChange={(e) =>
-                                    onChange({
-                                        ...current,
-                                        [timer]: hexToRgb(e.target.value),
-                                    })
-                                }
-                                style={{
-                                    position: "absolute",
-                                    inset: 0,
-                                    width: "100%",
-                                    height: "100%",
-                                    opacity: 0,
-                                    cursor: "pointer",
-                                }}
-                            />
-                        </Box>
-                    </Tooltip>
-                ))}
-            </Box>
-            {!coloriser && (
-                <Tooltip title="Use the Cube Coloriser's colors">
-                    <IconButton
-                        size="small"
-                        onClick={() => onChange({ ...DEFAULT_TIMER_COLORS })}>
-                        <RestartAlt fontSize="small" />
-                    </IconButton>
-                </Tooltip>
-            )}
-        </Box>
-    )
-}
-
 // Sortable Variable Item Component
 function SortableVariableItem({
     variable,
     onUpdateValue,
-    onUpdateColors,
+    onEditColors,
     onDelete,
 }) {
     const {
@@ -235,17 +158,17 @@ function SortableVariableItem({
                                 alignItems: "center",
                                 gap: 1,
                             }}>
-                            <Typography
-                                variant="caption"
-                                color="text.secondary"
-                                sx={{
-                                    fontSize: "0.7rem",
-                                    whiteSpace: "nowrap",
-                                }}>
-                                {variable.type === "colors"
-                                    ? "Default colors:"
-                                    : "Default value:"}
-                            </Typography>
+                            {variable.type !== "colors" && (
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    sx={{
+                                        fontSize: "0.7rem",
+                                        whiteSpace: "nowrap",
+                                    }}>
+                                    Default value:
+                                </Typography>
+                            )}
                             {variable.type === "boolean" ? (
                                 <Checkbox
                                     checked={variable.customValue === "1"}
@@ -299,12 +222,14 @@ function SortableVariableItem({
                                     </Select>
                                 </FormControl>
                             ) : variable.type === "colors" ? (
-                                <TimerColors
-                                    colors={variable.colors}
-                                    onChange={(colors) =>
-                                        onUpdateColors(variable.id, colors)
-                                    }
-                                />
+                                <Button
+                                    size="small"
+                                    variant="outlined"
+                                    startIcon={<Palette fontSize="small" />}
+                                    onClick={() => onEditColors(variable)}
+                                    sx={{ height: 28, fontSize: "0.75rem" }}>
+                                    Default Colors
+                                </Button>
                             ) : (
                                 <TextField
                                     size="small"
@@ -598,6 +523,36 @@ function Variables({ item, formData, onUpdateVariables }) {
         onUpdateVariables(updatedVariables)
     }
 
+    // Its Default Colors window, with the colors it has here
+    const handleEditColors = async (variable) => {
+        try {
+            const result = await window.package.openTimerColors(
+                item.id,
+                variable.colors,
+            )
+            if (!result?.success) throw new Error(result?.error)
+        } catch (error) {
+            console.error(
+                `Failed to open the Default Colors of item "${item?.name}":`,
+                error,
+            )
+        }
+    }
+
+    // The colors that window saves
+    const colorsPickedRef = useRef(null)
+    colorsPickedRef.current = (colors) => {
+        const color = variables.find((v) => v.type === "colors")
+        if (color) handleUpdateVariableColors(color.id, colors)
+    }
+    useEffect(
+        () =>
+            window.package?.onTimerColorsPicked?.((colors) =>
+                colorsPickedRef.current(colors),
+            ),
+        [],
+    )
+
     const handleDragEnd = (event) => {
         const { active, over } = event
 
@@ -693,9 +648,7 @@ function Variables({ item, formData, onUpdateVariables }) {
                                           onUpdateValue={
                                               handleUpdateVariableValue
                                           }
-                                          onUpdateColors={
-                                              handleUpdateVariableColors
-                                          }
+                                          onEditColors={handleEditColors}
                                           onDelete={handleDeleteVariable}
                                       />
                                   ))

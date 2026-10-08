@@ -24,7 +24,7 @@ const {
     COLOR_WIDGET,
     FIRST_TIMER,
     LAST_TIMER,
-    DEFAULT_COLORS,
+    EMPTY_COLOR,
     hasColors,
     colorDefaults,
     colorGroupId,
@@ -2397,7 +2397,7 @@ class Item {
                     // compiling when the instance has no such fixup), or the
                     // one for a set timer value ("color[7]"). The colors are
                     // for 3 to 30: below 3 (an infinite timer) gets 3's, and
-                    // above 30 the default.
+                    // above 30 none (empty).
                     const withDollar = (name) =>
                         name.startsWith("$") ? name : `$${name}`
                     const into = String(block.variable ?? "").trim()
@@ -2407,7 +2407,7 @@ class Item {
                             ID: this.getColorGroupId(),
                             Name: `${COLOR_WIDGET}[${timer}]`,
                             ResultVar: withDollar(into),
-                            Default: DEFAULT_COLORS[FIRST_TIMER],
+                            Default: EMPTY_COLOR,
                         },
                     })
                     if ((block.color ?? "match") !== "match") {

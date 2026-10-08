@@ -46,14 +46,16 @@ describe("an item's colors", () => {
         expect(hasColors(info, "item_bomb")).toBe(true)
         expect(hasColors(info, "ITEM_OTHER")).toBe(false)
 
-        // A color for each timer value BEE2 has one for, 3 to 30: the Cube
-        // Coloriser's
-        expect(Object.keys(DEFAULT_COLORS)).toEqual(
-            Array.from({ length: 28 }, (_, i) => String(i + 3)),
+        // A color for each timer value BEE2 has one for, 3 to 30: empty (the
+        // background of BEE2's ItemVar menu) until the item sets them
+        expect(DEFAULT_COLORS).toEqual(
+            Object.fromEntries(
+                Array.from({ length: 28 }, (_, i) => [
+                    String(i + 3),
+                    "240 240 240",
+                ]),
+            ),
         )
-        expect(DEFAULT_COLORS[3]).toBe("25 25 230")
-        expect(DEFAULT_COLORS[11]).toBe("230 230 230")
-        expect(DEFAULT_COLORS[30]).toBe("32 192 32")
     })
 
     test("keep the group's other widgets, other groups, and how the colors were written", () => {
@@ -132,7 +134,7 @@ describe("an item's colors", () => {
         ).toEqual({ ID: "TEST" })
     })
 
-    test("have defaults the item sets, each timer value's (the Cube Coloriser's for the rest)", () => {
+    test("have defaults the item sets, each timer value's (empty for the rest)", () => {
         const info = {}
         withColors(info, {
             itemId: "ITEM_BOMB",
@@ -367,7 +369,7 @@ describe("an item's colors", () => {
                     ["ID", "ITEM_BOMB"],
                     ["Name", name],
                     ["ResultVar", into],
-                    ["Default", "25 25 230"],
+                    ["Default", "240 240 240"],
                 ],
             ]
             const instance = ["Instance", "<ITEM_BOMB>"]

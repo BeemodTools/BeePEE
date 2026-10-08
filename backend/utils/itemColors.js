@@ -1,6 +1,7 @@
 /**
  * An item's colors (its Color variable): a color for each timer value, 3 to
  * 30, that players pick in BEE2's ItemVar menu, like BEE2's Cube Coloriser.
+ * The item sets the ones they start with (its Default Colors window).
  * It's a timer color widget in the item's own config group in the package's
  * info.json. (A color widget without UseTimer never shows its swatch in
  * BEE2's menu, and one with HasInf fails to show at all, as of BEE2 4.46.1.)
@@ -17,7 +18,7 @@
  *           "Label" "Color"
  *           "Type" "color"
  *           "UseTimer" "1"
- *           "Default" { "3" "25 25 230" ... "30" "32 192 32" }
+ *           "Default" { "3" "240 240 240" ... "30" "240 240 240" }
  *       }
  *   }
  */
@@ -30,39 +31,18 @@ const FIRST_TIMER = 3
 const LAST_TIMER = 30
 
 /**
- * Each timer value's color until players pick their own, unless the item
- * sets its own: the Cube Coloriser's (src/utils/timerColors.js has them too)
+ * A color nobody set: the background of BEE2's ItemVar menu, so its swatch
+ * looks empty there (src/utils/timerColors.js has it too)
  */
-const DEFAULT_COLORS = {
-    3: "25 25 230",
-    4: "230 25 25",
-    5: "25 230 25",
-    6: "230 230 25",
-    7: "230 25 230",
-    8: "25 230 230",
-    9: "25 25 25",
-    10: "128 128 128",
-    11: "230 230 230",
-    12: "25 25 128",
-    13: "25 128 25",
-    14: "25 128 128",
-    15: "25 128 230",
-    16: "25 230 128",
-    17: "128 25 25",
-    18: "128 25 128",
-    19: "128 25 230",
-    20: "128 128 25",
-    21: "128 128 230",
-    22: "128 230 25",
-    23: "128 230 128",
-    24: "128 230 230",
-    25: "230 25 128",
-    26: "230 128 25",
-    27: "230 128 128",
-    28: "230 128 230",
-    29: "230 230 128",
-    30: "32 192 32",
-}
+const EMPTY_COLOR = "240 240 240"
+
+/** Each timer value's color until the item sets its own: empty */
+const DEFAULT_COLORS = Object.fromEntries(
+    Array.from({ length: LAST_TIMER - FIRST_TIMER + 1 }, (_, i) => [
+        String(FIRST_TIMER + i),
+        EMPTY_COLOR,
+    ]),
+)
 
 /** A JSON value that may be one entry or a list of them, as a list */
 const asList = (value) =>
@@ -134,7 +114,7 @@ function rgbOf(value) {
 
 /**
  * Every timer value's default color: `colors`' (an object of timer value
- * to color, or one color for all), and the Cube Coloriser's for the rest
+ * to color, or one color for all), and empty for the rest
  */
 function fullColors(colors) {
     const each = (timer) =>
@@ -210,6 +190,7 @@ module.exports = {
     COLOR_WIDGET,
     FIRST_TIMER,
     LAST_TIMER,
+    EMPTY_COLOR,
     DEFAULT_COLORS,
     hasColors,
     colorDefaults,
