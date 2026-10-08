@@ -110,7 +110,9 @@ describe("Item", () => {
                 packagePath: mockPackagePath,
                 itemJSON,
             })
-        }).toThrow("No item folder found for item TEST_ITEM")
+        }).toThrow(
+            "Item TEST_ITEM: info.json names no folder for it (Version > Styles)",
+        )
     })
 
     test("should throw error when editoritems.json missing", () => {
@@ -123,7 +125,7 @@ describe("Item", () => {
                 packagePath: mockPackagePath,
                 itemJSON: mockItemJSON,
             })
-        }).toThrow("Missing editoritems.json!")
+        }).toThrow("Item TEST_ITEM: items/test_folder has no editoritems")
     })
 
     test("should throw error when properties.json missing", () => {
@@ -136,7 +138,7 @@ describe("Item", () => {
                 packagePath: mockPackagePath,
                 itemJSON: mockItemJSON,
             })
-        }).toThrow("Missing properties.json!")
+        }).toThrow("Item TEST_ITEM: items/test_folder has no properties")
     })
 
     test("should get raw editor items", () => {

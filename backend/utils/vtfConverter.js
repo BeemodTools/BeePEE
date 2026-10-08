@@ -64,7 +64,10 @@ async function prepareImageForVTF(imagePath, tempPath) {
 
         return tempPath
     } catch (error) {
-        console.error(`Failed to prepare image: ${error.message}`)
+        console.warn(
+            `Failed to resize ${path.basename(imagePath)} for VTF, using it as is:`,
+            error,
+        )
         // If preparation fails, use original image
         return imagePath
     }
@@ -86,7 +89,8 @@ async function convertImageToVTF(imagePath, outputPath, options = {}) {
                 fs.unlinkSync(outputPath)
             } catch (removeError) {
                 console.warn(
-                    `Failed to remove existing VTF file: ${removeError.message}`,
+                    `Failed to delete the old ${path.basename(outputPath)}, overwriting it instead:`,
+                    removeError,
                 )
                 // Continue anyway - MareTF might still be able to overwrite
             }
@@ -133,7 +137,9 @@ async function convertImageToVTF(imagePath, outputPath, options = {}) {
 
                 // Set up timeout to kill process if it takes too long
                 timeout = setTimeout(() => {
-                    console.warn("MareTF process timeout, killing...")
+                    console.warn(
+                        `MareTF took over 60 s to convert ${path.basename(imagePath)}, stopping it`,
+                    )
                     if (maretfProcess && !maretfProcess.killed) {
                         maretfProcess.kill("SIGTERM")
                     }
@@ -199,9 +205,7 @@ async function convertImageToVTF(imagePath, outputPath, options = {}) {
                     )
                 }
             } catch (maretfError) {
-                console.error(
-                    `MareTF conversion failed: ${maretfError.message}`,
-                )
+                // Not logged here: the outer catch logs the error thrown below
 
                 // Clean up timeout and process
                 if (timeout) {
@@ -232,7 +236,7 @@ async function convertImageToVTF(imagePath, outputPath, options = {}) {
             "VTF conversion failed - Source engine requires VTF format for textures",
         )
     } catch (error) {
-        console.error(`VTF conversion failed: ${error.message}`)
+        // Not logged here: every caller logs the failure in its own words
 
         // Clean up temporary processed image if it was created
         if (
@@ -285,7 +289,7 @@ $model 1
 
         fs.writeFileSync(vmtPath, vmtContent, "utf-8")
     } catch (error) {
-        console.error(`Failed to create VMT file: ${error.message}`)
+        console.error(`Failed to create ${vmtPath}:`, error)
         throw error
     }
 }

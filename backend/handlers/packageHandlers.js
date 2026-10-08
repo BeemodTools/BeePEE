@@ -13,6 +13,7 @@ const {
     Package,
     getCurrentPackageDir,
     savePackageAsBpee,
+    showPackageOpenError,
 } = require("../packageManager")
 const {
     createPackageCreationWindow,
@@ -20,6 +21,15 @@ const {
 } = require("../items/itemEditor")
 const { getPackagesDir } = require("../utils/packagesDir")
 const { getLastSavedBpeePath, setLastSavedBpeePath } = require("./shared")
+const {
+    problemWith,
+    readBeePackage,
+    writeBeePackage,
+    searchBeePm,
+    publishedOnBeePm,
+} = require("../utils/beePackage")
+const { beePmHandle } = require("../utils/beePmApp")
+const { hasAuthor } = require("../utils/packageAuthor")
 
 function register(ipcMain, mainWindow) {
     // Open create package window
@@ -28,7 +38,7 @@ function register(ipcMain, mainWindow) {
             createPackageCreationWindow(mainWindow)
             return { success: true }
         } catch (error) {
-            console.error("Failed to open package creation window:", error)
+            console.error("Failed to open the package creation window:", error)
             throw error
         }
     })
@@ -53,11 +63,18 @@ function register(ipcMain, mainWindow) {
     // Create package
     ipcMain.handle(
         "create-package",
-        async (event, { name, description, author }) => {
+        async (event, { name, description, author, beePackage }) => {
             try {
                 if (!name?.trim()) {
                     throw new Error("Package name is required")
                 }
+                // Whoever's logged in to BeePM, else who they typed. It can't
+                // be changed once the package is made.
+                const packageAuthor = beePmHandle() ?? author?.trim()
+                if (!packageAuthor) throw new Error("Author is required")
+                // Its bee-package.json (BeePM's), checked before anything's made
+                const beePackageProblem = beePackage && problemWith(beePackage)
+                if (beePackageProblem) throw new Error(beePackageProblem)
 
                 const packagesDir = getPackagesDir()
 
@@ -90,7 +107,7 @@ function register(ipcMain, mainWindow) {
                     ID: packageId,
                     Name: name,
                     Desc: description || "",
-                    Author: author || "Unknown",
+                    Author: packageAuthor,
                     Item: [],
                 }
 
@@ -99,6 +116,8 @@ function register(ipcMain, mainWindow) {
                     infoPath,
                     JSON.stringify(packageInfo, null, 2),
                 )
+                if (beePackage) writeBeePackage(packagePath, beePackage)
+                console.log(`Created package "${name}" in ${packagePath}`)
 
                 // Load the package
                 const pkg = await loadPackage(infoPath)
@@ -117,8 +136,13 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true, packageId }
             } catch (error) {
-                console.error("Failed to create package:", error)
-                dialog.showErrorBox("Failed to Create Package", error.message)
+                console.error(`Failed to create package "${name}":`, error)
+                await showPackageOpenError(
+                    null,
+                    "Failed to Create Package",
+                    error.message,
+                    error,
+                )
                 return { success: false, error: error.message }
             }
         },
@@ -138,6 +162,11 @@ function register(ipcMain, mainWindow) {
             }
 
             const packageInfo = JSON.parse(fs.readFileSync(infoPath, "utf-8"))
+            // Its bee-package.json fields (made from its name when it has none)
+            const { exists: beePackageExists, ...beePackage } = readBeePackage(
+                currentPackageDir,
+                packageInfo.Name,
+            )
             return {
                 success: true,
                 info: {
@@ -147,16 +176,21 @@ function register(ipcMain, mainWindow) {
                     author: packageInfo.Author,
                     path: currentPackageDir,
                 },
+                // Without one, it can be set once here
+                authorSet: hasAuthor(packageInfo.Author),
+                beePackage,
+                beePackageExists,
             }
         } catch (error) {
             return { success: false, error: error.message }
         }
     })
 
-    // Update package info
+    // Update package info, and its bee-package.json with beePackage. The
+    // author is set once: when the package is made, or here when it has none.
     ipcMain.handle(
         "update-package-info",
-        async (event, { name, description, author }) => {
+        async (event, { name, description, author, beePackage }) => {
             try {
                 const currentPackageDir = getCurrentPackageDir()
                 if (!currentPackageDir) {
@@ -167,6 +201,11 @@ function register(ipcMain, mainWindow) {
                 if (!fs.existsSync(infoPath)) {
                     return { success: false, error: "info.json not found" }
                 }
+                // Checked before anything's written
+                const beePackageProblem = beePackage && problemWith(beePackage)
+                if (beePackageProblem) {
+                    return { success: false, error: beePackageProblem }
+                }
 
                 const packageInfo = JSON.parse(
                     fs.readFileSync(infoPath, "utf-8"),
@@ -175,9 +214,15 @@ function register(ipcMain, mainWindow) {
                 // Update fields
                 if (name !== undefined) packageInfo.Name = name
                 if (description !== undefined) packageInfo.Desc = description
-                if (author !== undefined) packageInfo.Author = author
+                if (author?.trim() && !hasAuthor(packageInfo.Author)) {
+                    packageInfo.Author = author.trim()
+                }
 
                 fs.writeFileSync(infoPath, JSON.stringify(packageInfo, null, 2))
+                if (beePackage) writeBeePackage(currentPackageDir, beePackage)
+
+                // Written to the working package, not the .bpee
+                global.titleManager?.setUnsavedChanges(true)
 
                 return { success: true }
             } catch (error) {
@@ -205,7 +250,6 @@ function register(ipcMain, mainWindow) {
 
         try {
             const originalFilePath = result.filePaths[0]
-            console.log("Importing package from:", originalFilePath)
 
             await importPackage(originalFilePath)
 
@@ -230,7 +274,7 @@ function register(ipcMain, mainWindow) {
                     try {
                         return fs.statSync(filepath).isDirectory()
                     } catch (error) {
-                        console.error(`Error checking path: ${filepath}`, error)
+                        console.error(`Failed to check ${filepath}:`, error)
                         return false
                     }
                 })
@@ -238,7 +282,10 @@ function register(ipcMain, mainWindow) {
                     try {
                         return fs.statSync(b).mtime - fs.statSync(a).mtime
                     } catch (error) {
-                        console.error(`Error sorting directories:`, error)
+                        console.error(
+                            "Failed to sort the package directories by date:",
+                            error,
+                        )
                         return 0
                     }
                 })
@@ -249,9 +296,6 @@ function register(ipcMain, mainWindow) {
 
             const extractedPackageDir = packageDirs[0]
             const infoPath = path.join(extractedPackageDir, "info.json")
-
-            console.log("Extracted package directory:", extractedPackageDir)
-            console.log("Loading from info.json:", infoPath)
 
             mainWindow.webContents.send("package-loading-progress", {
                 progress: 80,
@@ -272,7 +316,10 @@ function register(ipcMain, mainWindow) {
 
             return { success: true }
         } catch (error) {
-            console.error("Failed to import package:", error)
+            // Import and load failures are logged with their stack already
+            console.error(
+                `Failed to import ${result.filePaths[0]}: ${error.message}`,
+            )
             throw error
         }
     })
@@ -327,84 +374,23 @@ function register(ipcMain, mainWindow) {
         }
     })
 
-    // Get bee-package.json info (or defaults from info.json)
-    ipcMain.handle("get-bee-package-info", async () => {
+    // Who's logged in to BeePM on this PC: a new package's author
+    ipcMain.handle("get-beepm-handle", async () => ({ handle: beePmHandle() }))
+
+    // The package BeePM has with this BEE2 ID and its highest version, for
+    // the next version (null when BeePM has none)
+    ipcMain.handle("beepm-published", async (event, beeId) => {
         try {
-            const currentPackageDir = getCurrentPackageDir()
-            if (!currentPackageDir) {
-                return { success: false, error: "No package loaded" }
-            }
-
-            const beePackagePath = path.join(currentPackageDir, "bee-package.json")
-            const infoPath = path.join(currentPackageDir, "info.json")
-
-            // Check if bee-package.json exists
-            if (fs.existsSync(beePackagePath)) {
-                const beePackage = JSON.parse(fs.readFileSync(beePackagePath, "utf-8"))
-                return { success: true, info: beePackage, exists: true }
-            }
-
-            // Generate defaults from info.json
-            if (!fs.existsSync(infoPath)) {
-                return { success: false, error: "info.json not found" }
-            }
-
-            const packageInfo = JSON.parse(fs.readFileSync(infoPath, "utf-8"))
-
-            // Generate default bee-package.json structure
-            const defaultBeePackage = {
-                id: packageInfo.ID || "",
-                name: packageInfo.Name || "",
-                author: packageInfo.Author || "",
-                version: "1.0.0",
-                compatibleWith: ">=2.4.41",
-            }
-
-            return { success: true, info: defaultBeePackage, exists: false }
+            return { success: true, published: await publishedOnBeePm(beeId) }
         } catch (error) {
             return { success: false, error: error.message }
         }
     })
 
-    // Save bee-package.json
-    ipcMain.handle("save-bee-package-info", async (event, beePackageData) => {
+    // Packages in BeePM, for what a package needs
+    ipcMain.handle("search-beepm-packages", async (event, query) => {
         try {
-            const currentPackageDir = getCurrentPackageDir()
-            if (!currentPackageDir) {
-                return { success: false, error: "No package loaded" }
-            }
-
-            const beePackagePath = path.join(currentPackageDir, "bee-package.json")
-
-            // Validate required fields
-            if (!beePackageData.id?.trim()) {
-                return { success: false, error: "Package ID is required" }
-            }
-            if (!beePackageData.name?.trim()) {
-                return { success: false, error: "Package name is required" }
-            }
-            if (!beePackageData.author?.trim()) {
-                return { success: false, error: "Author is required" }
-            }
-            if (!beePackageData.version?.trim()) {
-                return { success: false, error: "Version is required" }
-            }
-
-            // Build the bee-package.json object
-            const beePackage = {
-                id: beePackageData.id.trim(),
-                name: beePackageData.name.trim(),
-                author: beePackageData.author.trim(),
-                version: beePackageData.version.trim(),
-                compatibleWith: beePackageData.compatibleWith?.trim() || ">=2.4.41",
-            }
-
-            fs.writeFileSync(beePackagePath, JSON.stringify(beePackage, null, 2))
-
-            // Written to the working package, not the .bpee
-            global.titleManager?.setUnsavedChanges(true)
-
-            return { success: true }
+            return { success: true, packages: await searchBeePm(query) }
         } catch (error) {
             return { success: false, error: error.message }
         }

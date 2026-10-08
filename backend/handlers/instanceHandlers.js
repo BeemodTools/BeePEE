@@ -10,54 +10,8 @@ const { packages } = require("../packageManager")
 const { sendItemUpdateToEditor } = require("../items/itemEditor")
 const { Instance } = require("../items/Instance")
 const { vmfStatsCache } = require("../utils/vmfParser")
+const { instanceBehindSurface } = require("../utils/behindSurface")
 const { getHammerPath, getHammerAvailability, findPortal2Dir } = require("../data")
-const { extractAssetsFromVMF, getPortal2SearchDirs, assetExistsInPortal2 } = require("../utils/vmfAssetExtractor")
-const { execFile } = require("child_process")
-const { promisify } = require("util")
-const execFileAsync = promisify(execFile)
-
-/**
- * Get MDL material dependencies using find_mdl_deps.exe
- * @param {string} mdlPath - Path to the MDL file (e.g., "models/props/cube.mdl")
- * @param {string} portal2Dir - Path to Portal 2 directory
- * @returns {Promise<Object>} Object with materials array or error
- */
-async function getMdlDependencies(mdlPath, portal2Dir) {
-    try {
-        // Use app.isPackaged to pick the correct path - don't rely on fs.existsSync
-        // because ASAR transparency makes files inside the archive appear to exist,
-        // but native executables can't run from inside ASAR
-        const isDev = !app.isPackaged
-        const exePath = isDev
-            ? path.join(__dirname, "..", "libs", "areng_mdlDepend", "find_mdl_deps.exe")
-            : path.join(process.resourcesPath || "", "extraResources", "areng_mdlDepend", "find_mdl_deps.exe")
-
-        if (!fs.existsSync(exePath)) {
-            console.log("find_mdl_deps.exe not found, skipping MDL dependency check")
-            return { success: false, error: "find_mdl_deps.exe not found", materials: [] }
-        }
-
-        // Game directory is the portal2 subfolder
-        const gameDir = path.join(portal2Dir, "portal2")
-
-        // Run the executable
-        const { stdout, stderr } = await execFileAsync(exePath, [mdlPath, gameDir], {
-            timeout: 30000, // 30 second timeout
-            maxBuffer: 10 * 1024 * 1024 // 10MB buffer
-        })
-
-        if (stderr) {
-            console.warn("find_mdl_deps.exe stderr:", stderr)
-        }
-
-        // Parse JSON output
-        const result = JSON.parse(stdout)
-        return result
-    } catch (error) {
-        console.warn(`Failed to get MDL dependencies for ${mdlPath}:`, error.message)
-        return { success: false, error: error.message, materials: [] }
-    }
-}
 
 /**
  * Helper function to fix instance paths by removing BEE2/ prefix
@@ -85,7 +39,9 @@ function fixItemInstances(item) {
         const newPath = fixInstancePath(oldPath)
 
         if (oldPath !== newPath) {
-            console.log(`Fixing instance path: ${oldPath} -> ${newPath}`)
+            console.log(
+                `Fixed an instance path of "${item.name}": ${oldPath} -> ${newPath}`,
+            )
             instanceData.Name = newPath
             hasChanges = true
         }
@@ -123,17 +79,17 @@ function register(ipcMain, mainWindow) {
             }
 
             const newIndex = item.addInstance(instanceName)
+            console.log(
+                `Added instance ${newIndex} (${instanceName}) to "${item.name}"`,
+            )
 
             const updatedItem = item.toJSONWithExistence()
-            console.log("Sending updated item after add instance:", {
-                id: updatedItem.id,
-                instances: updatedItem.instances,
-            })
             mainWindow.webContents.send("item-updated", updatedItem)
             sendItemUpdateToEditor(itemId, updatedItem)
 
             return { success: true, index: newIndex }
         } catch (error) {
+            console.error(`Failed to add instance ${instanceName}:`, error)
             dialog.showErrorBox(
                 "Failed to Add Instance",
                 `Could not add instance: ${error.message}`,
@@ -183,17 +139,13 @@ function register(ipcMain, mainWindow) {
 
                     if (!autopackResult.success) {
                         console.warn(
-                            `Autopacking failed for instance ${instanceName}: ${autopackResult.error}`,
-                        )
-                    } else {
-                        console.log(
-                            `Autopacking completed for instance ${instanceName}: ${autopackResult.packedAssets}/${autopackResult.totalAssets} assets packed`,
+                            `Adding ${instanceName} without all of its assets, as autopacking failed`,
                         )
                     }
                 } catch (autopackError) {
                     console.warn(
-                        `Autopacking error for instance ${instanceName}:`,
-                        autopackError.message,
+                        `Failed to autopack ${instanceName}, adding it anyway:`,
+                        autopackError,
                     )
                 }
 
@@ -201,6 +153,9 @@ function register(ipcMain, mainWindow) {
 
                 const fileName = path.basename(instanceName, ".vmf")
                 item.setInstanceName(newIndex, fileName)
+                console.log(
+                    `Added instance ${newIndex} (${instanceName}) to "${item.name}"`,
+                )
 
                 const updatedItem = item.toJSONWithExistence()
                 mainWindow.webContents.send("item-updated", updatedItem)
@@ -208,6 +163,7 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true, index: newIndex }
             } catch (error) {
+                console.error(`Failed to add instance ${instanceName}:`, error)
                 dialog.showErrorBox(
                     "Failed to Add Instance",
                     `Could not add instance: ${error.message}`,
@@ -291,6 +247,7 @@ function register(ipcMain, mainWindow) {
                 files: results,
             }
         } catch (error) {
+            console.error("Failed to select instance files:", error)
             dialog.showErrorBox(
                 "Failed to Select Instance File",
                 `Could not select instance file: ${error.message}`,
@@ -374,6 +331,9 @@ function register(ipcMain, mainWindow) {
 
             const displayName = path.basename(instanceName, ".vmf")
             item.setInstanceName(newIndex, displayName)
+            console.log(
+                `Added instance ${newIndex} (${instanceName}) to "${item.name}"`,
+            )
 
             const updatedItem = item.toJSONWithExistence()
             mainWindow.webContents.send("item-updated", updatedItem)
@@ -385,6 +345,7 @@ function register(ipcMain, mainWindow) {
                 instanceName: instanceName,
             }
         } catch (error) {
+            console.error("Failed to add an instance:", error)
             dialog.showErrorBox(
                 "Failed to Add Instance",
                 `Could not add instance: ${error.message}`,
@@ -465,8 +426,30 @@ function register(ipcMain, mainWindow) {
                     }
                 } catch (error) {
                     console.warn(
-                        "Failed to update VMF stats in editoritems:",
-                        error.message,
+                        `Failed to update the VMF stats of instance ${instanceIndex} in the editoritems:`,
+                        error,
+                    )
+                }
+                console.log(
+                    `Replaced instance ${instanceIndex} of "${item.name}" with ${selectedFilePath}`,
+                )
+
+                // Pack the new instance's custom files, as when adding one
+                let missingFiles = []
+                let neededBy = {}
+                try {
+                    const { autopackInstance } = require("../utils/autopacker")
+                    const autopackResult = await autopackInstance(
+                        selectedFilePath,
+                        item.packagePath,
+                        item.name,
+                    )
+                    missingFiles = autopackResult.missingFiles ?? []
+                    neededBy = autopackResult.neededBy ?? {}
+                } catch (autopackError) {
+                    console.warn(
+                        `Failed to autopack the replacement of instance ${instanceIndex}:`,
+                        autopackError,
                     )
                 }
 
@@ -474,11 +457,76 @@ function register(ipcMain, mainWindow) {
                 mainWindow.webContents.send("item-updated", updatedItem)
                 sendItemUpdateToEditor(itemId, updatedItem)
 
-                return { success: true, instanceName: instanceData.Name }
+                return {
+                    success: true,
+                    instanceName: instanceData.Name,
+                    fileName,
+                    missingFiles,
+                    neededBy,
+                }
             } catch (error) {
+                console.error(
+                    `Failed to replace instance ${instanceIndex}:`,
+                    error,
+                )
                 dialog.showErrorBox(
                     "Failed to Replace Instance",
                     `Could not replace instance: ${error.message}`,
+                )
+                return { success: false, error: error.message }
+            }
+        },
+    )
+
+    // Autopack an instance again: pack the custom files it uses that aren't
+    // in the package yet (new ones after editing it, or ones that weren't
+    // found or mounted before). Files already in the package are kept.
+    ipcMain.handle(
+        "autopack-instance-again",
+        async (event, { itemId, instanceIndex }) => {
+            try {
+                const item = packages
+                    .flatMap((p) => p.items)
+                    .find((i) => i.id === itemId)
+                if (!item) {
+                    throw new Error("Item not found")
+                }
+                const instanceData = item.instances[instanceIndex]
+                if (!instanceData) {
+                    throw new Error(`Instance ${instanceIndex} not found`)
+                }
+                const vmfPath = Instance.getCleanPath(
+                    item.packagePath,
+                    fixInstancePath(instanceData.Name),
+                )
+                if (!fs.existsSync(vmfPath)) {
+                    throw new Error("The instance's VMF file doesn't exist")
+                }
+
+                const { autopackInstance } = require("../utils/autopacker")
+                const result = await autopackInstance(
+                    vmfPath,
+                    item.packagePath,
+                    item.name,
+                )
+                const packed = result.packedFiles?.length ?? 0
+                // The package has new files its .bpee doesn't
+                if (packed > 0) global.titleManager?.setUnsavedChanges(true)
+
+                return {
+                    success: result.success,
+                    error: result.error ?? null,
+                    skipped: result.skipped === true,
+                    packed,
+                    custom: result.totalAssets ?? 0,
+                    missingFiles: result.missingFiles ?? [],
+                    neededBy: result.neededBy ?? {},
+                    fileName: path.basename(instanceData.Name),
+                }
+            } catch (error) {
+                console.error(
+                    `Failed to autopack instance ${instanceIndex} again:`,
+                    error,
                 )
                 return { success: false, error: error.message }
             }
@@ -508,13 +556,26 @@ function register(ipcMain, mainWindow) {
                         vmfStatsCache.clearCache(fullInstancePath)
                     } catch (error) {
                         console.warn(
-                            "Could not clear VMF cache for removed instance:",
-                            error.message,
+                            `Failed to clear the cached VMF stats of instance ${instanceIndex}:`,
+                            error,
                         )
                     }
                 }
 
-                item.removeInstance(instanceIndex)
+                // Another item of the package can use the same VMF
+                const pkg = packages.find((p) => p.items.includes(item))
+                const file = item.instanceFileKey(instanceData?.Name)
+                const keepFile = !!pkg?.items.some(
+                    (other) =>
+                        other !== item &&
+                        Object.values(other.instances).some(
+                            (data) => other.instanceFileKey(data.Name) === file,
+                        ),
+                )
+                item.removeInstance(instanceIndex, { keepFile })
+                console.log(
+                    `Removed instance ${instanceIndex} (${instanceData?.Name}) from "${item.name}"`,
+                )
 
                 const updatedItem = item.toJSONWithExistence()
                 mainWindow.webContents.send("item-updated", updatedItem)
@@ -522,6 +583,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true }
             } catch (error) {
+                console.error(
+                    `Failed to remove instance ${instanceIndex}:`,
+                    error,
+                )
                 dialog.showErrorBox(
                     "Failed to Remove Instance",
                     `Could not remove instance: ${error.message}`,
@@ -589,9 +654,14 @@ function register(ipcMain, mainWindow) {
                 })
 
                 hammer.unref()
+                console.log(`Opened ${instancePath} in ${hammerStatus.type}`)
 
                 return { success: true, editorType: hammerStatus.type }
             } catch (error) {
+                console.error(
+                    `Failed to open ${instanceName} in Hammer:`,
+                    error,
+                )
                 const errorMessage = `Could not open instance in Hammer: ${error.message}`
                 dialog.showErrorBox("Failed to Launch Hammer", errorMessage)
                 return { success: false, error: errorMessage }
@@ -615,7 +685,10 @@ function register(ipcMain, mainWindow) {
                 const name = item.getInstanceName(instanceIndex)
                 return { success: true, name }
             } catch (error) {
-                console.error("Error getting instance name:", error)
+                console.error(
+                    `Failed to get the name of instance ${instanceIndex}:`,
+                    error,
+                )
                 return { success: false, error: error.message }
             }
         },
@@ -647,7 +720,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true }
             } catch (error) {
-                console.error("Error setting instance name:", error)
+                console.error(
+                    `Failed to rename instance ${instanceIndex}:`,
+                    error,
+                )
                 return { success: false, error: error.message }
             }
         },
@@ -679,8 +755,50 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true }
             } catch (error) {
-                console.error("Error removing instance name:", error)
+                console.error(
+                    `Failed to remove the name of instance ${instanceIndex}:`,
+                    error,
+                )
                 return { success: false, error: error.message }
+            }
+        },
+    )
+
+    // What each of an item's instances has behind the surface the item is
+    // placed on (the Instances tab's leak warning), by index
+    ipcMain.handle(
+        "get-instances-behind-surface",
+        async (event, { itemId }) => {
+            const item = packages
+                .flatMap((p) => p.items)
+                .find((i) => i.id === itemId)
+            if (!item) {
+                return { success: false, error: `Item ${itemId} not found` }
+            }
+            return {
+                success: true,
+                behindSurface: item.getInstancesBehindSurface(),
+            }
+        },
+    )
+
+    // What a VMF has behind the surface the item is placed on, for an
+    // instance that isn't added yet (the Instances tab's leak warning)
+    ipcMain.handle(
+        "check-instance-behind-surface",
+        async (event, { itemId, vmfPath }) => {
+            const item = packages
+                .flatMap((p) => p.items)
+                .find((i) => i.id === itemId)
+            if (!item) {
+                return { success: false, error: `Item ${itemId} not found` }
+            }
+            const frame = item.instanceFrame()
+            return {
+                success: true,
+                behindSurface: frame
+                    ? instanceBehindSurface(vmfPath, frame)
+                    : null,
             }
         },
     )
@@ -702,102 +820,61 @@ function register(ipcMain, mainWindow) {
                 }
             }
 
-            // Get search directories from gameinfo.txt
-            const searchDirs = getPortal2SearchDirs(portal2Dir)
-
-            // Extract assets from the VMF
-            const assets = extractAssetsFromVMF(vmfPath)
-
-            const externalAssets = []
-            const foundAssets = []
-
-            // Track materials we've already checked (to avoid duplicates from MDL dependencies)
-            const checkedMaterials = new Set()
-
-            // Check models and their material dependencies
-            for (const model of assets.MODEL) {
-                const modelPath = model.startsWith("models/") ? model : `models/${model}`
-                if (assetExistsInPortal2(modelPath, portal2Dir, searchDirs)) {
-                    foundAssets.push({ type: "MODEL", path: model })
-                } else {
-                    externalAssets.push({ type: "MODEL", path: model })
-                }
-
-                // Get MDL material dependencies using srctools
-                const mdlDeps = await getMdlDependencies(modelPath, portal2Dir)
-                if (mdlDeps.success && mdlDeps.materials) {
-                    for (const matPath of mdlDeps.materials) {
-                        // Skip if already checked
-                        const matKey = matPath.toLowerCase()
-                        if (checkedMaterials.has(matKey)) continue
-                        checkedMaterials.add(matKey)
-
-                        // Check if material exists in Portal 2
-                        if (assetExistsInPortal2(matPath, portal2Dir, searchDirs)) {
-                            foundAssets.push({ type: "MATERIAL", path: matPath, source: "mdl" })
-                        } else {
-                            externalAssets.push({ type: "MATERIAL", path: matPath, source: "mdl" })
-                        }
-                    }
-                }
+            // Sorted like autopacking does (see autopacker.js): "found" are
+            // the custom files autopacking packs, "external" the rest (the
+            // game's files, BEE2's files and missing ones)
+            const { sortInstanceFiles } = require("../utils/autopacker")
+            const files = await sortInstanceFiles(vmfPath, portal2Dir)
+            const asset = (file) => ({
+                type: file.startsWith("models/")
+                    ? "MODEL"
+                    : file.startsWith("sound/")
+                      ? "SOUND"
+                      : file.startsWith("scripts/")
+                        ? "SCRIPT"
+                        : file.startsWith("particles/")
+                          ? "PARTICLE"
+                          : "MATERIAL",
+                path: file,
+            })
+            const foundAssets = files.custom.map(({ file }) => asset(file))
+            // Files it uses that don't exist or aren't mounted properly
+            const missingAssets = files.missing.map((file) => ({
+                ...asset(file),
+                neededBy: files.neededBy[file] ?? null,
+            }))
+            if (missingAssets.length > 0) {
+                console.warn(
+                    `${path.basename(vmfPath)} uses ${missingAssets.length} file(s) that don't exist or aren't mounted properly: ${files.missing.join(", ")}`,
+                )
             }
-
-            // Check materials (from VMF brushes and entities)
-            for (const material of assets.MATERIAL) {
-                // Skip tool textures and common materials
-                if (material.startsWith("tools/") || material.startsWith("dev/")) {
-                    continue // Already filtered in extractor, but double-check
-                }
-
-                const materialPath = material.startsWith("materials/") ? material : `materials/${material}`
-
-                // Skip if already checked from MDL dependencies
-                const matKey = materialPath.toLowerCase()
-                if (checkedMaterials.has(matKey)) continue
-                checkedMaterials.add(matKey)
-
-                if (assetExistsInPortal2(materialPath, portal2Dir, searchDirs)) {
-                    foundAssets.push({ type: "MATERIAL", path: material })
-                } else {
-                    externalAssets.push({ type: "MATERIAL", path: material })
-                }
-            }
-
-            // Check sounds
-            for (const sound of assets.SOUND) {
-                const soundPath = sound.startsWith("sound/") ? sound : `sound/${sound}`
-                if (assetExistsInPortal2(soundPath, portal2Dir, searchDirs)) {
-                    foundAssets.push({ type: "SOUND", path: sound })
-                } else {
-                    externalAssets.push({ type: "SOUND", path: sound })
-                }
-            }
-
-            // Check scripts
-            for (const script of assets.SCRIPT) {
-                const scriptPath = script.startsWith("scripts/") ? script : `scripts/${script}`
-                if (assetExistsInPortal2(scriptPath, portal2Dir, searchDirs)) {
-                    foundAssets.push({ type: "SCRIPT", path: script })
-                } else {
-                    externalAssets.push({ type: "SCRIPT", path: script })
-                }
-            }
+            const externalAssets = [
+                ...files.baseGame,
+                ...files.bee2,
+                ...files.missing,
+                ...files.missingDependencies,
+            ].map(asset)
 
             return {
                 success: true,
                 hasExternalAssets: externalAssets.length > 0,
                 assets: {
                     external: externalAssets,
-                    found: foundAssets
+                    found: foundAssets,
+                    missing: missingAssets,
                 },
                 summary: {
                     totalAssets: externalAssets.length + foundAssets.length,
                     externalCount: externalAssets.length,
-                    foundCount: foundAssets.length
+                    foundCount: foundAssets.length,
+                    missingCount: missingAssets.length,
                 }
             }
         } catch (error) {
-            console.error("Error checking VMF external assets:", error)
+            console.error(
+                `Failed to check the external assets of ${vmfPath}:`,
+                error,
+            )
             return { success: false, error: error.message }
         }
     })

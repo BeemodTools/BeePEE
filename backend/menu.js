@@ -8,6 +8,9 @@ const {
     closePackage,
     getCurrentPackageDir,
     getCurrentPackageSourcePath,
+    getLastSavedBpeePath,
+    setLastSavedBpeePath,
+    showPackageOpenError,
 } = require("./packageManager")
 const { app, dialog, BrowserWindow } = require("electron")
 const path = require("path")
@@ -20,9 +23,12 @@ function killBeemod() {
         exec('taskkill /F /IM BEE2.exe', (err) => {
             // Ignore errors (process might not be running)
             if (err) {
-                console.log("BEE2.exe not running or could not be killed:", err.message)
+                console.log(
+                    "BEE2.exe isn't running or couldn't be closed:",
+                    err.message,
+                )
             } else {
-                console.log("BEE2.exe process killed")
+                console.log("Closed BEE2.exe before exporting")
             }
             // Small delay to ensure file locks are released
             setTimeout(resolve, 500)
@@ -34,16 +40,24 @@ const {
     createPackageInformationWindow,
     createChangelogWindow,
     createCrashReportWindow,
-    createBeePackageWindow,
     createSettingsWindow,
 } = require("./items/itemEditor")
 const { isDev } = require("./utils/isDev.js")
 const { ensurePackagesDir } = require("./utils/packagesDir")
 const { logger } = require("./utils/logger")
 const { getSetting } = require("./utils/settings")
-
-// Track last saved .bpee path in memory
-let lastSavedBpeePath = null
+const {
+    BEEPM_DOWNLOAD_URL,
+    isBeePmInstalled,
+    publishWithBeePm,
+    beePmLogin,
+} = require("./utils/beePmApp")
+const {
+    readAuthor,
+    setAuthorIfNone,
+    authorNames,
+} = require("./utils/packageAuthor")
+const { bee2ExportFolder } = require("./utils/bee2Packages")
 
 // Window the menu was built for (needed to rebuild when settings change)
 let menuMainWindow = null
@@ -54,8 +68,8 @@ const PACKAGE_MENU_IDS = [
     "save-package",
     "save-package-as",
     "export-package",
+    "export-beepm",
     "package-information",
-    "beepm-package-info",
     "import-items",
 ]
 
@@ -105,25 +119,183 @@ function getCurrentPackageName() {
 async function saveCurrentPackage(win) {
     const currentPackageDir = getCurrentPackageDir()
     if (!currentPackageDir) return false
-    if (!lastSavedBpeePath) {
+    let target = getLastSavedBpeePath()
+    if (!target) {
         const source = getCurrentPackageSourcePath?.()
-        if (source && /\.bpee$/i.test(source)) {
-            lastSavedBpeePath = source
-        }
+        if (source && /\.bpee$/i.test(source)) target = source
     }
-    if (!lastSavedBpeePath) {
+    if (!target) {
         const { canceled, filePath } = await dialog.showSaveDialog(win, {
             title: "Save Package As",
             defaultPath: getCurrentPackageName() + ".bpee",
             filters: [{ name: "BeePEE Package", extensions: ["bpee"] }],
         })
         if (canceled || !filePath) return false
-        lastSavedBpeePath = filePath
+        target = filePath
     }
-    await savePackageAsBpee(currentPackageDir, lastSavedBpeePath)
+    await savePackageAsBpee(currentPackageDir, target)
+    setLastSavedBpeePath(target)
     // The .bpee now matches the working package
     global.titleManager?.setUnsavedChanges(false)
     return true
+}
+
+/**
+ * Before the open package is closed or replaced by another one: when it has
+ * changes not yet written to its .bpee (the "*" in the title), ask whether
+ * to save them first, like quitting does
+ * @param {string} discardLabel - The button that goes on without saving
+ * @returns {Promise<boolean>} Whether to go on (not when cancelled, or when
+ *   saving didn't happen)
+ */
+async function confirmUnsavedChanges(win, discardLabel) {
+    if (!global.titleManager?.hasUnsavedChanges) return true
+    const choice = dialog.showMessageBoxSync(win, {
+        type: "warning",
+        buttons: ["Cancel", discardLabel, "Save"],
+        defaultId: 2,
+        cancelId: 0,
+        title: "Unsaved Changes",
+        message: "Your package has unsaved changes.",
+        detail: "Save writes them to the .bpee file first.",
+    })
+    if (choice === 0) return false
+    if (choice === 1) return true
+    try {
+        // Not saved when Save As was cancelled
+        return await saveCurrentPackage(win)
+    } catch (err) {
+        console.error("Failed to save the package:", err)
+        dialog.showErrorBox("Save Failed", err.message)
+        return false
+    }
+}
+
+// Back the package up as a .bpee before it's exported, when that setting is
+// on (the 10 newest are kept). A failed backup doesn't stop the export.
+async function backupBeforeExport(currentPackageDir) {
+    if (!getSetting("autoBackupBeforeExport", true)) return
+    try {
+        const backupsDir = path.join(app.getPath("userData"), "backups")
+        fs.mkdirSync(backupsDir, { recursive: true })
+        const stamp = new Date().toISOString().replace(/[:.]/g, "-")
+        const backupPath = path.join(
+            backupsDir,
+            `${getCurrentPackageName()}-${stamp}.bpee`,
+        )
+        await savePackageAsBpee(currentPackageDir, backupPath)
+        console.log(`Saved a backup before exporting: ${backupPath}`)
+
+        // Keep only the 10 most recent backups
+        const backups = fs
+            .readdirSync(backupsDir)
+            .filter((f) => f.endsWith(".bpee"))
+            .map((f) => ({
+                name: f,
+                path: path.join(backupsDir, f),
+                time: fs.statSync(path.join(backupsDir, f)).mtime.getTime(),
+            }))
+            .sort((a, b) => b.time - a.time)
+        for (const old of backups.slice(10)) {
+            try {
+                fs.unlinkSync(old.path)
+            } catch (err) {
+                console.warn(`Failed to delete old backup ${old.name}:`, err)
+            }
+        }
+    } catch (err) {
+        console.warn("Failed to back up the package, exporting anyway:", err)
+    }
+}
+
+// Before exporting to BeePM: the package's author against who's logged in to
+// BeePM (who it'll be published under). Only a heads-up, since an author can
+// be a display name, a team or credit someone else, and BeePM itself checks
+// who may publish. Without a BeePM login there's nothing to check.
+// Returns whether to go on.
+async function authorFitsBeePmLogin(win, currentPackageDir) {
+    const login = beePmLogin()
+    if (!login) return true
+    const { handle } = login
+    const author = readAuthor(currentPackageDir)
+
+    if (!author) {
+        const { response } = await dialog.showMessageBox(win, {
+            type: "question",
+            buttons: [`Use @${handle}`, "Export Without", "Cancel"],
+            defaultId: 0,
+            cancelId: 2,
+            title: "No Author",
+            message: "This package has no author.",
+            detail: "Use your BeePM handle? It can't be changed afterwards. For another name, cancel and set it in Edit > Package Information.",
+        })
+        if (response === 2) return false
+        if (response === 0 && setAuthorIfNone(currentPackageDir, handle)) {
+            // Written to the working package, not the .bpee
+            global.titleManager?.setUnsavedChanges(true)
+        }
+        return true
+    }
+
+    if (authorNames(author, login)) return true
+    const { response } = await dialog.showMessageBox(win, {
+        type: "warning",
+        buttons: ["Export Anyway", "Cancel"],
+        defaultId: 1,
+        cancelId: 1,
+        title: "Different Author",
+        message: `This package's author is ${author}, but you're logged in to BeePM as @${handle}.`,
+        detail: `It'll be published under @${handle}.`,
+    })
+    return response === 0
+}
+
+// Export the package as a .bee_pack and open it in BeePM's Publish, where
+// the author reviews it and publishes it. Without BeePM, offers its GitHub.
+async function exportToBeePm(win) {
+    const currentPackageDir = getCurrentPackageDir()
+    if (!currentPackageDir) return
+
+    if (!isBeePmInstalled()) {
+        const { response } = await dialog.showMessageBox(win, {
+            type: "info",
+            buttons: ["Open GitHub", "Cancel"],
+            defaultId: 0,
+            cancelId: 1,
+            title: "BeePM Not Found",
+            message: "BeePM isn't installed.",
+            detail: "Get it from GitHub, then export to BeePM again.",
+        })
+        if (response === 0) await shell.openExternal(BEEPM_DOWNLOAD_URL)
+        return
+    }
+
+    if (!(await authorFitsBeePmLogin(win, currentPackageDir))) return
+
+    // BeePM reads it from here when it checks and publishes it
+    const filePath = path.join(
+        app.getPath("userData"),
+        "beepm",
+        `${getCurrentPackageName()}.bee_pack`,
+    )
+    try {
+        await backupBeforeExport(currentPackageDir)
+        await exportPackageAsBeePack(currentPackageDir, filePath)
+    } catch (err) {
+        // The in-app export progress dialog already reported this failure
+        console.error("Failed to export the package for BeePM:", err)
+        return
+    }
+    try {
+        await publishWithBeePm(filePath)
+        console.log(`Opened ${filePath} in BeePM`)
+    } catch (err) {
+        console.error("Failed to open BeePM:", err)
+        dialog.showErrorBox(
+            "Failed to Open BeePM",
+            `${err.message}\n\nThe package was exported to ${filePath}`,
+        )
+    }
 }
 
 function createMainMenu(mainWindow) {
@@ -136,74 +308,20 @@ function createMainMenu(mainWindow) {
                     label: "New Package",
                     accelerator: "Ctrl+N",
                     click: async () => {
-                        // Check if a package is currently loaded
-                        const currentPackageDir = getCurrentPackageDir()
-                        if (currentPackageDir) {
-                            // Show confirmation dialog with save option
-                            const { response } = await dialog.showMessageBox(
+                        if (getCurrentPackageDir()) {
+                            const proceed = await confirmUnsavedChanges(
                                 mainWindow,
-                                {
-                                    type: "warning",
-                                    buttons: ["Discard", "Save", "Cancel"],
-                                    defaultId: 2,
-                                    cancelId: 0,
-                                    title: "Save Changes?",
-                                    message:
-                                        "Do you want to save the current package before creating a new one?",
-                                    detail: "Your changes will be lost if you don't save them.",
-                                },
+                                "Continue Without Saving",
                             )
-
-                            if (response === 3) {
-                                // User chose 'Cancel'
-                                return
-                            }
-
-                            if (response === 2) {
-                                // User chose 'Save & Continue' - save first
-                                try {
-                                    if (!lastSavedBpeePath) {
-                                        // Prompt for path if not previously saved
-                                        const { canceled, filePath } =
-                                            await dialog.showSaveDialog(
-                                                mainWindow,
-                                                {
-                                                    title: "Save Package As",
-                                                    defaultPath:
-                                                        getCurrentPackageName() +
-                                                        ".bpee",
-                                                    filters: [
-                                                        {
-                                                            name: "BeePEE Package",
-                                                            extensions: [
-                                                                "bpee",
-                                                            ],
-                                                        },
-                                                    ],
-                                                },
-                                            )
-                                        if (canceled || !filePath) return
-                                        lastSavedBpeePath = filePath
-                                    }
-                                    await savePackageAsBpee(
-                                        currentPackageDir,
-                                        lastSavedBpeePath,
-                                    )
-                                } catch (err) {
-                                    dialog.showErrorBox(
-                                        "Save Failed",
-                                        err.message,
-                                    )
-                                    return
-                                }
-                            }
-
-                            // Close current package (response === 1 "Don't Save" or response === 2 after saving)
+                            if (!proceed) return
                             try {
                                 await closePackage()
-                                lastSavedBpeePath = null
                                 mainWindow.webContents.send("package:closed")
                             } catch (error) {
+                                console.error(
+                                    "Failed to close the package:",
+                                    error,
+                                )
                                 dialog.showErrorBox(
                                     "Close Failed",
                                     `Failed to close package: ${error.message}`,
@@ -229,6 +347,11 @@ function createMainMenu(mainWindow) {
                             ],
                         })
                         if (result.canceled) return null
+                        const proceed = await confirmUnsavedChanges(
+                            mainWindow,
+                            "Open Without Saving",
+                        )
+                        if (!proceed) return null
                         try {
                             // Ensure packages directory exists
                             ensurePackagesDir()
@@ -240,9 +363,15 @@ function createMainMenu(mainWindow) {
                                 signages: pkg.signages,
                             })
                         } catch (error) {
-                            dialog.showErrorBox(
+                            console.error(
+                                `Failed to open ${result.filePaths[0]}:`,
+                                error,
+                            )
+                            await showPackageOpenError(
+                                mainWindow,
                                 "Open Failed",
                                 `Failed to open package: ${error.message}`,
+                                error,
                             )
                         }
                     },
@@ -261,6 +390,11 @@ function createMainMenu(mainWindow) {
                             ],
                         })
                         if (result.canceled) return null
+                        const proceed = await confirmUnsavedChanges(
+                            mainWindow,
+                            "Import Without Saving",
+                        )
+                        if (!proceed) return null
                         try {
                             await importPackage(result.filePaths[0])
                             // Continue progress from import (70%) to load (80%)
@@ -271,10 +405,13 @@ function createMainMenu(mainWindow) {
                                     message: "Loading imported package...",
                                 },
                             )
+                            // Skip progress reset AND re-extraction - the
+                            // import above already extracted and converted
                             const pkg = await loadPackage(
                                 result.filePaths[0],
                                 true,
-                            ) // Skip progress reset since we're continuing from import
+                                true,
+                            )
                             // currentPackageDir is now managed in packageManager.js
 
                             // Send final completion message
@@ -340,20 +477,28 @@ function createMainMenu(mainWindow) {
                             ],
                         })
                         if (saveTo.canceled || !saveTo.filePath) return
+                        const proceed = await confirmUnsavedChanges(
+                            mainWindow,
+                            "Restore Without Saving",
+                        )
+                        if (!proceed) return
                         try {
                             fs.copyFileSync(backupPath, saveTo.filePath)
                             ensurePackagesDir()
                             const pkg = await loadPackage(saveTo.filePath)
                             // Future saves target the restored copy
-                            lastSavedBpeePath = saveTo.filePath
+                            setLastSavedBpeePath(saveTo.filePath)
                             mainWindow.webContents.send("package:loaded", {
                                 items: pkg.items,
                                 signages: pkg.signages,
                             })
                         } catch (error) {
-                            dialog.showErrorBox(
+                            console.error(`Failed to restore ${backupPath}:`, error)
+                            await showPackageOpenError(
+                                mainWindow,
                                 "Restore Failed",
                                 `Failed to restore backup: ${error.message}`,
+                                error,
                             )
                         }
                     },
@@ -366,45 +511,16 @@ function createMainMenu(mainWindow) {
                     click: async () => {
                         // Same guard as quitting: don't silently drop
                         // changes that were never written to the .bpee
-                        if (global.titleManager?.hasUnsavedChanges) {
-                            const choice = dialog.showMessageBoxSync(
-                                mainWindow,
-                                {
-                                    type: "warning",
-                                    buttons: [
-                                        "Cancel",
-                                        "Close Without Saving",
-                                        "Save",
-                                    ],
-                                    defaultId: 2,
-                                    cancelId: 0,
-                                    title: "Unsaved Changes",
-                                    message:
-                                        "Your package has unsaved changes.",
-                                    detail: "Save writes them to the .bpee file before closing.",
-                                },
-                            )
-                            if (choice === 0) return
-                            if (choice === 2) {
-                                try {
-                                    const saved =
-                                        await saveCurrentPackage(mainWindow)
-                                    if (!saved) return // Save As cancelled
-                                } catch (err) {
-                                    dialog.showErrorBox(
-                                        "Save Failed",
-                                        err.message,
-                                    )
-                                    return
-                                }
-                            }
-                        }
+                        const proceed = await confirmUnsavedChanges(
+                            mainWindow,
+                            "Close Without Saving",
+                        )
+                        if (!proceed) return
                         try {
                             await closePackage()
-                            // currentPackageDir is now managed in packageManager.js
-                            lastSavedBpeePath = null
                             mainWindow.webContents.send("package:closed")
                         } catch (error) {
+                            console.error("Failed to close the package:", error)
                             dialog.showErrorBox(
                                 "Close Failed",
                                 `Failed to close package: ${error.message}`,
@@ -422,11 +538,12 @@ function createMainMenu(mainWindow) {
                             const saved = await saveCurrentPackage(mainWindow)
                             if (saved) {
                                 dialog.showMessageBox(mainWindow, {
-                                    message: `Package saved to: ${lastSavedBpeePath}`,
+                                    message: `Package saved to: ${getLastSavedBpeePath()}`,
                                     type: "info",
                                 })
                             }
                         } catch (err) {
+                            console.error("Failed to save the package:", err)
                             dialog.showErrorBox("Save Failed", err.message)
                         }
                     },
@@ -454,7 +571,7 @@ function createMainMenu(mainWindow) {
                                 })
                             if (canceled || !filePath) return
                             await savePackageAsBpee(currentPackageDir, filePath)
-                            lastSavedBpeePath = filePath
+                            setLastSavedBpeePath(filePath)
                             // The .bpee now matches the working package
                             global.titleManager?.setUnsavedChanges(false)
                             dialog.showMessageBox(mainWindow, {
@@ -462,6 +579,7 @@ function createMainMenu(mainWindow) {
                                 type: "info",
                             })
                         } catch (err) {
+                            console.error("Failed to save the package:", err)
                             dialog.showErrorBox("Save As Failed", err.message)
                         }
                     },
@@ -486,47 +604,18 @@ function createMainMenu(mainWindow) {
 
                             if (launchBeemod && !beemodPath) {
                                 console.warn(
-                                    "Launch BEEMod after export is on, but no BEEMod path is set - falling back to a save dialog.",
+                                    "Launch BEEMod after export is on, but no BEEMod path is set, so asking where to export instead",
                                 )
                             }
 
                             let filePath
 
                             if (exportToBeemod) {
-                                // Read BEEMod config to find packages directory
-                                let packagesDir = path.join(beemodPath, "packages") // default
-
-                                try {
-                                    const configPath = path.join(
-                                        process.env.APPDATA || "",
-                                        "BEEMOD2",
-                                        "config",
-                                        "config.cfg"
-                                    )
-                                    if (fs.existsSync(configPath)) {
-                                        const configContent = fs.readFileSync(configPath, "utf-8")
-                                        const packageMatch = configContent.match(/^package=(.+)$/m)
-                                        if (packageMatch) {
-                                            const packageSetting = packageMatch[1].trim()
-                                            // Check if it's absolute or relative
-                                            if (path.isAbsolute(packageSetting)) {
-                                                packagesDir = packageSetting
-                                            } else {
-                                                // Relative to BEEMod folder
-                                                packagesDir = path.join(beemodPath, packageSetting)
-                                            }
-                                        }
-                                    }
-                                } catch (err) {
-                                    console.warn("Could not read BEEMod config, using default packages path:", err.message)
-                                }
-
-                                // Export to packages/BeePEE subfolder
-                                const beemodPackagesDir = path.join(packagesDir, "BeePEE")
-                                if (!fs.existsSync(beemodPackagesDir)) {
-                                    fs.mkdirSync(beemodPackagesDir, { recursive: true })
-                                }
-                                filePath = path.join(beemodPackagesDir, getCurrentPackageName() + ".bee_pack")
+                                // A BeePEE folder in the packages folder BEE2
+                                // loads
+                                const folder = bee2ExportFolder(beemodPath)
+                                fs.mkdirSync(folder, { recursive: true })
+                                filePath = path.join(folder, getCurrentPackageName() + ".bee_pack")
 
                                 // Kill BEE2.exe if running to release file locks
                                 await killBeemod()
@@ -556,57 +645,7 @@ function createMainMenu(mainWindow) {
                                 filePath = result.filePath
                             }
 
-                            // Auto-backup the package as .bpee before exporting
-                            if (getSetting("autoBackupBeforeExport", true)) {
-                                try {
-                                    const backupsDir = path.join(
-                                        app.getPath("userData"),
-                                        "backups",
-                                    )
-                                    fs.mkdirSync(backupsDir, { recursive: true })
-                                    const stamp = new Date()
-                                        .toISOString()
-                                        .replace(/[:.]/g, "-")
-                                    const backupPath = path.join(
-                                        backupsDir,
-                                        `${getCurrentPackageName()}-${stamp}.bpee`,
-                                    )
-                                    await savePackageAsBpee(
-                                        currentPackageDir,
-                                        backupPath,
-                                    )
-                                    console.log("Pre-export backup saved:", backupPath)
-
-                                    // Keep only the 10 most recent backups
-                                    const backups = fs
-                                        .readdirSync(backupsDir)
-                                        .filter((f) => f.endsWith(".bpee"))
-                                        .map((f) => ({
-                                            name: f,
-                                            path: path.join(backupsDir, f),
-                                            time: fs
-                                                .statSync(path.join(backupsDir, f))
-                                                .mtime.getTime(),
-                                        }))
-                                        .sort((a, b) => b.time - a.time)
-                                    for (const old of backups.slice(10)) {
-                                        try {
-                                            fs.unlinkSync(old.path)
-                                        } catch (err) {
-                                            console.warn(
-                                                "Failed to prune old backup:",
-                                                old.name,
-                                            )
-                                        }
-                                    }
-                                } catch (err) {
-                                    console.warn(
-                                        "Pre-export backup failed (continuing with export):",
-                                        err.message,
-                                    )
-                                }
-                            }
-
+                            await backupBeforeExport(currentPackageDir)
                             await exportPackageAsBeePack(currentPackageDir, filePath)
 
                             // Open folder or launch BEEMod based on settings
@@ -615,18 +654,19 @@ function createMainMenu(mainWindow) {
                             if (exportToBeemod) {
                                 // Launch BEE2.exe
                                 const bee2Exe = path.join(beemodPath, "BEE2.exe")
-                                console.log("Looking for BEE2.exe at:", bee2Exe)
                                 if (fs.existsSync(bee2Exe)) {
-                                    console.log("Launching BEE2.exe...")
+                                    console.log(`Launching ${bee2Exe}`)
                                     // Use exec with start command for Windows
                                     exec(`start "" "${bee2Exe}"`, { cwd: beemodPath }, (err) => {
-                                        if (err) console.error("Failed to launch BEE2:", err)
+                                        if (err) console.error(`Failed to launch ${bee2Exe}:`, err)
                                     })
                                 } else {
-                                    console.warn("BEE2.exe not found at:", bee2Exe)
+                                    console.warn(
+                                        `Failed to launch BEEMod: ${bee2Exe} doesn't exist`,
+                                    )
                                 }
                                 dialog.showMessageBox(mainWindow, {
-                                    message: `Package exported to BEEMod packages folder!`,
+                                    message: "Package exported to BEEMod packages folder!",
                                     type: "info",
                                 })
                             } else if (openFolder) {
@@ -641,9 +681,14 @@ function createMainMenu(mainWindow) {
                             // The in-app export progress dialog already
                             // reported this failure - a native error box on
                             // top of it is just noise
-                            console.error("Export failed:", err.message)
+                            console.error("Failed to export the package:", err)
                         }
                     },
+                },
+                {
+                    id: "export-beepm",
+                    label: "Export to BeePM...",
+                    click: () => exportToBeePm(mainWindow),
                 },
                 { type: "separator" },
                 {
@@ -688,23 +733,6 @@ function createMainMenu(mainWindow) {
                             return
                         }
                         createPackageInformationWindow(mainWindow)
-                    },
-                },
-                {
-                    id: "beepm-package-info",
-                    label: "BeePM Package Info...",
-                    accelerator: "Ctrl+Shift+B",
-                    click: () => {
-                        const currentPackageDir = getCurrentPackageDir()
-                        if (!currentPackageDir) {
-                            dialog.showMessageBox(mainWindow, {
-                                type: "info",
-                                message: "No package is currently open",
-                                detail: "Please open or create a package first",
-                            })
-                            return
-                        }
-                        createBeePackageWindow(mainWindow)
                     },
                 },
                 { type: "separator" },
@@ -824,8 +852,6 @@ function createMainMenu(mainWindow) {
                             try {
                                 // Close any open packages first
                                 await closePackage()
-                                // currentPackageDir is now managed in packageManager.js
-                                lastSavedBpeePath = null
                                 mainWindow.webContents.send("package:closed")
 
                                 // Then clear the directory
@@ -835,6 +861,10 @@ function createMainMenu(mainWindow) {
                                     type: "info",
                                 })
                             } catch (err) {
+                                console.error(
+                                    "Failed to clear the packages folder:",
+                                    err,
+                                )
                                 dialog.showErrorBox("Clear Failed", err.message)
                             }
                         }
@@ -855,4 +885,5 @@ module.exports = {
     updateMenuState,
     rebuildMenu,
     saveCurrentPackage,
+    confirmUnsavedChanges,
 }

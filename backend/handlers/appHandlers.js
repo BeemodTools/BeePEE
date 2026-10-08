@@ -2,14 +2,17 @@
  * Basic application handlers - file dialogs, app info, package status
  */
 
-const { dialog, app } = require("electron")
+const { dialog, app, BrowserWindow } = require("electron")
 const fs = require("fs")
 const { packages, loadPackage, getCurrentPackageDir } = require("../packageManager")
 
 function register(ipcMain, mainWindow) {
-    // Show open dialog
+    // Show open dialog - resolves Electron's { canceled, filePaths }. It's
+    // attached to the window that asked (e.g. a signage editor), so that
+    // window, not the main one, is in front again after picking a file.
     ipcMain.handle("show-open-dialog", async (event, options) => {
-        return dialog.showOpenDialog(mainWindow, options)
+        const win = BrowserWindow.fromWebContents(event.sender) || mainWindow
+        return dialog.showOpenDialog(win, options)
     })
 
     // Check if file exists
@@ -20,7 +23,7 @@ function register(ipcMain, mainWindow) {
             const filePath = typeof arg === 'string' ? arg : arg?.filePath
             return fs.existsSync(filePath)
         } catch (error) {
-            console.error("Error checking file existence:", error)
+            console.error("Failed to check whether a file exists:", error)
             return false
         }
     })

@@ -113,8 +113,68 @@ function isTruthyParam(value) {
 }
 
 /**
- * Pull the fields the converter needs out of parsed VMT params
- * @returns {{basetexture: string|null, bumpmap: string|null, translucent: boolean, alphatest: boolean}}
+ * Parse a material color: "[r g b]" (0-1), "{r g b}" (0-255) or one number
+ * @returns {number[]|null} RGB multipliers (1 = unchanged)
+ */
+function parseMaterialColor(value) {
+    if (value === undefined) return null
+    const text = String(value).trim()
+    const numbers = (
+        text.match(/[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?/g) || []
+    ).map(Number)
+    if (numbers.length === 0) return null
+    const rgb =
+        numbers.length >= 3 ? numbers.slice(0, 3) : Array(3).fill(numbers[0])
+    return text.startsWith("{") ? rgb.map((n) => n / 255) : rgb
+}
+
+/**
+ * Multiply RGB tints together (null entries are skipped)
+ * @returns {number[]|null} null when the result doesn't change colors
+ */
+function combineTints(...tints) {
+    let result = null
+    for (const tint of tints) {
+        if (!tint) continue
+        result = result ? result.map((v, i) => v * tint[i]) : [...tint]
+    }
+    if (result && result.every((v) => Math.abs(v - 1) < 1 / 512)) return null
+    return result
+}
+
+/**
+ * Multiply RGBA pixels by a tint. With maskByAlpha ($blendtintbybasealpha)
+ * the alpha channel decides how much of the tint each pixel gets.
+ * @returns {Buffer} New pixel buffer
+ */
+function applyTint(rgba, tint, maskByAlpha = false) {
+    const out = Buffer.from(rgba)
+    for (let o = 0; o < out.length; o += 4) {
+        const amount = maskByAlpha ? out[o + 3] / 255 : 1
+        for (let c = 0; c < 3; c++) {
+            const factor = 1 + (tint[c] - 1) * amount
+            out[o + c] = Math.max(
+                0,
+                Math.min(255, Math.round(out[o + c] * factor)),
+            )
+        }
+    }
+    return out
+}
+
+/** A number param clamped to 0-1, or the fallback when unset/invalid */
+function unitParam(value, fallback) {
+    const n = Number.parseFloat(value)
+    return Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : fallback
+}
+
+/**
+ * Pull the fields the converter needs out of parsed VMT params. The blend
+ * fields ($additive, $alpha, $alphatestreference, DecalModulate) are used
+ * when overlays and decals are drawn onto faces, $decalscale sizes decals,
+ * and $basetexture2/$blendmodulatetexture are blended on displacements.
+ * @returns {{basetexture: string|null, bumpmap: string|null, translucent: boolean, alphatest: boolean, tint: number[]|null, tintMask: boolean, additive: boolean, alpha: number, alphaTestReference: number, modulate: boolean, decalScale: number, basetexture2: string|null, blendModulate: string|null, glass?: number[]}}
+ *   glass: the tint (0-1 RGB) of Refract glass, which has no base texture
  */
 function describeMaterial(shader, params) {
     if (shader === "water") {
@@ -124,13 +184,58 @@ function describeMaterial(shader, params) {
             bumpmap: null,
             translucent: false,
             alphatest: false,
+            tint: null,
+            tintMask: false,
+            additive: false,
+            alpha: 1,
+            alphaTestReference: 0.5,
+            modulate: false,
+            decalScale: 1,
+            basetexture2: null,
+            blendModulate: null,
         }
     }
+    if (shader === "refract") {
+        // Glass that shows what's behind it, tinted by $refracttint. It has
+        // no base texture: it's drawn see-through in its tint (glass)
+        return {
+            basetexture: null,
+            bumpmap: null,
+            translucent: true,
+            alphatest: false,
+            tint: null,
+            tintMask: false,
+            additive: false,
+            alpha: 1,
+            alphaTestReference: 0.5,
+            modulate: false,
+            decalScale: 1,
+            basetexture2: null,
+            blendModulate: null,
+            glass: parseMaterialColor(params.get("refracttint")) ?? [1, 1, 1],
+        }
+    }
+    // $color tints every shader; $color2 is the model shaders' tint
+    const usesColor2 = !/lightmapped|worldvertextransition/.test(shader)
+    const decalScale = Number.parseFloat(params.get("decalscale"))
     return {
         basetexture: normalizeTexturePath(params.get("basetexture")),
         bumpmap: normalizeTexturePath(params.get("bumpmap")),
         translucent: isTruthyParam(params.get("translucent")),
         alphatest: isTruthyParam(params.get("alphatest")),
+        tint: combineTints(
+            parseMaterialColor(params.get("color")),
+            usesColor2 ? parseMaterialColor(params.get("color2")) : null,
+        ),
+        tintMask: isTruthyParam(params.get("blendtintbybasealpha")),
+        additive: isTruthyParam(params.get("additive")),
+        alpha: unitParam(params.get("alpha"), 1),
+        alphaTestReference: unitParam(params.get("alphatestreference"), 0.5),
+        modulate: shader === "decalmodulate",
+        decalScale:
+            Number.isFinite(decalScale) && decalScale > 0 ? decalScale : 1,
+        basetexture2: normalizeTexturePath(params.get("basetexture2")),
+        blendModulate: normalizeTexturePath(params.get("blendmodulatetexture")),
     }
 }
 
@@ -613,6 +718,9 @@ function encodePng(width, height, rgba, withAlpha) {
 module.exports = {
     parseVmt,
     describeMaterial,
+    parseMaterialColor,
+    combineTints,
+    applyTint,
     evaluateMaterialCondition,
     normalizeTexturePath,
     decodeVtf,

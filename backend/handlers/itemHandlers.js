@@ -19,7 +19,13 @@ const {
     getCreateItemWindow,
 } = require("../items/itemEditor")
 const { Item } = require("../models/items")
+const { descriptionValue } = require("../saveItem")
+const { APP_VERSION } = require("../utils/keyvalues")
 const { vmfStatsCache } = require("../utils/vmfParser")
+const { withColors } = require("../utils/itemColors")
+
+/** "1 instance", "3 instances" */
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
 function register(ipcMain, mainWindow) {
     // Open item editor
@@ -36,9 +42,22 @@ function register(ipcMain, mainWindow) {
             createItemEditor(actualItem, mainWindow)
             return { success: true }
         } catch (error) {
-            console.error("Failed to open item editor:", error)
+            console.error(
+                `Failed to open the item editor for ${item?.id}:`,
+                error,
+            )
             throw error
         }
+    })
+
+    // The item as the item editor has it ("load-item" and "item-updated"
+    // send the same), to show what a save wrote
+    ipcMain.handle("get-item", async (event, { itemId }) => {
+        const item = packages
+            .flatMap((p) => p.items)
+            .find((i) => i.id === itemId)
+        if (!item) return { success: false, error: `Item ${itemId} not found` }
+        return { success: true, item: item.toJSONWithExistence() }
     })
 
     // Open create item window
@@ -47,7 +66,7 @@ function register(ipcMain, mainWindow) {
             createItemCreationWindow(mainWindow)
             return { success: true }
         } catch (error) {
-            console.error("Failed to open item creation window:", error)
+            console.error("Failed to open the item creation window:", error)
             throw error
         }
     })
@@ -126,17 +145,20 @@ function register(ipcMain, mainWindow) {
                     fs.mkdirSync(itemFolderPath, { recursive: true })
                 }
 
-                // Create editoritems.json
+                // Create editoritems.json. Its Type is the item's ID, as in
+                // info.json
                 const editoritems = {
                     Item: {
-                        Type: "ITEM_CUBE",
+                        Type: itemId,
                         ItemClass: "ItemBase",
                         SubtypeProperty: null,
                         Editor: {
                             SubType: {
                                 Name: name,
+                                // What Portal 2's palette shows: the name in
+                                // capitals, as BEE2's items have it
                                 Palette: {
-                                    Tooltip: description || "",
+                                    Tooltip: name.trim().toUpperCase(),
                                     Position: "0 0 0",
                                 },
                             },
@@ -201,6 +223,9 @@ function register(ipcMain, mainWindow) {
                 const properties = {
                     Properties: {
                         Authors: author,
+                        ...(description?.trim() && {
+                            Description: descriptionValue(description),
+                        }),
                     },
                 }
                 fs.writeFileSync(
@@ -284,12 +309,23 @@ function register(ipcMain, mainWindow) {
                 }
 
                 const newItem = new Item({ packagePath, itemJSON })
+                // Made with this BeePEE (the Meta tab says so)
+                newItem.updateMetadata({
+                    madeWithBeePEE: true,
+                    createdVersion: APP_VERSION,
+                    lastSavedVersion: APP_VERSION,
+                })
                 const pkg = packages.find((p) => p.packageDir === packagePath)
                 if (pkg) {
                     pkg.items.push(newItem)
                 } else {
-                    console.warn(`Package not found for path: ${packagePath}`)
+                    console.warn(
+                        `No loaded package matches ${packagePath}, so the new item isn't listed`,
+                    )
                 }
+                console.log(
+                    `Created item "${name}" (${itemId}) with ${plural(instances.length, "instance")}`,
+                )
 
                 // Package changed on disk (working dir) but not the .bpee
                 global.titleManager?.setUnsavedChanges(true)
@@ -310,7 +346,7 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true, itemId }
             } catch (error) {
-                console.error("Failed to create item:", error)
+                console.error(`Failed to create item "${name}":`, error)
                 dialog.showErrorBox(
                     "Failed to Create Item",
                     error.message || "An unknown error occurred",
@@ -355,16 +391,19 @@ function register(ipcMain, mainWindow) {
 
                 fs.mkdirSync(itemFolderPath, { recursive: true })
 
-                // Create minimal editoritems.json
+                // Create minimal editoritems.json. Its Type is the item's ID,
+                // as in info.json
                 const editoritems = {
                     Item: {
-                        Type: "ITEM_CUBE",
+                        Type: itemId,
                         ItemClass: "ItemBase",
                         Editor: {
                             SubType: {
                                 Name: itemName,
+                                // What Portal 2's palette shows: the name in
+                                // capitals, as BEE2's items have it
                                 Palette: {
-                                    Tooltip: description || "",
+                                    Tooltip: itemName.trim().toUpperCase(),
                                 },
                             },
                         },
@@ -384,6 +423,9 @@ function register(ipcMain, mainWindow) {
                 const properties = {
                     Properties: {
                         Authors: author || "Unknown",
+                        ...(description?.trim() && {
+                            Description: descriptionValue(description),
+                        }),
                     },
                 }
                 fs.writeFileSync(
@@ -428,12 +470,21 @@ function register(ipcMain, mainWindow) {
                 }
 
                 const newItem = new Item({ packagePath, itemJSON })
+                // Made with this BeePEE (the Meta tab says so)
+                newItem.updateMetadata({
+                    madeWithBeePEE: true,
+                    createdVersion: APP_VERSION,
+                    lastSavedVersion: APP_VERSION,
+                })
                 const pkg = packages.find((p) => p.packageDir === packagePath)
                 if (pkg) {
                     pkg.items.push(newItem)
                 } else {
-                    console.warn(`Package not found for path: ${packagePath}`)
+                    console.warn(
+                        `No loaded package matches ${packagePath}, so the new item isn't listed`,
+                    )
                 }
+                console.log(`Created item "${itemName}" (${itemId})`)
 
                 // Package changed on disk (working dir) but not the .bpee
                 global.titleManager?.setUnsavedChanges(true)
@@ -454,7 +505,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true, itemId, item: newItem.toJSONWithExistence() }
             } catch (error) {
-                console.error("Failed to create item:", error)
+                console.error(
+                    `Failed to create item "${name || providedItemId}":`,
+                    error,
+                )
                 return { success: false, error: error.message }
             }
         },
@@ -538,6 +592,8 @@ function register(ipcMain, mainWindow) {
                     delete packageInfo.Item
                 }
             }
+            // And its colors (its config group's color widget)
+            withColors(packageInfo, { itemId, on: false })
 
             fs.writeFileSync(infoPath, JSON.stringify(packageInfo, null, 2))
 
@@ -547,6 +603,7 @@ function register(ipcMain, mainWindow) {
                     (i) => i.id !== itemId,
                 )
             }
+            console.log(`Deleted item "${targetItem.name}" (${itemId})`)
 
             // Package changed on disk (working dir) but not the .bpee
             global.titleManager?.setUnsavedChanges(true)
@@ -561,7 +618,7 @@ function register(ipcMain, mainWindow) {
 
             return { success: true }
         } catch (error) {
-            console.error("Failed to delete item:", error)
+            console.error(`Failed to delete item ${itemId}:`, error)
             dialog.showErrorBox("Failed to Delete Item", error.message)
             return { success: false, error: error.message }
         }

@@ -35,6 +35,8 @@ backend/libs/areng_mdlDepend/_internal
 
 # Other
 .env
+# Build-time injected crash report endpoints - never commit real URLs
+backend/utils/crashEndpoints.generated.json
 docs_backup
 .claude
 # design-sync machine state

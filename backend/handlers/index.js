@@ -18,6 +18,7 @@ const crashReportHandlers = require("./crashReportHandlers")
 const signageHandlers = require("./signageHandlers")
 const settingsHandlers = require("./settingsHandlers")
 const importHandlers = require("./importHandlers")
+const iconHandlers = require("./iconHandlers")
 
 // Track if settings handlers were registered early (for setup window)
 let settingsHandlersRegistered = false
@@ -29,7 +30,6 @@ function registerSettingsHandlersEarly(ipcMain) {
     if (!settingsHandlersRegistered) {
         settingsHandlers.register(ipcMain, null)
         settingsHandlersRegistered = true
-        console.log("✅ Settings handlers registered early")
     }
 }
 
@@ -53,14 +53,13 @@ function registerAll(ipcMain, mainWindow) {
     crashReportHandlers.register(ipcMain, mainWindow)
     signageHandlers.register(ipcMain, mainWindow)
     importHandlers.register(ipcMain, mainWindow)
+    iconHandlers.register(ipcMain, mainWindow)
 
     // Only register settings handlers if not already registered
     if (!settingsHandlersRegistered) {
         settingsHandlers.register(ipcMain, mainWindow)
         settingsHandlersRegistered = true
     }
-
-    console.log("✅ All IPC handlers registered")
 }
 
 module.exports = { registerAll, registerSettingsHandlersEarly }

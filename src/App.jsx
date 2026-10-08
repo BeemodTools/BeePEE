@@ -14,10 +14,11 @@ import ModelPreviewPage from "./pages/ModelPreviewPage"
 import LoadingPopup from "./components/LoadingPopup"
 import UpdateNotification from "./components/UpdateNotification"
 import CrashReportPage from "./pages/CrashReportPage"
-import BeePackagePage from "./pages/BeePackagePage"
 import SignageEditor from "./components/SignageEditor"
 import SignageDesignerPage from "./pages/SignageDesignerPage"
 import ImportItemsPage from "./pages/ImportItemsPage"
+import IconMakerPage from "./pages/IconMakerPage"
+import TimerColorsPage from "./pages/TimerColorsPage"
 import { ItemProvider } from "./contexts/ItemContext"
 import { SignageProvider } from "./contexts/SignageContext"
 import "./global.css"
@@ -33,10 +34,11 @@ function App() {
     const showChangelog = routeParam === "changelog"
     const showModelPreview = routeParam === "model-preview"
     const showCrashReport = routeParam === "crash-report"
-    const showBeePackage = routeParam === "bee-package"
     const showSignageEditor = routeParam === "signage-editor"
     const showSignageDesigner = routeParam === "signage-designer"
     const showImportItems = routeParam === "import-items"
+    const showIconMaker = routeParam === "icon-maker"
+    const showTimerColors = routeParam === "timer-colors"
     const showSettings = routeParam === "settings"
     const showSetup = routeParam === "setup"
     const [packageLoaded, setPackageLoaded] = useState(false)
@@ -46,6 +48,8 @@ function App() {
         progress: 0,
         message: "Loading...",
         error: null,
+        // The package that failed to open, to report it
+        failureId: null,
     })
     // Check if setup is complete on mount
     useEffect(() => {
@@ -81,6 +85,7 @@ function App() {
                 progress: data.progress,
                 message: data.message,
                 error: data.error || null,
+                failureId: data.failureId || null,
             })
 
             if (data.progress >= 100 && !data.error) {
@@ -124,6 +129,20 @@ function App() {
                                 error: null,
                             }))
                         }
+                        onReport={
+                            loadingState.failureId
+                                ? () => {
+                                      window.package.reportFailedPackage?.(
+                                          loadingState.failureId,
+                                      )
+                                      setLoadingState((prev) => ({
+                                          ...prev,
+                                          open: false,
+                                          error: null,
+                                      }))
+                                  }
+                                : undefined
+                        }
                     />
                 </>
             ) : showCreateItem ? (
@@ -144,9 +163,6 @@ function App() {
             ) : showCrashReport ? (
                 // Show CrashReportPage directly for production windows
                 <CrashReportPage />
-            ) : showBeePackage ? (
-                // Show BeePackagePage directly for production windows
-                <BeePackagePage />
             ) : showSignageEditor ? (
                 // Show SignageEditor directly for production windows
                 <SignageProvider>
@@ -158,6 +174,12 @@ function App() {
             ) : showImportItems ? (
                 // Item Importer window (File > Import from Package...)
                 <ImportItemsPage />
+            ) : showIconMaker ? (
+                // Icon maker window (item editor > Info > Make Icon)
+                <IconMakerPage />
+            ) : showTimerColors ? (
+                // Default Colors window (item editor > Variables > Color)
+                <TimerColorsPage />
             ) : showSettings ? (
                 // Show SettingsPage directly for production windows
                 <SettingsPage />
@@ -183,19 +205,11 @@ function App() {
                             <Route
                                 path="/"
                                 element={
-                                    packageLoaded
-                                        ? (() => {
-                                              console.log(
-                                                  "Rendering MainTabs (packageLoaded=true)",
-                                              )
-                                              return <MainTabs />
-                                          })()
-                                        : (() => {
-                                              console.log(
-                                                  "Rendering WelcomePage (packageLoaded=false)",
-                                              )
-                                              return <WelcomePage />
-                                          })()
+                                    packageLoaded ? (
+                                        <MainTabs />
+                                    ) : (
+                                        <WelcomePage />
+                                    )
                                 }
                             />
                             <Route path="/editor" element={<ItemEditor />} />
@@ -222,10 +236,6 @@ function App() {
                             <Route
                                 path="/crash-report"
                                 element={<CrashReportPage />}
-                            />
-                            <Route
-                                path="/bee-package"
-                                element={<BeePackagePage />}
                             />
                             <Route
                                 path="/signage-editor"
@@ -260,6 +270,20 @@ function App() {
                                 open: false,
                                 error: null,
                             }))
+                        }
+                        onReport={
+                            loadingState.failureId
+                                ? () => {
+                                      window.package.reportFailedPackage?.(
+                                          loadingState.failureId,
+                                      )
+                                      setLoadingState((prev) => ({
+                                          ...prev,
+                                          open: false,
+                                          error: null,
+                                      }))
+                                  }
+                                : undefined
                         }
                     />
                     <UpdateNotification />

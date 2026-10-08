@@ -20,6 +20,7 @@ import {
     rasterizeSignageTextures,
     serializeDesign,
     rehydrateDesign,
+    loadPictureLayer,
 } from "../components/signages/glyphs"
 import { loadSignagePrefs } from "../components/signages/SignagePreferences"
 import { styleDisplayName } from "../components/signages/Styles"
@@ -44,13 +45,23 @@ function SignageDesignerPage() {
     useEffect(() => {
         document.title = "BeePEE - Signage Designer"
 
-        window.package?.onLoadSignageDesign?.((payload) => {
+        window.package?.onLoadSignageDesign?.(async (payload) => {
             if (!payload) return
             try {
-                // No stored design (e.g. a fresh non-Clean style) starts blank
-                const layers = payload.design
-                    ? rehydrateDesign(payload.design)
-                    : []
+                // No stored design: a signage made from a picture (an
+                // uploaded PNG) starts from it, one with neither (like a
+                // fresh non-Clean style) blank
+                let layers = []
+                if (payload.design) {
+                    layers = rehydrateDesign(payload.design)
+                } else if (payload.image) {
+                    layers = [
+                        await loadPictureLayer(
+                            payload.name || "Picture",
+                            payload.image,
+                        ),
+                    ]
+                }
                 setInitialLayers(layers)
                 setEditId(payload.editId || null)
                 setEditStyle(payload.styleId || null)
@@ -63,8 +74,14 @@ function SignageDesignerPage() {
                             : ""
                     document.title = `Edit Signage: ${payload.name || payload.editId}${styleTag}`
                 }
+                console.log(
+                    `Loaded design for signage "${payload.name || payload.editId}" (${payload.styleId || "BEE2_CLEAN"}, ${layers.length} layers)`,
+                )
             } catch (err) {
-                console.error("Failed to load signage design:", err)
+                console.error(
+                    `Failed to load design for signage "${payload.name || payload.editId}":`,
+                    err,
+                )
             }
         })
         return () => window.package?.onLoadSignageDesign?.(null)
@@ -103,12 +120,13 @@ function SignageDesignerPage() {
         setError(null)
         try {
             const prefs = await loadSignagePrefs()
-            const iconData = await rasterizeLayers(layers)
-            const tex = await rasterizeSignageTextures(
-                layers,
-                prefs.signageTextureSize || 512,
-                { glowMode: prefs.signageGlowMode },
-            )
+            // The icon and the in-game texture both use the texture size
+            // setting
+            const size = prefs.signageTextureSize || 512
+            const iconData = await rasterizeLayers(layers, size)
+            const tex = await rasterizeSignageTextures(layers, size, {
+                glowMode: prefs.signageGlowMode,
+            })
             const materialData = tex.base
             const maskData = tex.mask
             const hasGlow = tex.hasGlow
@@ -125,6 +143,11 @@ function SignageDesignerPage() {
                 editId: editId || undefined,
                 styleId: (editId && editStyle) || undefined,
             }
+            console.log(
+                editId
+                    ? `Sending design for signage "${payload.name}" to its editor (${payload.styleId || "BEE2_CLEAN"}, ${layers.length} layers)`
+                    : `Creating signage "${payload.name}" from the designer (${layers.length} layers)`,
+            )
             // Edits are STAGED into the signage editor window - its Save
             // button performs the real commit. Only brand-new signage is
             // created directly (there's no editor to stage into yet).
@@ -138,7 +161,10 @@ function SignageDesignerPage() {
             }
             // On success the backend closes this window
         } catch (err) {
-            console.error("Failed to save signage:", err)
+            console.error(
+                `Failed to save signage design "${name.trim()}":`,
+                err,
+            )
             setError(err.message || "Failed to save signage")
             setPendingLayers(layers)
         } finally {

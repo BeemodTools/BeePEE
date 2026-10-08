@@ -27,7 +27,6 @@ export default function UpdateNotification() {
     useEffect(() => {
         // Listen for update status events
         window.package.onUpdateStatus((data) => {
-            console.log("Update status received:", data)
             setUpdateStatus(data)
 
             // Show notification for relevant events

@@ -1,12 +1,50 @@
-import { useState } from "react"
-import { Box, Typography, TextField, Button, Stack, Alert } from "@mui/material"
-import { CheckCircle, Close } from "@mui/icons-material"
+import { useEffect, useState } from "react"
+import {
+    Box,
+    Typography,
+    TextField,
+    Button,
+    Stack,
+    Alert,
+    Divider,
+    InputAdornment,
+} from "@mui/material"
+import { CheckCircle, Close, LockOutlined } from "@mui/icons-material"
+import BeePmFields from "../components/BeePmFields"
+import {
+    beePmName,
+    nameProblem,
+    newBeePmFields,
+    savedBeePmFields,
+    versionProblem,
+} from "../utils/beePm"
 
 function CreatePackagePage() {
     const [name, setName] = useState("")
     const [description, setDescription] = useState("")
+    const [author, setAuthor] = useState("")
+    // The author is whoever's logged in to BeePM on this PC, when someone is
+    const [beePmHandle, setBeePmHandle] = useState(null)
+    const [beePm, setBeePm] = useState(() => newBeePmFields())
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState(null)
+
+    useEffect(() => {
+        window.package
+            ?.getBeePmHandle?.()
+            .then(({ handle }) => {
+                if (handle) setBeePmHandle(handle)
+            })
+            .catch((err) => console.warn("Failed to check the BeePM login:", err))
+    }, [])
+
+    const handleNameChange = (newName) => {
+        // The BeePM name follows the package's until it's changed
+        if (!beePm.name || beePm.name === beePmName(name)) {
+            setBeePm({ ...beePm, name: beePmName(newName) })
+        }
+        setName(newName)
+    }
 
     const handleCreate = async () => {
         setError(null)
@@ -16,16 +54,18 @@ function CreatePackagePage() {
             const result = await window.electron.invoke("create-package", {
                 name,
                 description,
+                author: beePmHandle ?? author.trim(),
+                beePackage: savedBeePmFields(beePm),
             })
 
             if (result.success) {
-                console.log("Package created successfully:", result.packageId)
+                console.log(`Created package "${name}" (${result.packageId})`)
                 // Window will close automatically from backend
             } else {
                 setError(result.error || "Failed to create package")
             }
         } catch (err) {
-            console.error("Error creating package:", err)
+            console.error(`Failed to create package "${name}":`, err)
             setError(err.message || "Failed to create package")
         } finally {
             setLoading(false)
@@ -64,23 +104,48 @@ function CreatePackagePage() {
 
             {/* Content */}
             <Box sx={{ flex: 1, overflow: "auto", p: 3 }}>
-                <Stack spacing={3}>
+                <Stack spacing={2.5}>
                     {error && (
                         <Alert severity="error" onClose={() => setError(null)}>
                             {error}
                         </Alert>
                     )}
 
-                    <TextField
-                        label="Package Name"
-                        value={name}
-                        onChange={(e) => setName(e.target.value)}
-                        placeholder="My Awesome Package"
-                        fullWidth
-                        required
-                        disabled={loading}
-                        helperText="A descriptive name for your package"
-                    />
+                    <Stack direction="row" spacing={2}>
+                        <TextField
+                            label="Package Name"
+                            value={name}
+                            onChange={(e) => handleNameChange(e.target.value)}
+                            placeholder="My Awesome Package"
+                            required
+                            disabled={loading}
+                            helperText="A descriptive name for your package"
+                            sx={{ flex: 3 }}
+                        />
+                        <TextField
+                            label="Author"
+                            value={beePmHandle ?? author}
+                            onChange={(e) => setAuthor(e.target.value)}
+                            placeholder="Your name"
+                            required
+                            disabled={loading || !!beePmHandle}
+                            helperText={
+                                beePmHandle
+                                    ? "Your BeePM handle"
+                                    : "Can't be changed later"
+                            }
+                            sx={{ flex: 2 }}
+                            slotProps={{
+                                input: {
+                                    endAdornment: beePmHandle ? (
+                                        <InputAdornment position="end">
+                                            <LockOutlined fontSize="small" />
+                                        </InputAdornment>
+                                    ) : undefined,
+                                },
+                            }}
+                        />
+                    </Stack>
 
                     <TextField
                         label="Description"
@@ -89,7 +154,7 @@ function CreatePackagePage() {
                         placeholder="Adds custom items and styles to Portal 2"
                         fullWidth
                         multiline
-                        rows={4}
+                        rows={3}
                         disabled={loading}
                         helperText="What does this package add?"
                     />
@@ -113,6 +178,25 @@ function CreatePackagePage() {
                                 : "PACKAGE_NAME_XXXX"}
                         </Typography>
                     </Box>
+
+                    <Divider />
+
+                    <Box>
+                        <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                            BeePM
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                            You can change these later in Edit &gt; Package
+                            Information.
+                        </Typography>
+                    </Box>
+
+                    <BeePmFields
+                        value={beePm}
+                        onChange={(fields) => setBeePm(fields)}
+                        disabled={loading}
+                        quietEmptyName={!name.trim()}
+                    />
                 </Stack>
             </Box>
 
@@ -137,7 +221,13 @@ function CreatePackagePage() {
                         variant="contained"
                         color="primary"
                         onClick={handleCreate}
-                        disabled={loading || !name.trim()}
+                        disabled={
+                            loading ||
+                            !name.trim() ||
+                            !(beePmHandle ?? author.trim()) ||
+                            !!nameProblem(beePm.name) ||
+                            !!versionProblem(beePm.version)
+                        }
                         startIcon={<CheckCircle />}
                         sx={{ minWidth: 120 }}>
                         {loading ? "Creating..." : "Create"}

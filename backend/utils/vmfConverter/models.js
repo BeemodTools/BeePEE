@@ -493,14 +493,18 @@ async function loadModel({ resources, tempDir, crowbarPath }, modelPath) {
     const files = resources
         .listWithPrefix(`${base}.`)
         .filter((file) => !/\.(vmt|vtf)$/.test(file))
+    // Each model is decompiled in a folder of its own, so the QC found for
+    // it can't be another model's (from the same game folder) when Crowbar
+    // fails or names the QC after the model's internal name
+    const workDir = await fs.promises.mkdtemp(path.join(tempDir, "mdl-"))
     for (const file of files) {
-        const target = safeJoin(tempDir, file)
+        const target = safeJoin(workDir, file)
         await fs.promises.mkdir(path.dirname(target), { recursive: true })
         await fs.promises.writeFile(target, await resources.read(file))
     }
 
-    const mdlFile = safeJoin(tempDir, modelPath)
-    const output = await runCrowbar(crowbarPath, mdlFile, tempDir)
+    const mdlFile = safeJoin(workDir, modelPath)
+    const output = await runCrowbar(crowbarPath, mdlFile, workDir)
     const qcPath = await findQc(path.dirname(mdlFile), path.basename(base))
     if (!qcPath) {
         const detail = output.trim().split(/\r?\n/).slice(-3).join(" ")

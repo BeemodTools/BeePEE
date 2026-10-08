@@ -1,52 +1,25 @@
 /**
- * Restores the placeholders in crashReportConfig.js after build
- * This prevents accidentally committing the real endpoints
+ * Removes the generated endpoints file after build so a dev machine
+ * doesn't keep real endpoints lying around between builds. (The file is
+ * gitignored either way - this is just tidiness, not leak prevention.)
  */
 
 const fs = require("fs")
 const path = require("path")
 
-const CONFIG_FILE = path.join(__dirname, "..", "backend", "utils", "crashReportConfig.js")
+const GENERATED_FILE = path.join(
+    __dirname,
+    "..",
+    "backend",
+    "utils",
+    "crashEndpoints.generated.json",
+)
 
-const TEMPLATE = `/**
- * Crash report endpoint configuration
- *
- * The placeholders below are replaced at build time by scripts/inject-config.js
- * Set CRASH_REPORT_ENDPOINT (stable) and CRASH_REPORT_ENDPOINT_BETA (beta)
- * environment variables (or .env entries) before running npm run build/publish
- */
-
-const { isBeta } = require("./betaInfo")
-
-// These placeholders get replaced at build time
-// DO NOT commit actual endpoints here - use the inject script
-const CRASH_REPORT_ENDPOINT = "__CRASH_REPORT_ENDPOINT__"
-const CRASH_REPORT_ENDPOINT_BETA = "__CRASH_REPORT_ENDPOINT_BETA__"
-
-// Un-injected placeholders (or empty strings) mean "not configured"
-function resolveEndpoint(value) {
-    if (!value || value.startsWith("__")) return null
-    return value
-}
-
-/**
- * Get the crash report endpoint URL for this build's channel.
- * Beta builds use the beta endpoint, falling back to the stable one
- * if no beta endpoint was configured.
- * @returns {string|null} The endpoint URL or null if not configured
- */
-function getCrashReportEndpoint() {
-    if (isBeta()) {
-        return (
-            resolveEndpoint(CRASH_REPORT_ENDPOINT_BETA) ||
-            resolveEndpoint(CRASH_REPORT_ENDPOINT)
-        )
+try {
+    if (fs.existsSync(GENERATED_FILE)) {
+        fs.unlinkSync(GENERATED_FILE)
+        console.log("Removed generated crash endpoints file")
     }
-    return resolveEndpoint(CRASH_REPORT_ENDPOINT)
+} catch (err) {
+    console.warn("Could not remove generated endpoints file:", err.message)
 }
-
-module.exports = { getCrashReportEndpoint }
-`
-
-fs.writeFileSync(CONFIG_FILE, TEMPLATE, "utf-8")
-console.log("Restored placeholders in crashReportConfig.js")

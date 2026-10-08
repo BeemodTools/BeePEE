@@ -185,15 +185,18 @@ Standard editor windows use `width: 960, height: 1024` in `backend/items/itemEdi
     - Updates in-memory package data
     - Refreshes UI automatically
 
-### VBSP Conditions - Random Array Support
+### VBSP Conditions (vbsp_config.cfg)
 
-- **Implemented**: Support for "random" arrays in VBSP conditions
-- **Features**:
-    - Parses random selection structures from condition results
-    - Visual block editor with "Random Selection" block type
-    - Displays options as numbered list in the UI
-    - Validates random selection blocks
-    - Uses `Hive` icon for visual representation
+- **Kept as the package has it**: the import leaves each `vbsp_config.cfg` as it is (it's not turned into JSON), and the export copies it as it is. A JS object can't hold VBSP exactly: it groups a key that repeats with other keys between them (`Condition`, `Result`, `Condition` - an order BEE2 runs them in) and puts number keys first (MapInstVar's `"0" "3"` mappings before its `"$cube_type" "$bomb_time"` pair, which BEE2 reads as the first line).
+- **Raw blocks**: the Conditions tab shows each condition in the file as a "Raw VBSP" block, `{ id, type: "rawVbsp", key, vdf }`, where `vdf` is the condition's exact text (with the comments above it). They're read-only; they can be moved (at the top level only - they're whole conditions), duplicated and deleted.
+- **The editor's blocks** (`vbsp_blocks` in meta.json) are used while saving them would write the conditions the file has, or what BeePEE wrote for them before some blocks were fixed (`Item.writesConditionsOf`, with `blockConditions(blocks, { legacy: true })`). When the file changed since (or a package made with BeePEE ships stale blocks), the file's conditions show as raw blocks instead.
+- **Writing blocks** (`Item.blockConditions`): a result block on its own goes in a `Result` block (on a condition's own level BEE2 reads everything but `Condition` and `Switch` as a test); Change Fixup writes `setInstVar`, Random Selection BEE2's `random`, Add Global Instance `addGlobal { file }`; a Change Instance without an instance writes nothing (`changeInstance ""` removes the instance). When writing changes what old blocks write, add the old way to `legacy` so items saved with it keep their blocks.
+- **Saving** (`Item.saveConditions`) replaces only what's inside the file's `"Conditions"` block: raw blocks as their text was, BeePEE's blocks written from their blocks. Other sections (DropperItems, Replacements, Fizzlers, ...), comments, line ends and the encoding stay; BeePEE's header goes on the first line. With no conditions left, the Conditions block goes (and the file, if nothing else is in it). A config that can't be read isn't saved over: the tab shows why and its add buttons are disabled.
+- **Older imports** kept `vbsp_config.json` (already JSON, so already changed): it's read as before, and replaced by `vbsp_config.cfg` the first time its conditions are saved.
+- **Model making for a variable** (Cube Type, Timer Delay, a Start... checkbox) runs the item's conditions once for each value, the way BEE2 does (`backend/utils/vbspEvaluator.js`, used by `variableValueInstances` in `mdlConverter.js`): on the item's first instance, with the variable's fixup set to the value and the other properties' at their defaults, by priority then file order. It follows `instance`, `instvar`/`$fixup` tests, NOT/AND/OR, Switch (first/last/all), nested conditions and Else, `changeInstance` (`<ITEM_ID:...>` lookups too), `suffix`, `addOverlay`, `setInstVar`/`$fixup` results and `mapInstVar`. Tests it can't tell (styleVar, orientation, ...) and random results are followed every way they can go; when those end differently, the most common instance is used and the log says it's uncertain. An item whose conditions remove its instance (a dummy) gets the first instance they add on top. The SubTypes are one per value, in order (5 cube types, 31 timer delays, 2 for checkboxes); a value with no instance gets the default value's model.
+- **Instances the conditions switch to** (`changeInstance` paths, any case) are registered in the item's editoritems (`Item.registerConditionInstances`, when its package loads and whenever its instances reload), so they show in the Instances tab. The item's instances are always what editoritems has, under its indices. One the user removes stays removed (`removedInstances` in meta.json; adding it again clears that), and its VMF stays while the conditions use it. Removing an instance deletes its VMF only when nothing else uses it (another of its instances, its conditions, another item of the package) and takes its custom name along; only BEE2's `instances/bee2_dev` ones can't be removed.
+- **Files**: `backend/utils/keyvalues.js` (VDF read in order, with where each entry is in the text), `backend/utils/vbspConditions.js` (raw blocks, writing conditions back), `backend/__tests__/vbspConditions.test.js`, `backend/__tests__/conditionInstances.test.js`.
+- Random Selection blocks (made by imports before this) still show and are written as BEE2's `random`; imports no longer make them.
 
 ### Item Metadata Tracking
 
@@ -233,7 +236,7 @@ Standard editor windows use `width: 960, height: 1024` in `backend/items/itemEdi
 - **Startup popup**: beta builds show a warning dialog on every launch (`backend/main.js`) telling testers the build is bug prone, to stress test, and to report bugs via Help > Report Bug.
 - **Beta changelog** (`changelog-beta.json`): beta builds load this file in the What's New window instead of `changelog.json` (falling back to it if missing) - see `load-changelog` in `backend/handlers/updateHandlers.js`. Same JSON structure as the stable changelog.
 - **Auto-updater**: beta builds set `allowPrerelease = true` (harmless since the main repo only has stable tags); stable builds filter out any `-beta.x` tagged version by semver suffix.
-- **Separate bug report endpoint**: `backend/utils/crashReportConfig.js` holds two build-time placeholders. Set both `CRASH_REPORT_ENDPOINT` (stable) and `CRASH_REPORT_ENDPOINT_BETA` (beta) in `.env`; `scripts/inject-config.js` injects both. Beta builds report to the beta endpoint (falling back to stable if unset). Reports also include a `channel` form field (`beta`/`stable`).
+- **Separate bug report endpoint**: set `CRASH_REPORT_ENDPOINT` (stable) and `CRASH_REPORT_ENDPOINT_BETA` (beta) in `.env`. At build time `scripts/inject-config.js` writes them to `backend/utils/crashEndpoints.generated.json` - a **gitignored** file read at runtime by `crashReportConfig.js`, so real URLs never touch tracked source and can't be committed by accident. `restore-config.js` deletes the generated file after the build. Beta builds report to the beta endpoint (falling back to stable if unset); reports include a `channel` form field (`beta`/`stable`).
 
 ## Key Technical Architecture
 
@@ -259,6 +262,37 @@ Standard editor windows use `width: 960, height: 1024` in `backend/items/itemEdi
 
 - Uses `window.electron.invoke()` for backend communication
 - Listens for events via `window.package.on*` methods
+
+### Logging
+
+- **Logger** (`backend/utils/logger.js`): all `console.*` output of the main process goes through it, as plain text (no emojis), to the terminal and `userData/logs/beepee-<time>.log` (Help > Open Logs Folder). Warnings and errors get a `Warning: ` / `Error: ` label automatically.
+- **Steps drawn as a tree**: wrap multi-step work in `await logger.section("Model generation for \"X\"", async () => {...})`. Everything logged while it runs (also in the functions it calls, across awaits) is drawn under the title with `├─ │ └─`, and the step ends with `[✓] Done in 1.2 s` or `[✗] Failed after 1.2 s: <reason>` and a spacer line (thrown errors are re-thrown; returning `{ success: false, error }` also counts as failed). Steps run in parallel (`Promise.all`) use `{ buffered: true }`, so each keeps its lines together, in the order they started. Separate steps that happen to run at the same time (the update check while a package loads) take turns: when a step's tree goes on after other lines, the titles of the steps the line is in are written again with "(continued)". Don't wrap code that leaves timers or listeners running.
+- **Windows' logs**: `src/utils/logForwarding.js` (imported first in `src/main.jsx`) sends each window's console output and uncaught errors over `renderer:log` to `backend/handlers/logHandlers.js`, which logs them as `[Item Editor] ...` (the window name comes from its `?route=`).
+- **Keeping logs small**: log one summary line with counts instead of a line per file, use `logger.debug` for per-file detail (only written in development or with verbose logging), and never dump whole objects. The logger also cuts messages at 4000 characters, writes a line repeated many times in a row once with a count, continues in a new file after 5 MB and keeps the 10 newest files.
+
+Example (Make Model on an item with 3 variants; each line also gets its time in the log file):
+
+```
+Model generation for "Better Floor Button" (BUTTON TYPE variants)
+├─ 3 values of BUTTON TYPE use 3 instances
+├─ Converting 3 instances to OBJ
+│  ├─ better_floor_button_0: instances/beepkg/better_floor_button/better_floor_button_0.vmf
+│  │  ├─ 41 brushes (6147 faces), 1 prop, 7 materials
+│  │  └─ [✓] Done in 645 ms
+│  │
+│  ├─ Applied the cartoon style to 12 textures in 571 ms
+│  └─ [✓] Done in 2.4 s
+│
+├─ Compiling 3 models
+│  ├─ Making better_floor_button_0.mdl
+│  │  ├─ Compiled better_floor_button_0.mdl with studiomdl
+│  │  └─ [✓] Done in 7.2 s
+│  │
+│  └─ [✓] Done in 7.2 s
+│
+├─ Made 3 of 3 models, staged as 3 subtypes (applied on Save)
+└─ [✓] Done in 10.1 s
+```
 
 ### React State Management
 
@@ -314,6 +348,9 @@ onPackageLoaded: (callback) => {
 - `backend/models/items.js` - Item class and data management
 - `backend/models/package.js` - Package class managing item collections
 - `backend/packageManager.js` - Package loading and conversion (VDF/JSON)
+- `backend/utils/keyvalues.js` - VDF read in order (with where each entry is), VDF to JS objects and back
+- `backend/utils/vbspConditions.js` - Items' VBSP conditions as raw blocks, and writing them back
+- `backend/utils/behindSurface.js` - What an instance has behind its item's surface (the Instances tab's leak warning)
 - `backend/saveItem.js` - File system operations for saving items
 - `backend/preload.js` - Secure API exposure to renderer
 
@@ -671,34 +708,26 @@ Automatically generates 3DS collision models alongside MDL files for proper phys
     - Creates MDL, VVD, VTX files
     - Copies to: `{package}/resources/models/props_map_editor/bpee/{itemName}/`
 
-3. **OBJ → 3DS Conversion** (NEW!)
-    - Converts the same OBJ file to 3DS format for collision detection
-    - Uses PyAssimp with triangulation and normal generation
+3. **OBJ → 3DS Conversion**
+    - Converts the same OBJ file to 3DS format for collision detection (`backend/utils/objTo3ds.js`), scaled and rotated for the editor
     - Outputs to: `{package}/temp_models/{itemName}.3ds`
 
 4. **3DS Installation** (NEW!)
     - Copies 3DS file to: `{package}/resources/models/puzzlemaker/selection_bee2/bpee/{itemName}/{itemName}.3ds`
     - Updates `editoritems.json` with `CollisionModelName` field
 
-### Files Created
+### Files
 
-**New Utility: `backend/libs/areng_obj23ds/convert_obj_to_3ds.py`**
+**`backend/utils/objTo3ds.js`** (replaced the Python `convert_obj_to_3ds.exe`, writing the same bytes)
 
-- Python script using PyAssimp for OBJ to 3DS conversion
-- Handles triangulation (3DS requirement)
-- Generates normals if missing
-- Optimizes vertex data
+- Writes one triangle mesh object named "collision": vertices are scaled, then rotated by roll (X), pitch (Y) and yaw (Z); polygons become triangle fans
+- 3DS counts are 16-bit, so meshes with more than 65,535 vertices or faces are split into several objects ("collision", "collision2", ...)
 
-**New Functions in `backend/utils/mdlConverter.js`:**
+**Functions in `backend/utils/mdlConverter.js`:**
 
-- `convertObjTo3DS()` - Executes Python converter script
+- `convertObjTo3DS()` - Converts the OBJ with `objTo3ds.js`
 - `copy3DSToPackage()` - Copies 3DS to correct package directory
-
-**Updated Files:**
-
-- `backend/utils/mdlConverter.js` - Added 3DS conversion to `convertAndInstallMDL()`
-- `backend/events.js` - Updated all model conversion handlers to include 3DS paths
-- `package.json` - Added `areng_obj23ds` to extraResources
+- `convertAndInstallMDL()` - Runs the 3DS conversion after the MDL compile
 
 ### Directory Structure
 
@@ -744,19 +773,7 @@ Automatically generates 3DS collision models alongside MDL files for proper phys
 
 ### Requirements
 
-**Option A: Blender (Recommended)**
-
-1. **Blender** - Install from https://www.blender.org/
-2. No additional setup required
-3. Automatically detected in common installation paths
-
-**Option B: PyAssimp (Fallback)**
-
-1. **Python 3.x** - Must be available in system PATH
-2. **PyAssimp** - Install with: `pip install pyassimp`
-3. **Assimp Library DLL** - Must be in system PATH (not included with PyAssimp)
-
-**Automatic Fallback:** BeePEE tries Blender first, then falls back to PyAssimp if Blender is unavailable.
+None: the conversion runs inside BeePEE.
 
 ### User Experience
 
@@ -784,13 +801,59 @@ Graceful degradation:
 
 ---
 
+## Model Dependencies
+
+`backend/utils/mdlDependencies.js` lists the materials and textures a model needs, for the autopacker (`autopacker.js`) and the instance asset check (`instanceHandlers.js`). It replaced the Python `find_mdl_deps.exe` (srctools) and gives the same results (checked on all 270 models used by the packages), about 100x faster since the file index is built once and reused.
+
+It follows srctools' `PackList` rules:
+
+- The model's textures resolve to the first VMT found in its `$cdmaterials` folders (plus the textures' own folders and the root), for the skin table columns its meshes use
+- Each VMT adds its `patch` parents, every parameter srctools types as a texture (listed even if the file is missing; `env_cubemap` and `_rt_` buffers skipped) and material parameters (`$bottommaterial`, `$crackmaterial`, `$translucent_material`)
+- Included models (`$includemodel`) and gibs (`break` models in the `.phy`) are followed too
+- Files are looked up like the game does: the search paths in `gameinfo.txt`, plus the DLC, `update` and `platform` folders, VPKs before loose files
+
+No Python is needed anywhere in BeePEE.
+
+---
+
+## Autopacking
+
+When an instance is added to an item (or replaced), `backend/utils/autopacker.js` copies the files it uses that aren't part of the game into the package's `resources/` (same paths). The instance asset check (`check-vmf-external-assets`) sorts files the same way; the Instances tab runs it on the VMFs the user picks and, when files are missing, shows the **Missing Files** dialog ("These files don't exist or aren't mounted properly") with Add Anyway / Cancel. A replaced instance shows it too, after packing.
+
+**What the instance needs** (`vmfAssetExtractor.js` reads the VMF with the KeyValues parser):
+
+- Models (`model`; sprite `.vmt`/`.spr` models are materials), with all their files (`.vvd`, `.phy`, `.ani`, `.vtx`), materials, `$includemodel`s and gibs (`mdlDependencies.js`)
+- Materials: brush faces, `material`/`texture`/`texturename`/`ropematerial`/`spritename`/`overlaynameN`... keys (numbers like `func_breakable`'s `material` skipped), with their textures and included materials
+- Sounds: sound files in any key (`.wav`/`.mp3`/`.ogg`, sound characters like `)` stripped) and soundscript names in sound keys (`ambient_generic`'s `message`, `noise1`, ...). A custom soundscript entry brings its sound files and its soundscript file.
+- VScripts: `vscripts` (several, `.nut` optional, under `scripts/vscripts/`) and `RunScriptFile` outputs
+
+**Where each file comes from** (the game's file index, VPKs first):
+
+- **The original game, never packed**: the game's VPKs; the official DLC folders (`portal2_dlc1`, `portal2_dlc2`), `platform` and `update` (only the game has files there); and loose files in `Portal 2/portal2` dated like the game's own files (the dates of its VPKs and of the `platform` files, when Steam installed or updated it) - the game ships ~250 scripts loose there, outside its VPKs
+- **BEE2's, never packed**: `bee2/`, the DLC folder BEE2 puts its generated VPK in (marked with `bee2_vpk_autogen_marker.txt`), and `bee2/` content paths that don't exist yet (made when BEE2 exports)
+- **In the package already**: nothing to do
+- **Custom, packed**: everything else - custom content folders, files added to `Portal 2/portal2` later, other VPKs (extracted)
+- **Missing**: reported (dialog and log) when the instance names the file, or when custom content needs it (a custom material's texture, a custom model's materials), with what needs it; missing files the original game's content names (like gibs the game itself lacks) only go to the debug log
+
+## Leak Warning (Instances tab)
+
+`backend/utils/behindSurface.js` finds what an instance has behind the surface its item is placed on. Instances are built as if on the floor: with the usual editoritems `Offset "64 64 64"` the origin is the voxel's center and the surface is z = -64 (on walls and ceilings the instance is turned, so that's still the surface). Anything more than a unit below it counts, unless it's in a voxel the item embeds into (`EmbeddedVoxels`: `Pos "0 0 0"` is the voxel just behind the surface, `"0 0 -1"` the next; `Volume` `Pos1`/`Pos2` too).
+
+- **Entities** behind the surface get a warning on the instance's row: out in the void behind the wall, an entity makes the map leak. Brush entities count by their origin; instance helpers, `func_detail`, overlays and decals don't count.
+- **Brushes** alone get a note: they're hidden in the wall, and Portal 2's own items do it (the light strip 6 units, the rail platform's track 32).
+- Doors (`ItemEntranceDoor`, `ItemExitDoor` and the coop ones) and observation rooms are skipped: their instances are meant to be outside the map.
+- Checked on all of Portal 2's own items: no entities behind their surface but the piston platform's `debug_top` (16 units, just outside its embedded voxels).
+- The item editor asks for it (`get-instances-behind-surface`, and `check-instance-behind-surface` for an instance not added yet), again when its window comes back (after editing in Hammer). It isn't in `getInstancesWithStatus`, which every package load runs for every item. Results are kept until the VMF changes.
+
 ## VMF to OBJ Conversion (VMF2OBJ port)
 
 ### Overview
 
-`backend/utils/vmfConverter/` converts VMF instances into OBJ + MTL files with PNG textures, in-process (no Java). It is a JavaScript port of [VMF2OBJ](https://github.com/Dylancyclone/VMF2OBJ) by Dylancyclone (MIT, see `LICENSE-VMF2OBJ.txt` in that folder) and handles brushes, brush entities, displacements and `prop_*` entities.
+`backend/utils/vmfConverter/` converts VMF instances into OBJ + MTL files with PNG textures, in-process (no Java). It is a JavaScript port of [VMF2OBJ](https://github.com/Dylancyclone/VMF2OBJ) by Dylancyclone (MIT, see `LICENSE-VMF2OBJ.txt` in that folder) and handles brushes, brush entities, displacements, model entities (props, NPCs, ...), overlays and decals.
 
 `backend/utils/vmf2obj.js` wraps it for BeePEE: it builds the resource path list, rotates the OBJ into Three.js space and applies the cartoon texture style.
+
+The cartoon style (`backend/utils/cartoonFilter.js`, in JS; it replaced the Python `cartoon.exe`) aims for the look of the puzzle editor's own models: flat clean colors, light neutral greys and vivid accents. Each texture is shrunk to at most 256 px (power-of-two sizes; texture coordinates are relative, so the stretch doesn't matter), flattened with a Kuwahara filter, graded (lifted darks, neutral near-greys, livelier real colors) and smoothed with a surface blur that melts faint detail like logos but keeps strong edges. All steps wrap around the texture's edges, so tiling textures stay seamless, and alpha is kept.
 
 | Module | Purpose |
 | --- | --- |
@@ -799,6 +862,8 @@ Graceful degradation:
 | `brushes.js` | Side planes → face polygons, displacement grids |
 | `models.js` | Crowbar decompile, QC/SMD parsing, posing props |
 | `textures.js` | VMT parsing, VTF decoding, PNG encoding |
+| `overlays.js` | Baking `info_overlay`s and `infodecal`s into the textures of their faces |
+| `blends.js` | Baking displacement blend materials into a texture per displacement |
 | `vpk.js` / `resources.js` | VPK reading and the content lookup across VPKs/folders |
 
 ### Usage
@@ -819,7 +884,7 @@ Resource paths are a list of:
 - **VPK files** (e.g., `pak01_dir.vpk`)
 - **Folders** containing `materials/` and/or `models/` subdirectories
 
-Earlier paths win when several contain the same file. By default: Portal 2's `pak01_dir.vpk`, the VMF's package `resources` folder, then the paths configured at startup (gameinfo search paths and DLC VPKs).
+Earlier paths win when several contain the same file. By default: Portal 2's `pak01_dir.vpk`, the VMF's package `resources` folder, then the paths configured at startup (gameinfo search paths such as `Portal 2/bee2`, and DLC VPKs). `|gameinfo_path|` search paths are relative to the `portal2` folder that holds gameinfo.txt. Only the `materials/` and `models/` subfolders of a folder are indexed.
 
 **IMPORTANT:** When using folders, point to the PARENT folder that contains `materials/` or `models/`, NOT to those folders directly:
 
@@ -834,26 +899,60 @@ custom-content/        <-- SELECT THIS
 
 ### Props
 
+- Any entity with a model is converted, not just `prop_*`. Entities whose model is set in game code (e.g. `npc_security_camera`, buttons, chamber doors, `prop_weighted_cube` by `CubeType`) use the built-in table in `index.js`. `info_*` entities and `models/editor/` helper models are skipped.
 - Models are decompiled with Crowbar (`backend/libs/crowbar/CrowbarCommandLineDecomp.exe`, previously bundled inside VMF2OBJ.jar), a few at a time.
 - `prop_static` uses the reference pose. Other props are posed with their `DefaultAnim` (sequence name or activity) or the first sequence, like the engine does. This is what makes animated props such as item droppers stand upright.
 - Placement: Crowbar's SMDs are rotated 90° about Z from model space, then Source's entity angles are applied (roll, then pitch, then yaw), then `uniformscale`/`modelscale` and `origin`.
 - The first option of each body group is used; `skin` selects a `$texturegroup` row.
 
+### Overlays and Decals
+
+- `info_overlay`s and `infodecal`s are baked into the textures of the brush faces they're on (`overlays.js`). Each such face gets its own texture, `materials/bpee_overlays/bpee_overlay_<output name>_<side id>.png`, covering the face's texture coordinates: the face's (tinted) texture copied texel for texel, with the overlays and decals drawn over it. The face's UVs are remapped onto it.
+- As in Source, an overlay is projected along `BasisNormal` onto each face in its `sides` and clipped to it (corners `uv0`–`uv3` around `BasisOrigin`, texture coordinates from `StartU`/`EndU`/`StartV`/`EndV`). So overlays can't overhang their faces, z-fight or need transparency.
+- A decal goes on every face whose plane is within 4 units of its origin (the engine's `DECAL_DISTANCE`), centered on the origin and as big as its texture times `$decalscale`. Its orientation follows the engine's `R_DecalComputeBasis`: on floors and ceilings S runs along +X, on walls T points down.
+- Overlays are drawn in `RenderOrder`, then VMF order, followed by decals in VMF order. Both blend like their shader: `$translucent` alpha blending, `$alphatest` cutouts, `$additive`, `DecalModulate` (2 × overlay × face) and `$alpha`. Opaque materials cover the face.
+- A face's baked texture gets up to 8 pixels per face texel when an overlay or decal is sharper than the face's texture, and is at most 2048 px wide/high.
+- Overlays and decals that end up on no visible face (overlays without `sides` or with sides that aren't in the instance, decals with no face within 4 units, anything only on displacements or skipped tool faces) are left out with a warning. Many decals in item instances are meant for the chamber's walls and floors, which aren't part of the instance.
+
+### Displacement Blends
+
+- Displacements with a blend material (`WorldVertexTransition` with `$basetexture2`) get a texture with the blend baked in (`blends.js`): `materials/bpee_blends/bpee_blend_<output name>_<side id>.png`. It spans the displacement's vertex grid, and each vertex's texture coordinates become (column, row) / (size − 1) on it.
+- Each texel blends `$basetexture` and `$basetexture2` by the vertex alphas (`alphas` in the dispinfo, 0 = first texture, 255 = second), sampled at the grid's texture coordinates. A `$blendmodulatetexture` sharpens the blend like the shader does: `smoothstep(g − r, g + r, alpha)`.
+- Displacements whose alphas are all 0 keep their normal material and texture coordinates.
+
 ### Materials
 
 - VMTs are parsed as KeyValues: shader fallback blocks are ignored, `patch` materials follow their `include`, and GPU/srgb key conditions are evaluated.
 - Base textures are decoded from VTF (DXT1/3/5 and the uncompressed formats) and written as PNG; the PNG keeps alpha only for `$translucent`/`$alphatest` materials.
+- Those materials get `illum 4` and a `# beepee:translucent` / `# beepee:alphatest` line in the MTL. `convertMaterialsToPackage` (`mdlConverter.js`) reads the marker and `editorVmt` writes `$translucent 1` or `$alphatest 1` without `$selfillum`: with `$selfillum` on, Source's shaders use the base alpha as the self-illumination mask and ignore it for opacity.
 - BeePEE skips `$bumpmap` textures (`includeBumpMaps: false`) since editor models only use the base texture.
-- Brush faces whose material can't be resolved are dropped (as in VMF2OBJ); with `skipTools`, faces using `tools/` materials are skipped.
+- Tints are baked into texture copies (`<texture>_tint_<rgb>.png`): the entity's `rendercolor` (props, NPCs, brush entities) times the material's `$color`/`$color2`, masked by alpha with `$blendtintbybasealpha`.
+- Materials or textures that can't be found or read get a purple/black checkerboard (`bpee_missing_texture.png`) instead of being dropped. With `skipTools`, faces using `tools/` materials are skipped.
+- A conversion that produces no faces throws a user-facing error (`assertHasGeometry`) instead of producing an empty model.
 
 ### Unsupported Features
 
-- ❌ Displacement blend materials (would require texture generation or per-vertex materials)
-- ❌ infodecal (projection logic unknown)
-- ❌ info_overlay (complex multi-face projection)
+- ❌ Overlays and decals on displacements
 - ❌ Body group selection via the `body` keyvalue
 - ❌ Compressed (Strata) VTFs
 
 ### Tests
 
-`backend/__tests__/vmfConverter.test.js` covers parsing, brush geometry, entity angles, QC/SMD handling and posing, the VTF/PNG/VPK codecs and an end-to-end conversion.
+`backend/__tests__/vmfConverter.test.js` covers parsing, brush geometry, entity angles, QC/SMD handling and posing, the VTF/PNG/VPK codecs, overlays, decals, displacement blends, editor VMTs and an end-to-end conversion.
+
+
+---
+
+## Icon Maker
+
+The item editor's Info tab has **Make Icon**, which opens the icon maker in its own window (`createIconMakerWindow` in `backend/items/itemEditor.js`, route `icon-maker`: `src/pages/IconMakerPage.jsx` with `src/components/items/IconMaker.jsx`). There's one per item; opening it again brings it up, and it closes with the item's editor and when the package closes. It shows one of the item's instances as a model in a square three.js view, as big as the window lets it be (the settings scroll beside it, or under it in a narrow window), to line up the shot:
+
+- **Instance**: the instances whose VMF exists and has something to draw. Each one's model is made by `icon-maker-generate-model` (`backend/handlers/iconHandlers.js`: VMF to OBJ with the cartoon style) and kept in `.bpee/<item>/icon/models/<instance>/` with a stamp of its VMF, so it's only made again when the VMF changes; once one shows, the others are made in the background. The OBJ, MTL and textures are sent as text and data URLs. The Model Chooser can use these models as the item's model too.
+- **Views**: 3/4 (the default), Front, Side, Top. Each frames the model: its vertices fill 85% of the frame, centered. **Reset Camera** goes back to the 3/4 view and the 30° lens. Switching instances keeps the camera where it is.
+- Left-drag rotates, right-drag moves, the wheel zooms; **Lens** (field of view, perspective only) keeps the framing
+- **Camera presets**: the built-in **Palette** is the palette icons' shot: isometric, 30° down and 30° off the item's front. It's the camera of Konclan's Blender icon renderer for BEEmod (angles 60 0 330), turned a quarter turn from the decompiled model's axes to the instance's. Saved presets are kept in the app's settings (`iconMakerCameraPresets`, shared by all items) relative to the model's framing, so they give the same shot on any item.
+- **Model rotation**: pitch, yaw and roll that turn the model like an instance's angles in Hammer (around its origin), with +90° buttons; turning it frames it again from where the camera looks. The scene has Hammer's axes with Z up as Y (`x, z, -y`), so the angles are a `YZX` Euler of roll, yaw and -pitch.
+- **Advanced camera**: Perspective or Isometric (an orthographic camera that follows the perspective one), the camera's yaw, pitch, roll and distance, its position and the point it looks at
+- **Shadow** (a soft contact shadow under the model), **Size** (128/256/512; the icon is drawn at 1024 px, whatever the view's size on screen, and scaled down in halves), **Background** (the palette icons' grayish white by default, `ICON_BACKGROUND`: `#E5E9E9`, RGB 229 233 233)
+
+**Use as Icon** saves the PNG (`icon-maker-save-icon`, `.bpee/<item>/icon/icon_<time>.png`) and hands it to the item's editor (`icon-maker-send-to-editor`; the editor gets `icon-made` and comes up), which stages it like a picked icon file: Save copies it to `resources/BEE2/items/` and makes the palette VTF.

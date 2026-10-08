@@ -1,6 +1,43 @@
 {
     "versions": [
         {
+            "version": "1.2",
+            "date": "2026-10-9",
+            "changes": {
+                "added": [
+                    "Model generation without Java or Python (way faster), with skins, tints, overlays, decals and entities",
+                    "Icon maker (Info tab > Make Icon)",
+                    "Leak Finder: instances with stuff behind their surface get a warning in the Instances tab, click it to see it in 3D",
+                    "Color variable and Set Color block: colors for each timer value that players pick in BEE2's ItemVar menu",
+                    "Export to BeePM (File menu), and BeePM info when making a package",
+                    "Package authors, set when the package is made",
+                    "Autopacker can now pack from VPKs",
+                    "Warning for missing or unmounted files in instances",
+                    "Report button when a package fails to open"
+                ],
+                "fixed": [
+                    "Props, brushes, glass and hidden stuff showing up wrong in generated models",
+                    "Make Model picking the wrong model for some cube types and timers, or failing on big models",
+                    "Conditions getting deleted or broken when opening, saving or exporting items",
+                    "Else conditions applying to all instances except for the item",
+                    "Some packages failing to open, and missing descriptions and icons on some items",
+                    "Item editor saying it saved when it didnt",
+                    "Instance names going back after saving, and removed instances coming back",
+                    "New items getting ITEM_CUBE as their type instead of their id",
+                    "Items with inputs missing ConnectionCount, and blank names in Portal 2's palette",
+                    "Autopacking missing custom files, scripts and particles",
+                    "Signage designer export size, text shifting and off center shapes",
+                    "Security fix for bug reports"
+                ],
+                "changed": [
+                    "New cartoon style for generated models",
+                    "Icon maker reuses the models from Make Model",
+                    "Autopacking skips base game, DLC and BEE2 files",
+                    "Bug reports leave out personal details like your username and PC name"
+                ]
+            }
+        },
+        {
             "version": "1.1",
             "date": "2026-7-4",
             "changes": {

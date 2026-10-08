@@ -23,34 +23,18 @@ export const SignageProvider = ({ children }) => {
 
     // Function to update signage data
     const updateSignage = useCallback((newSignageData) => {
-        console.log("SignageContext: updateSignage called with:", newSignageData)
         setSignage(newSignageData)
     }, [])
 
     // Listen for signage updates from backend
     useEffect(() => {
-        console.log("SignageContext: Setting up event listeners")
-
         const handleSignageUpdate = (event, updatedSignage) => {
-            console.log(
-                "SignageContext: Received signage-updated event from backend:",
-                {
-                    id: updatedSignage.id,
-                    name: updatedSignage.name,
-                    styles: Object.keys(updatedSignage.styles || {}),
-                },
-            )
             setSignage(updatedSignage)
         }
 
         const handleSignageLoaded = (event, loadedSignage) => {
             console.log(
-                "SignageContext: Received signage-loaded event from backend:",
-                {
-                    id: loadedSignage.id,
-                    name: loadedSignage.name,
-                    styles: Object.keys(loadedSignage.styles || {}),
-                },
+                `Loaded signage "${loadedSignage.name}" (${loadedSignage.id}) with ${Object.keys(loadedSignage.styles || {}).length} styles`,
             )
             setSignage(loadedSignage)
         }
@@ -64,12 +48,11 @@ export const SignageProvider = ({ children }) => {
                 window.package.onSignageLoaded(handleSignageLoaded)
             }
         } catch (err) {
-            console.error("SignageContext: Error setting up event listeners:", err)
+            console.error("Failed to set up signage event listeners:", err)
         }
 
         // Cleanup
         return () => {
-            console.log("SignageContext: Cleaning up event listeners")
             try {
                 if (window.package?.onSignageUpdated) {
                     window.package.onSignageUpdated(null)
@@ -78,25 +61,10 @@ export const SignageProvider = ({ children }) => {
                     window.package.onSignageLoaded(null)
                 }
             } catch (err) {
-                console.error(
-                    "SignageContext: Error cleaning up event listeners:",
-                    err,
-                )
+                console.error("Failed to remove signage event listeners:", err)
             }
         }
     }, [])
-
-    // Debug effect to log signage changes
-    useEffect(() => {
-        console.log("SignageContext: Signage state changed:", {
-            id: signage?.id,
-            name: signage?.name,
-            hidden: signage?.hidden,
-            stylesCount: signage?.styles
-                ? Object.keys(signage.styles).length
-                : 0,
-        })
-    }, [signage])
 
     const value = {
         signage,

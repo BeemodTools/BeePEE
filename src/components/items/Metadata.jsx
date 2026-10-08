@@ -10,11 +10,12 @@ const Metadata = ({ item }) => {
     const [loading, setLoading] = useState(false)
     const [error, setError] = useState("")
 
+    // Again when the item is saved (its version and dates change)
     useEffect(() => {
         if (item?.id) {
             loadMetadata()
         }
-    }, [item?.id])
+    }, [item])
 
     const loadMetadata = async () => {
         try {
@@ -111,8 +112,23 @@ const Metadata = ({ item }) => {
                     </Typography>
                 </Box>
 
-                {/* App Version */}
-                {(metadata.createdVersion || metadata.importedVersion) && (
+                {/* Whether BeePEE made it: a .bpee, a .bee_pack BeePEE
+                    exported, or made here */}
+                <Box>
+                    <Typography
+                        variant="subtitle2"
+                        color="text.secondary"
+                        gutterBottom>
+                        Made with BeePEE
+                    </Typography>
+                    <Typography variant="body2">
+                        {metadata.madeWithBeePEE ? "Yes" : "No"}
+                    </Typography>
+                </Box>
+
+                {/* App Version: the BeePEE that last made it (saved it, or
+                    exported the .bee_pack it came in) */}
+                {(metadata.lastSavedVersion || metadata.createdVersion) && (
                     <Box>
                         <Typography
                             variant="subtitle2"
@@ -121,15 +137,15 @@ const Metadata = ({ item }) => {
                             App Version
                         </Typography>
                         <Typography variant="body2">
-                            {metadata.createdVersion && (
+                            {metadata.lastSavedVersion && (
                                 <Box component="span">
-                                    Created with: {metadata.createdVersion}
-                                    {metadata.importedVersion && " • "}
+                                    Last made in: {metadata.lastSavedVersion}
+                                    {metadata.createdVersion && " • "}
                                 </Box>
                             )}
-                            {metadata.importedVersion && (
+                            {metadata.createdVersion && (
                                 <Box component="span">
-                                    Imported with: {metadata.importedVersion}
+                                    Created in: {metadata.createdVersion}
                                 </Box>
                             )}
                         </Typography>

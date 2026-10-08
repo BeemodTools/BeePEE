@@ -21,7 +21,7 @@ function parseVMFStats(vmfPath) {
             BrushSideCount: stats.brushSideCount,
         }
     } catch (error) {
-        console.error(`Error parsing VMF file ${vmfPath}:`, error.message)
+        console.error(`Failed to parse ${vmfPath}:`, error)
         throw error
     }
 }
@@ -153,8 +153,10 @@ class VMFStatsCache {
 
             return stats
         } catch (error) {
+            // Message only: parse errors were logged with their stack above,
+            // and a missing file needs none
             console.error(
-                `Error getting VMF stats for ${vmfPath}:`,
+                `Failed to get the VMF stats of ${vmfPath}:`,
                 error.message,
             )
             throw error

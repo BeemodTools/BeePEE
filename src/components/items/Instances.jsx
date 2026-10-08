@@ -21,6 +21,7 @@ import {
     ListItem,
     ListItemIcon,
     ListItemText,
+    Snackbar,
 } from "@mui/material"
 import EditIcon from "@mui/icons-material/Edit"
 import DeleteIcon from "@mui/icons-material/Delete"
@@ -37,8 +38,86 @@ import ImageIcon from "@mui/icons-material/Image"
 import ViewInArIcon from "@mui/icons-material/ViewInAr"
 import MusicNoteIcon from "@mui/icons-material/MusicNote"
 import DescriptionIcon from "@mui/icons-material/Description"
-import { useState, useEffect } from "react"
+import RefreshIcon from "@mui/icons-material/Refresh"
+import { useEffect, useState } from "react"
 import ViewInAr from "@mui/icons-material/ViewInAr"
+
+const units = (depth) => `${depth} unit${depth === 1 ? "" : "s"}`
+
+/**
+ * What an instance has behind the surface the item is placed on (from the
+ * backend's behindSurface.js): a warning for entities, which can leak the
+ * map, a note for brushes alone, which are only hidden in the wall
+ */
+function BehindSurfaceIcon({ behind, onOpen }) {
+    // Opening its 3D view (which can make the instance's model first)
+    const [opening, setOpening] = useState(false)
+    if (!behind) return null
+    const leaks = behind.entityCount > 0
+    const open = async () => {
+        setOpening(true)
+        try {
+            await onOpen()
+        } finally {
+            setOpening(false)
+        }
+    }
+    const more = behind.entityCount - behind.entities.length
+    const brushes = `${behind.brushCount} brush${behind.brushCount === 1 ? "" : "es"}`
+    return (
+        <Tooltip
+            title={
+                <Box>
+                    <Box sx={{ fontWeight: "bold", mb: 0.5 }}>
+                        {leaks
+                            ? `Goes ${units(behind.depth)} behind the surface it's placed on`
+                            : `${brushes} up to ${units(behind.brushDepth)} behind the surface it's placed on`}
+                    </Box>
+                    {behind.entities.map((entity, i) => (
+                        <Box key={i}>
+                            {entity.classname}
+                            {entity.name ? ` "${entity.name}"` : ""}:{" "}
+                            {units(entity.depth)}
+                        </Box>
+                    ))}
+                    {more > 0 && (
+                        <Box>
+                            and {more} more {more === 1 ? "entity" : "entities"}
+                        </Box>
+                    )}
+                    {leaks && behind.brushCount > 0 && (
+                        <Box>
+                            {brushes}: up to {units(behind.brushDepth)}
+                        </Box>
+                    )}
+                    <Box sx={{ mt: 0.5, opacity: 0.8 }}>
+                        {leaks
+                            ? "An entity behind the wall can end up in the void, which makes the map leak."
+                            : "Brushes in the wall are hidden, and don't make the map leak."}
+                    </Box>
+                    <Box sx={{ mt: 0.5, fontWeight: "bold" }}>
+                        Click to open it in the Leak Finder
+                    </Box>
+                </Box>
+            }>
+            <span>
+                <IconButton
+                    size="small"
+                    onClick={open}
+                    disabled={opening}
+                    sx={{ p: 0.25 }}>
+                    {opening ? (
+                        <CircularProgress size={18} />
+                    ) : leaks ? (
+                        <WarningIcon fontSize="small" color="warning" />
+                    ) : (
+                        <InfoIcon fontSize="small" color="info" />
+                    )}
+                </IconButton>
+            </span>
+        </Tooltip>
+    )
+}
 
 function Instances({
     item,
@@ -52,11 +131,56 @@ function Instances({
     const [isRemovingMissing, setIsRemovingMissing] = useState(false)
     const [expandedStats, setExpandedStats] = useState(new Set())
     const [isCheckingAssets, setIsCheckingAssets] = useState(false)
+    // Files instances use that don't exist or aren't mounted properly
     const [externalAssetsDialog, setExternalAssetsDialog] = useState({
         open: false,
-        files: [], // Array of { fileName, externalAssets }
+        files: [], // Array of { fileName, missingAssets }
         pendingFiles: [], // Files to add after user acknowledges warning
+        mode: "add", // "add": Add Anyway / Cancel, "replace": already replaced, OK
     })
+    // Instances being autopacked again, and how the last one went
+    const [autopacking, setAutopacking] = useState(new Set())
+    const [autopackNotice, setAutopackNotice] = useState({
+        open: false,
+        severity: "success",
+        text: "",
+    })
+
+    // What each saved instance has behind the item's surface, by index
+    // (instances not saved yet carry theirs). Checked again when the window
+    // comes back, like after editing an instance in Hammer.
+    const [behindSurface, setBehindSurface] = useState({})
+    const instanceFiles = JSON.stringify(
+        Object.entries(item?.instances ?? {}).map(([index, instance]) => [
+            index,
+            instance.Name,
+        ]),
+    )
+    useEffect(() => {
+        if (!item?.id) return
+        let current = true
+        const check = async () => {
+            try {
+                const result = await window.package.getInstancesBehindSurface(
+                    item.id,
+                )
+                if (current && result?.success) {
+                    setBehindSurface(result.behindSurface)
+                }
+            } catch (error) {
+                console.warn(
+                    `Couldn't check what the instances of item "${item.name}" have behind its surface:`,
+                    error,
+                )
+            }
+        }
+        check()
+        window.addEventListener("focus", check)
+        return () => {
+            current = false
+            window.removeEventListener("focus", check)
+        }
+    }, [item?.id, instanceFiles])
 
     // Convert formData instances to array format for rendering
     const instances = formData?.instances
@@ -67,19 +191,6 @@ function Instances({
                   index,
               }))
         : []
-
-    // Debug effect to log when instances change
-    useEffect(() => {
-        console.log("Instances component: Item or instances changed:", {
-            itemId: item?.id,
-            instanceCount: instances.length,
-            instanceNames: instances.map((i) => i.Name),
-            instanceExists: instances.map((i) => ({
-                name: i.Name,
-                exists: i._metadata?.exists ?? true,
-            })),
-        })
-    }, [item, instances])
 
     const toggleStatsExpansion = (instanceIndex) => {
         setExpandedStats((prev) => {
@@ -101,31 +212,31 @@ function Instances({
                 itemId: item.id,
             })
         } catch (error) {
-            console.error("Failed to edit instance:", error)
+            console.error(
+                `Failed to open instance "${instancePath}" in Hammer:`,
+                error,
+            )
         }
     }
 
     const handleAddInstanceWithFileDialog = async () => {
-        console.log("Instances: Selecting instance file(s) for item:", item.id)
         try {
             const result = await window.package.selectInstanceFile(item.id)
-            console.log("Instances: File dialog result:", result)
             if (result.success && result.files && result.files.length > 0) {
-                // Check each file for external assets
+                // Check each file for files it uses that aren't on this
+                // machine (custom ones are packed when the item is saved)
                 setIsCheckingAssets(true)
-                const filesWithExternalAssets = []
+                const filesWithMissingAssets = []
                 const successfulFiles = result.files.filter(f => f.success)
 
                 for (const fileResult of successfulFiles) {
                     try {
                         const assetCheck = await window.package.checkVmfExternalAssets(fileResult.filePath)
-                        if (assetCheck.success && assetCheck.hasExternalAssets) {
-                            filesWithExternalAssets.push({
+                        const missingAssets = assetCheck.assets?.missing ?? []
+                        if (assetCheck.success && missingAssets.length > 0) {
+                            filesWithMissingAssets.push({
                                 fileName: fileResult.fileName,
-                                filePath: fileResult.filePath,
-                                instanceName: fileResult.instanceName,
-                                externalAssets: assetCheck.assets.external,
-                                summary: assetCheck.summary,
+                                missingAssets,
                             })
                         }
                     } catch (err) {
@@ -134,17 +245,27 @@ function Instances({
                 }
                 setIsCheckingAssets(false)
 
-                // External assets check is informational only - autopacker handles copying
-                // Just add instances directly without blocking dialog
-                addPendingInstances(successfulFiles)
+                if (filesWithMissingAssets.length > 0) {
+                    setExternalAssetsDialog({
+                        open: true,
+                        files: filesWithMissingAssets,
+                        pendingFiles: successfulFiles,
+                        mode: "add",
+                    })
+                } else {
+                    addPendingInstances(successfulFiles)
+                }
             } else if (!result.canceled) {
                 console.error(
-                    "Instances: Failed to select instance:",
+                    `Failed to select instance files for item "${item.name}":`,
                     result.error,
                 )
             }
         } catch (error) {
-            console.error("Instances: Failed to select instance:", error)
+            console.error(
+                `Failed to select instance files for item "${item?.name}":`,
+                error,
+            )
             setIsCheckingAssets(false)
         }
     }
@@ -159,35 +280,60 @@ function Instances({
                     .toString(36)
                     .substr(2, 9)}`
 
+                // What it has behind the item's surface, for its warning
+                let behindSurface = null
+                try {
+                    const check =
+                        await window.package.checkInstanceBehindSurface(
+                            item.id,
+                            fileResult.filePath,
+                        )
+                    if (check?.success) behindSurface = check.behindSurface
+                } catch (error) {
+                    console.warn(
+                        `Couldn't check what ${fileResult.fileName} has behind its surface:`,
+                        error,
+                    )
+                }
+
                 const newInstance = {
                     Name: fileResult.instanceName,
                     _pending: true,
                     _filePath: fileResult.filePath,
+                    behindSurface,
                 }
 
                 updatedInstances[newIndex] = newInstance
-
-                console.log(
-                    `Instances: Added pending instance: ${newInstance.Name} (will be saved on Save button)`,
-                )
 
                 await new Promise((resolve) => setTimeout(resolve, 10))
             }
         }
 
         onUpdateInstances(updatedInstances)
-        console.log(`Instances: Added ${files.length} pending instance(s)`)
+        console.log(
+            `Added ${files.length} instance(s) to item "${item?.name}", pending save`,
+        )
     }
 
-    // Handle user acknowledging external assets warning
+    // Handle user acknowledging the missing files warning
     const handleExternalAssetsAcknowledge = () => {
-        addPendingInstances(externalAssetsDialog.pendingFiles)
-        setExternalAssetsDialog({ open: false, files: [], pendingFiles: [] })
+        if (externalAssetsDialog.mode === "add") {
+            addPendingInstances(externalAssetsDialog.pendingFiles)
+        }
+        setExternalAssetsDialog({ open: false, files: [], pendingFiles: [], mode: "add" })
     }
 
-    // Handle user canceling due to external assets
+    // Handle user canceling due to missing files
     const handleExternalAssetsCancel = () => {
-        setExternalAssetsDialog({ open: false, files: [], pendingFiles: [] })
+        setExternalAssetsDialog({ open: false, files: [], pendingFiles: [], mode: "add" })
+    }
+
+    // Asset type from its path, for the icons
+    const assetType = (assetPath) => {
+        if (assetPath.startsWith("models/")) return "MODEL"
+        if (assetPath.startsWith("sound/")) return "SOUND"
+        if (assetPath.startsWith("scripts/")) return "SCRIPT"
+        return "MATERIAL"
     }
 
     // Get icon for asset type
@@ -201,13 +347,103 @@ function Instances({
         }
     }
 
+    // Show the files an instance uses that aren't on this machine (after
+    // it was replaced or autopacked again: nothing to cancel)
+    const showMissingFiles = (fileName, missingFiles, neededBy) => {
+        setExternalAssetsDialog({
+            open: true,
+            files: [
+                {
+                    fileName,
+                    missingAssets: missingFiles.map((path) => ({
+                        type: assetType(path),
+                        path,
+                        neededBy: neededBy?.[path] ?? null,
+                    })),
+                },
+            ],
+            pendingFiles: [],
+            mode: "replace",
+        })
+    }
+
+    // Open the 3D view of what an instance has behind the item's surface (its
+    // warning, clicked): a saved instance's, or the VMF of one added since
+    const openBehindSurface = async (instance, isPending) => {
+        const fileName = String(instance.Name ?? "").split(/[\\/]/).pop()
+        try {
+            const result = await window.package.showBehindSurface(item.id, {
+                ...(isPending
+                    ? { vmfPath: instance._filePath }
+                    : { instanceKey: instance.index }),
+                title: `Leak Finder - ${fileName} (${item.name})`,
+            })
+            if (!result?.success) {
+                throw new Error(result?.error || "No reason given")
+            }
+        } catch (error) {
+            console.error(
+                `Couldn't show what ${fileName} has behind the surface:`,
+                error,
+            )
+            setAutopackNotice({
+                open: true,
+                severity: "error",
+                text: `Couldn't show what ${fileName} has behind the surface: ${error.message}`,
+            })
+        }
+    }
+
+    // Autopack an instance again: pack the custom files it uses that aren't
+    // in the package yet (new ones after editing it in Hammer, or ones that
+    // weren't found or mounted before)
+    const handleAutopackAgain = async (instanceIndex) => {
+        setAutopacking((prev) => new Set(prev).add(instanceIndex))
+        const notify = (severity, text) =>
+            setAutopackNotice({ open: true, severity, text })
+        try {
+            const result = await window.package.autopackInstanceAgain(
+                item.id,
+                instanceIndex,
+            )
+            if (result.skipped) {
+                notify("warning", "Portal 2 wasn't found, so nothing was packed")
+            } else if (!result.success) {
+                notify("error", `Autopacking failed: ${result.error}`)
+            } else if (result.packed > 0) {
+                const files = result.packed === 1 ? "file" : "files"
+                notify("success", `Packed ${result.packed} new ${files}`)
+            } else {
+                notify(
+                    "info",
+                    result.custom > 0
+                        ? "Nothing new to pack: its custom files are in the package"
+                        : "Nothing to pack: it only uses the game's files",
+                )
+            }
+            if (result.missingFiles?.length > 0) {
+                showMissingFiles(
+                    result.fileName,
+                    result.missingFiles,
+                    result.neededBy,
+                )
+            }
+        } catch (error) {
+            console.error(
+                `Failed to autopack instance ${instanceIndex} of item "${item?.name}" again:`,
+                error,
+            )
+            notify("error", `Autopacking failed: ${error.message}`)
+        } finally {
+            setAutopacking((prev) => {
+                const next = new Set(prev)
+                next.delete(instanceIndex)
+                return next
+            })
+        }
+    }
+
     const handleReplaceInstance = async (instanceIndex) => {
-        console.log(
-            "Instances: Replacing instance at index:",
-            instanceIndex,
-            "for item:",
-            item.id,
-        )
         try {
             const result = await window.package.replaceInstanceFileDialog(
                 item.id,
@@ -228,27 +464,33 @@ function Instances({
 
                 onUpdateInstances(updatedInstances)
                 console.log(
-                    `Instances: Replaced instance: ${updatedInstance.Name}`,
+                    `Replaced instance "${updatedInstance.Name}" in item "${item.name}"`,
                 )
+
+                // The replacement uses files that aren't on this machine
+                if (result.missingFiles?.length > 0) {
+                    showMissingFiles(
+                        result.fileName,
+                        result.missingFiles,
+                        result.neededBy,
+                    )
+                }
             } else if (!result.canceled) {
                 console.error(
-                    "Instances: Failed to replace instance:",
+                    `Failed to replace instance ${instanceIndex} of item "${item.name}":`,
                     result.error,
                 )
             }
         } catch (error) {
-            console.error("Instances: Failed to replace instance:", error)
+            console.error(
+                `Failed to replace instance ${instanceIndex} of item "${item?.name}":`,
+                error,
+            )
         }
     }
 
     const handleRemoveInstance = () => {
         if (instanceToDelete === null) return
-        console.log(
-            "Instances: Marking instance for removal at index:",
-            instanceToDelete,
-            "for item:",
-            item.id,
-        )
         try {
             const updatedInstances = { ...formData.instances }
             const instanceData = updatedInstances[instanceToDelete]
@@ -257,7 +499,7 @@ function Instances({
                 // If it's a pending instance (not yet saved), just remove it completely
                 delete updatedInstances[instanceToDelete]
                 console.log(
-                    "Instances: Removed pending instance (not saved yet)",
+                    `Removed pending instance "${instanceData.Name}" from item "${item?.name}"`,
                 )
             } else {
                 // Mark existing instance for removal
@@ -266,7 +508,7 @@ function Instances({
                     _toRemove: true,
                 }
                 console.log(
-                    "Instances: Marked instance for removal (will be deleted on Save)",
+                    `Marked instance "${instanceData?.Name}" of item "${item?.name}" for removal on save`,
                 )
             }
 
@@ -275,7 +517,7 @@ function Instances({
             setInstanceToDelete(null)
         } catch (error) {
             console.error(
-                "Instances: Failed to mark instance for removal:",
+                `Failed to mark instance ${instanceToDelete} of item "${item?.name}" for removal:`,
                 error,
             )
         }
@@ -292,12 +534,6 @@ function Instances({
         if (missingInstances.length === 0) return
 
         setIsRemovingMissing(true)
-        console.log(
-            "Instances: Marking all missing instances for removal (excluding VBSP):",
-            missingInstances.length,
-            "for item:",
-            item.id,
-        )
 
         try {
             const updatedInstances = { ...formData.instances }
@@ -318,11 +554,11 @@ function Instances({
 
             onUpdateInstances(updatedInstances)
             console.log(
-                "Instances: All missing instances marked for removal (will be deleted on Save)",
+                `Marked ${missingInstances.length} missing instance(s) of item "${item?.name}" for removal on save`,
             )
         } catch (error) {
             console.error(
-                "Instances: Failed to mark missing instances for removal:",
+                `Failed to mark the missing instances of item "${item?.name}" for removal:`,
                 error,
             )
         } finally {
@@ -414,7 +650,9 @@ function Instances({
 
                         return (
                             <Paper
-                                key={instance.Name || "unknown"}
+                                // Not the VMF's path: two instances can use
+                                // the same one
+                                key={instance.index}
                                 variant="outlined"
                                 sx={{
                                     backgroundColor: isDisabled
@@ -512,6 +750,22 @@ function Instances({
                                             />
                                         </Box>
 
+                                        <BehindSurfaceIcon
+                                            behind={
+                                                isPending
+                                                    ? instance.behindSurface
+                                                    : behindSurface[
+                                                          instance.index
+                                                      ]
+                                            }
+                                            onOpen={() =>
+                                                openBehindSurface(
+                                                    instance,
+                                                    isPending,
+                                                )
+                                            }
+                                        />
+
                                         {/* Instance Path */}
                                         <Typography
                                             variant="body2"
@@ -582,6 +836,42 @@ function Instances({
                                                     </IconButton>
                                                 </span>
                                             </Tooltip>
+
+                                            {/* Pending instances are autopacked when the item is saved */}
+                                            {!isPending && (
+                                                <Tooltip
+                                                    title={
+                                                        isDisabled
+                                                            ? "Cannot autopack - file is missing"
+                                                            : "Autopack again: pack the custom files this instance uses that aren't in the package yet"
+                                                    }>
+                                                    <span>
+                                                        <IconButton
+                                                            size="small"
+                                                            onClick={() =>
+                                                                handleAutopackAgain(
+                                                                    instance.index,
+                                                                )
+                                                            }
+                                                            disabled={
+                                                                isDisabled ||
+                                                                autopacking.has(
+                                                                    instance.index,
+                                                                )
+                                                            }>
+                                                            {autopacking.has(
+                                                                instance.index,
+                                                            ) ? (
+                                                                <CircularProgress
+                                                                    size={16}
+                                                                />
+                                                            ) : (
+                                                                <RefreshIcon fontSize="small" />
+                                                            )}
+                                                        </IconButton>
+                                                    </span>
+                                                </Tooltip>
+                                            )}
 
                                             {!isVBSP && (
                                                 <Tooltip
@@ -759,12 +1049,13 @@ function Instances({
                 }}>
                 <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
                     <WarningIcon color="warning" />
-                    External Assets Detected
+                    Missing Files
                 </DialogTitle>
                 <DialogContent>
                     <Alert severity="warning" sx={{ mb: 2 }}>
-                        The following VMF file(s) use assets that are not part of the base Portal 2 installation.
-                        These custom assets may need to be included in your package for the item to work correctly.
+                        These files don't exist or aren't mounted properly, so they'll be missing in game.
+                        If you have them, check that their folder is in Portal 2's search paths (gameinfo.txt),
+                        or that their VPK is mounted.
                     </Alert>
 
                     {externalAssetsDialog.files.map((file, fileIndex) => (
@@ -773,17 +1064,17 @@ function Instances({
                                 {file.fileName}
                             </Typography>
                             <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                                {file.summary?.externalCount || file.externalAssets.length} external asset(s) found
+                                {file.missingAssets.length} missing file(s)
                             </Typography>
                             <List dense sx={{ bgcolor: "rgba(0,0,0,0.2)", borderRadius: 1, maxHeight: 200, overflow: "auto" }}>
-                                {file.externalAssets.slice(0, 20).map((asset, assetIndex) => (
+                                {file.missingAssets.slice(0, 20).map((asset, assetIndex) => (
                                     <ListItem key={assetIndex}>
                                         <ListItemIcon sx={{ minWidth: 36 }}>
                                             {getAssetIcon(asset.type)}
                                         </ListItemIcon>
                                         <ListItemText
                                             primary={asset.path}
-                                            secondary={asset.type}
+                                            secondary={asset.neededBy ? `Used by ${asset.neededBy}` : asset.type}
                                             primaryTypographyProps={{
                                                 variant: "body2",
                                                 sx: { fontFamily: "monospace", fontSize: "0.75rem" }
@@ -792,10 +1083,10 @@ function Instances({
                                         />
                                     </ListItem>
                                 ))}
-                                {file.externalAssets.length > 20 && (
+                                {file.missingAssets.length > 20 && (
                                     <ListItem>
                                         <ListItemText
-                                            primary={`... and ${file.externalAssets.length - 20} more`}
+                                            primary={`... and ${file.missingAssets.length - 20} more`}
                                             primaryTypographyProps={{
                                                 variant: "body2",
                                                 color: "text.secondary",
@@ -809,16 +1100,18 @@ function Instances({
                     ))}
                 </DialogContent>
                 <DialogActions>
-                    <Button
-                        onClick={handleExternalAssetsCancel}
-                        sx={{ color: "rgba(255,255,255,0.6)" }}>
-                        Cancel
-                    </Button>
+                    {externalAssetsDialog.mode === "add" && (
+                        <Button
+                            onClick={handleExternalAssetsCancel}
+                            sx={{ color: "rgba(255,255,255,0.6)" }}>
+                            Cancel
+                        </Button>
+                    )}
                     <Button
                         onClick={handleExternalAssetsAcknowledge}
                         variant="contained"
                         color="warning">
-                        Add Anyway
+                        {externalAssetsDialog.mode === "add" ? "Add Anyway" : "OK"}
                     </Button>
                 </DialogActions>
             </Dialog>
@@ -838,6 +1131,25 @@ function Instances({
                     <Typography>Checking for external assets...</Typography>
                 </Box>
             </Dialog>
+
+            {/* How autopacking an instance again went, or why a 3D view of
+                what's behind the surface couldn't open */}
+            <Snackbar
+                open={autopackNotice.open}
+                autoHideDuration={5000}
+                onClose={() =>
+                    setAutopackNotice((notice) => ({ ...notice, open: false }))
+                }
+                anchorOrigin={{ vertical: "bottom", horizontal: "center" }}>
+                <Alert
+                    severity={autopackNotice.severity}
+                    variant="filled"
+                    onClose={() =>
+                        setAutopackNotice((notice) => ({ ...notice, open: false }))
+                    }>
+                    {autopackNotice.text}
+                </Alert>
+            </Snackbar>
         </Box>
     )
 }

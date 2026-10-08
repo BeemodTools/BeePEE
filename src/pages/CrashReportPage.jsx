@@ -18,6 +18,7 @@ export default function CrashReportPage() {
     const [errorDetails, setErrorDetails] = useState(null)
     const [isManual, setIsManual] = useState(true)
     const [userDescription, setUserDescription] = useState("")
+    const [contact, setContact] = useState("")
     const [isSubmitting, setIsSubmitting] = useState(false)
     const [submitResult, setSubmitResult] = useState(null)
     const [hasSubmitted, setHasSubmitted] = useState(false)
@@ -46,6 +47,7 @@ export default function CrashReportPage() {
             const result = await window.package.submitCrashReport(
                 userDescription,
                 errorDetails,
+                contact,
             )
             setSubmitResult(result)
             if (result.success) {
@@ -62,6 +64,16 @@ export default function CrashReportPage() {
     const handleCancel = () => {
         window.close()
     }
+
+    // What the report is about
+    const failedPackage = errorDetails?.type === "packageOpenFailed"
+    const heading = isManual
+        ? "Report a Bug"
+        : failedPackage
+          ? "Package Failed to Open"
+          : errorDetails?.type === "itemsSkipped"
+            ? "Items Weren't Loaded"
+            : "Unexpected Error"
 
     return (
         <Box
@@ -89,7 +101,7 @@ export default function CrashReportPage() {
                     <ErrorOutlineIcon sx={{ mr: 1, fontSize: 28, color: "#ff6666" }} />
                 )}
                 <Typography variant="h6" fontWeight="bold">
-                    {isManual ? "Report a Bug" : "Unexpected Error"}
+                    {heading}
                 </Typography>
             </Box>
 
@@ -116,6 +128,12 @@ export default function CrashReportPage() {
                                 "& .MuiAlert-icon": { color: "#ff6666" },
                             }}
                         >
+                            {/* The package's name, when the error doesn't say it */}
+                            {failedPackage &&
+                                errorDetails.package &&
+                                !errorDetails.message?.includes(
+                                    errorDetails.package,
+                                ) && <strong>{errorDetails.package}: </strong>}
                             {errorDetails.message || "An unknown error occurred"}
                         </Alert>
 
@@ -211,11 +229,32 @@ export default function CrashReportPage() {
                     }}
                 />
 
+                {/* Optional contact for follow-up questions */}
+                <TextField
+                    label="Discord username (optional)"
+                    value={contact}
+                    onChange={(e) => setContact(e.target.value)}
+                    fullWidth
+                    size="small"
+                    placeholder="So we can reach you if we have questions"
+                    disabled={isSubmitting || !!updateInfo}
+                    sx={{
+                        "& .MuiOutlinedInput-root": {
+                            color: "white",
+                            "& fieldset": { borderColor: "rgba(255,255,255,0.3)" },
+                            "&:hover fieldset": { borderColor: "rgba(255,255,255,0.5)" },
+                            "&.Mui-focused fieldset": { borderColor: "primary.main" },
+                        },
+                        "& .MuiInputLabel-root": { color: "rgba(255,255,255,0.7)" },
+                        "& .MuiInputLabel-root.Mui-focused": { color: "primary.main" },
+                    }}
+                />
+
                 <Typography
                     variant="caption"
                     sx={{ color: "rgba(255,255,255,0.5)" }}
                 >
-                    Please be as descriptive as possible - it helps a lot! Your logs and current package will be included automatically.
+                    Please be as descriptive as possible - it helps a lot! Your logs and {failedPackage ? "the package that failed to open" : "current package"} will be included automatically (with your user name, PC name and other personal details taken out), with an ID for this PC that doesn't say who you are, so spam can be blocked.
                 </Typography>
 
                 {/* Submission result feedback */}

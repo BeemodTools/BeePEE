@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback } from "react"
+import { useState, useRef, useEffect, useCallback, useMemo } from "react"
 import {
     Box,
     Typography,
@@ -18,21 +18,29 @@ import {
     DialogContent,
     DialogContentText,
     DialogActions,
+    Menu,
+    MenuItem,
 } from "@mui/material"
 import { useTheme } from "@mui/material/styles"
+import { ColorPickerButton } from "../ColorPicker"
 import {
     ChevronLeft,
     ChevronRight,
     ExpandMore,
     Save as SaveIcon,
     Close,
+    Visibility,
+    VisibilityOff,
+    Flip,
+    Link as LinkIcon,
+    LinkOff,
+    Title as TitleIcon,
 } from "@mui/icons-material"
 import {
     GLYPHS,
     PRIMS,
     SHAPES,
     ShapeSvg,
-    LayersThumb,
     CANVAS_SIZE,
     SIGN_BG,
     layerInnerSvg,
@@ -43,6 +51,11 @@ import {
     serializeDesign,
     rehydrateDesign,
     rasterizeLayers,
+    TEXT_GLYPH,
+    TEXT_FONTS,
+    isTextLayer,
+    layerVb,
+    measureTextGlyph,
 } from "./glyphs"
 import {
     loadSignagePrefs,
@@ -91,7 +104,17 @@ const MAX_LAYER = 2048 // layers may extend well past the 512 canvas
 const _sess = Math.random().toString(36).slice(2, 8)
 let _lid = 0
 const nextId = () => `L${_sess}_${++_lid}`
+let _gid = 0
+const nextGroupId = () => `G${_sess}_${++_gid}`
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v))
+
+// Stable accent color per group id for the layers panel link badges
+const GROUP_COLORS = ["#e05c4a", "#4a90d9", "#4caf50", "#b46be0", "#e0a13c", "#3cc9c9"]
+const groupColor = (gid) => {
+    let h = 0
+    for (let i = 0; i < gid.length; i++) h = (h * 31 + gid.charCodeAt(i)) >>> 0
+    return GROUP_COLORS[h % GROUP_COLORS.length]
+}
 
 // Black or white, whichever contrasts with the given fill color - so a
 // freshly enabled outline is never invisible (e.g. black-on-black)
@@ -135,6 +158,18 @@ function AlignIcon({ type, gold, bar }) {
 // like "1" jump to the min (24) before you can finish typing "1024". Instead
 // we hold an uncommitted draft string while focused and only commit - firing
 // onChange - on blur or Enter. Escape cancels back to the current value.
+/**
+ * A layer's artwork. Its markup goes in as innerHTML, which React sets again
+ * whenever the { __html } object is a new one: the object is kept while the
+ * markup is the same. Setting it on every render replaced the shapes under
+ * the pointer between a click's press and release, so a click (and double-
+ * clicking a text layer to edit it) didn't register on them.
+ */
+function LayerArt({ markup, ...props }) {
+    const html = useMemo(() => ({ __html: markup }), [markup])
+    return <svg {...props} dangerouslySetInnerHTML={html} />
+}
+
 function NumField({ label, value, min, max, onChange }) {
     const [draft, setDraft] = useState(null)
     const commit = () => {
@@ -200,6 +235,7 @@ function SignageDesigner({
     const [outlineOpen, setOutlineOpen] = useState(false)
     const [paletteW, setPaletteW] = useState(176)
     const [propsW, setPropsW] = useState(210)
+    const [layersH, setLayersH] = useState(240) // layers pane height (dock bottom)
     const [customIds, setCustomIds] = useState([])
     const [zoom, setZoom] = useState(1) // canvas magnification, 0.5–4
     const svgInputRef = useRef(null)
@@ -208,6 +244,15 @@ function SignageDesigner({
     const op = useRef(null) // active transform: { type, ... }
     const clipboard = useRef(null) // copied layers (Ctrl+C / Ctrl+V)
     const sideDrag = useRef(null) // sidebar resize: { side, startX, startW }
+    // Layers panel: row being dragged, drop indicator, inline rename
+    const layerDrag = useRef(null)
+    const [dropMark, setDropMark] = useState(null) // { id, before }
+    const [renameId, setRenameId] = useState(null)
+    const [renameDraft, setRenameDraft] = useState("")
+    // Right-click layer menu: { mouseX, mouseY, layerId }
+    const [ctxMenu, setCtxMenu] = useState(null)
+    // Text layer being edited in place on the canvas (double-click)
+    const [editingTextId, setEditingTextId] = useState(null)
 
     // ---- Preferences -------------------------------------------------
     const [prefs, setPrefs] = useState(SIGNAGE_PREF_DEFAULTS)
@@ -379,6 +424,12 @@ function SignageDesigner({
             const d = sideDrag.current
             if (!d) return
             e.preventDefault()
+            if (d.side === "layers") {
+                // Horizontal splitter between the edit pane and layers pane
+                const dy = e.clientY - d.startY
+                setLayersH(clamp(d.startH - dy, 90, 560))
+                return
+            }
             const dx = e.clientX - d.startX
             if (d.side === "left") setPaletteW(clamp(d.startW + dx, 120, 340))
             else setPropsW(clamp(d.startW - dx, 170, 380))
@@ -475,6 +526,78 @@ function SignageDesigner({
         [cell, snap, snapLayer],
     )
 
+    // Drop a new text layer in the canvas center, sized like a default
+    // shape (height from prefs, width from the measured text aspect)
+    const addTextLayer = useCallback(() => {
+        const p = prefsRef.current
+        const id = nextId()
+        const text = "TEXT"
+        const fontFamily = "Arial"
+        const m = measureTextGlyph(text, fontFamily, false, false)
+        const h = Math.max(24, Math.round(p.signageDefaultShapeSize || 128) / 2)
+        const w = clamp(Math.round(h / m.aspect), 24, CANVAS_SIZE)
+        const color = p.signageDefaultColor || "#000000"
+        let l = {
+            id,
+            glyph: TEXT_GLYPH,
+            text,
+            fontFamily,
+            bold: false,
+            italic: false,
+            textVb: m.vb,
+            x: CANVAS_SIZE / 2 - w / 2,
+            y: CANVAS_SIZE / 2 - h / 2,
+            w,
+            h,
+            color,
+            rot: 0,
+            styleMode: "fill",
+            outlineAlign: "center",
+            outlineWidth: p.signageDefaultOutlineWidth || 3,
+            outlineColor: contrastFor(color),
+            rounded: false,
+        }
+        l = snapLayer(l, snap)
+        pushHistory()
+        setLayers((ls) => [...ls, l])
+        setSelIds([id])
+        // A fresh text layer goes straight into in-place editing
+        setEditingTextId(id)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [snap, snapLayer])
+
+    // Re-measure a text layer after content/font changes; the height is
+    // kept and the width follows the new text's aspect ratio
+    const remeasureText = (l, patch) => {
+        const next = { ...l, ...patch }
+        const m = measureTextGlyph(
+            next.text,
+            next.fontFamily,
+            next.bold,
+            next.italic,
+        )
+        return {
+            ...next,
+            textVb: m.vb,
+            w: clamp(Math.round(next.h / m.aspect), 4, MAX_LAYER),
+        }
+    }
+
+    // Sidebar font/style edits apply to the whole selection
+    const updateTextLayer = (patch) => {
+        updateSel((l) => (isTextLayer(l) ? remeasureText(l, patch) : l))
+    }
+
+    // In-place editor edits exactly one layer (coalesced into one undo step)
+    const updateTextById = (id, patch) => {
+        pushHistory("text-edit")
+        setLayers((ls) =>
+            ls.map((l) =>
+                l.id === id && isTextLayer(l) ? remeasureText(l, patch) : l,
+            ),
+        )
+    }
+
     const toCanvas = (e) => {
         const r = canvasRef.current.getBoundingClientRect()
         const scale = CANVAS_SIZE / r.width
@@ -503,27 +626,43 @@ function SignageDesigner({
     const exportPng = async () => {
         if (!layers.length) return
         try {
-            const dataUrl = await rasterizeLayers(layers)
-            await window.package?.saveFileDialog({
+            // At the texture size setting, like the saved signage (read now:
+            // it may have just been changed in the settings window)
+            const { signageTextureSize } = await loadSignagePrefs()
+            const dataUrl = await rasterizeLayers(
+                layers,
+                signageTextureSize || SIGNAGE_PREF_DEFAULTS.signageTextureSize,
+            )
+            const result = await window.package?.saveFileDialog({
                 defaultName: exportBaseName("png"),
                 filters: [{ name: "PNG Image", extensions: ["png"] }],
                 base64: dataUrl.split(",")[1],
             })
+            if (result?.success) {
+                console.log(
+                    `Exported signage design as PNG to ${result.filePath}`,
+                )
+            }
         } catch (err) {
-            console.error("Export PNG failed:", err)
+            console.error("Failed to export signage design as PNG:", err)
         }
     }
 
     const exportBpsign = async () => {
         if (!layers.length) return
         try {
-            await window.package?.saveFileDialog({
+            const result = await window.package?.saveFileDialog({
                 defaultName: exportBaseName("bpsign"),
                 filters: [{ name: "BeePEE Signage", extensions: ["bpsign"] }],
                 text: JSON.stringify(serializeDesign(layers), null, 2),
             })
+            if (result?.success) {
+                console.log(
+                    `Exported signage design as .bpsign to ${result.filePath}`,
+                )
+            }
         } catch (err) {
-            console.error("Export .bpsign failed:", err)
+            console.error("Failed to export signage design as .bpsign:", err)
         }
     }
 
@@ -536,8 +675,9 @@ function SignageDesigner({
             pushHistory()
             setLayers(loaded)
             setSelIds([])
+            console.log(`Loaded .bpsign design with ${loaded.length} layers`)
         } catch (err) {
-            console.error("Load .bpsign failed:", err)
+            console.error("Failed to load .bpsign design:", err)
         }
     }
 
@@ -567,6 +707,94 @@ function SignageDesigner({
                 h: l.h,
                 rot: l.rot || 0,
             }))
+
+    // Expand a set of layer ids so every member of any touched group is
+    // included - clicking one grouped layer selects the whole group.
+    const expandWithGroups = (ids, ls = layersRef.current) => {
+        const groups = new Set()
+        for (const l of ls) {
+            if (l.group && ids.includes(l.id)) groups.add(l.group)
+        }
+        if (!groups.size) return ids
+        const out = new Set(ids)
+        for (const l of ls) {
+            if (l.group && groups.has(l.group)) out.add(l.id)
+        }
+        return [...out]
+    }
+
+    // Duplicated/pasted grouped layers become their own group, not extra
+    // members of the original one
+    const remapGroups = (arr) => {
+        const map = new Map()
+        return arr.map((l) => {
+            if (!l.group) return l
+            if (!map.has(l.group)) map.set(l.group, nextGroupId())
+            return { ...l, group: map.get(l.group) }
+        })
+    }
+
+    // Patch one layer by id (layers panel: visibility, rename, ...)
+    const setLayerProps = (id, patch, coalesceTag) => {
+        pushHistory(coalesceTag)
+        setLayers((ls) =>
+            ls.map((l) => (l.id === id ? { ...l, ...patch } : l)),
+        )
+    }
+
+    const groupSel = () => {
+        if (selIds.length < 2) return
+        pushHistory()
+        const gid = nextGroupId()
+        setLayers((ls) =>
+            ls.map((l) => (selSet.has(l.id) ? { ...l, group: gid } : l)),
+        )
+    }
+
+    const ungroupSel = () => {
+        if (!selIds.length) return
+        pushHistory()
+        setLayers((ls) =>
+            ls.map((l) => (selSet.has(l.id) ? { ...l, group: null } : l)),
+        )
+    }
+
+    // Mirror the selection across its bounding box; a single layer flips in
+    // place. Layers render rotate-then-flip, so a global mirror maps
+    // rotate(θ)∘flip to rotate(−θ)∘flip' - negate the rotation and toggle
+    // the flip flag, then mirror the position across the box center.
+    const flipSel = (axis) => {
+        if (!selIds.length) return
+        pushHistory()
+        const sel = layers.filter((l) => selSet.has(l.id))
+        const x0 = Math.min(...sel.map((l) => l.x))
+        const x1 = Math.max(...sel.map((l) => l.x + l.w))
+        const y0 = Math.min(...sel.map((l) => l.y))
+        const y1 = Math.max(...sel.map((l) => l.y + l.h))
+        setLayers((ls) =>
+            ls.map((l) => {
+                if (!selSet.has(l.id)) return l
+                const rot = (360 - (l.rot || 0)) % 360
+                return axis === "h"
+                    ? { ...l, x: x0 + x1 - (l.x + l.w), flipH: !l.flipH, rot }
+                    : { ...l, y: y0 + y1 - (l.y + l.h), flipV: !l.flipV, rot }
+            }),
+        )
+    }
+
+    // Right-click on a layer (canvas or panel row): ensure it's selected,
+    // then open the context menu at the cursor. Selection-wide actions
+    // (front/back, flip, duplicate, delete) apply to the whole selection.
+    const openLayerMenu = (e, l) => {
+        e.preventDefault()
+        e.stopPropagation()
+        if (!selSet.has(l.id)) setSelIds(expandWithGroups([l.id], layers))
+        setCtxMenu({
+            mouseX: e.clientX + 2,
+            mouseY: e.clientY - 6,
+            layerId: l.id,
+        })
+    }
 
     const startGroupResize = (e, handle) => {
         e.stopPropagation()
@@ -600,6 +828,9 @@ function SignageDesigner({
 
     const startMove = (e, l) => {
         e.stopPropagation()
+        // Without this, dragging starts a native text selection and the
+        // browser paints a blue highlight over layers (especially text)
+        e.preventDefault()
         // Ctrl toggles membership, Shift adds, plain click selects (keeps
         // an existing multi-selection when grabbing a selected layer)
         let ids
@@ -610,10 +841,12 @@ function SignageDesigner({
             setSelIds(ids)
             if (!ids.includes(l.id)) return // toggled off - no drag
         } else if (e.shiftKey) {
-            ids = selSet.has(l.id) ? selIds : [...selIds, l.id]
+            ids = selSet.has(l.id)
+                ? selIds
+                : expandWithGroups([...selIds, l.id], layers)
             setSelIds(ids)
         } else {
-            ids = selSet.has(l.id) ? selIds : [l.id]
+            ids = selSet.has(l.id) ? selIds : expandWithGroups([l.id], layers)
             setSelIds(ids)
         }
         pushHistory()
@@ -870,6 +1103,7 @@ function SignageDesigner({
                     ? layersRef.current
                           .filter(
                               (l) =>
+                                  !l.hidden &&
                                   l.x < rx1 &&
                                   l.x + l.w > rx0 &&
                                   l.y < ry1 &&
@@ -877,7 +1111,7 @@ function SignageDesigner({
                           )
                           .map((l) => l.id)
                     : []
-                setSelIds([...new Set([...o.base, ...hits])])
+                setSelIds(expandWithGroups([...new Set([...o.base, ...hits])]))
                 setMarquee(null)
             }
             op.current = null
@@ -947,6 +1181,11 @@ function SignageDesigner({
                 pasteClipboard()
                 return
             }
+            if (ctrl && key === "t") {
+                e.preventDefault()
+                addTextLayer()
+                return
+            }
 
             if (!selIds.length) return
             if (ctrl && key === "c") {
@@ -958,6 +1197,10 @@ function SignageDesigner({
             } else if (ctrl && key === "d") {
                 e.preventDefault()
                 dupSel()
+            } else if (ctrl && key === "g") {
+                e.preventDefault()
+                if (e.shiftKey) ungroupSel()
+                else groupSel()
             } else if (e.key === "Delete" || e.key === "Backspace") {
                 e.preventDefault()
                 removeSel()
@@ -995,12 +1238,14 @@ function SignageDesigner({
         if (!selIds.length) return
         pushHistory()
         const off = cell || 20
-        const dupes = layers
-            .filter((l) => selSet.has(l.id))
-            .map((l) => ({
-                ...snapLayer({ ...l, x: l.x + off, y: l.y + off }, snap),
-                id: nextId(),
-            }))
+        const dupes = remapGroups(
+            layers
+                .filter((l) => selSet.has(l.id))
+                .map((l) => ({
+                    ...snapLayer({ ...l, x: l.x + off, y: l.y + off }, snap),
+                    id: nextId(),
+                })),
+        )
         setLayers((ls) => [...ls, ...dupes])
         setSelIds(dupes.map((l) => l.id))
     }
@@ -1020,14 +1265,32 @@ function SignageDesigner({
         if (!src || !src.length) return
         pushHistory()
         const off = cell || 20
-        const pasted = src.map((c) => ({
-            ...snapLayer({ ...c, x: c.x + off, y: c.y + off }, snap),
-            id: nextId(),
-        }))
+        const pasted = remapGroups(
+            src.map((c) => ({
+                ...snapLayer({ ...c, x: c.x + off, y: c.y + off }, snap),
+                id: nextId(),
+            })),
+        )
         setLayers((ls) => [...ls, ...pasted])
         setSelIds(pasted.map((l) => l.id))
     }
     const selectAll = () => setSelIds(layers.map((l) => l.id))
+    // Move srcId next to dstId in the stack. The panel lists topmost first
+    // (reversed array), so dropping ABOVE a row means AFTER it in the array.
+    const reorderLayer = (srcId, dstId, before) => {
+        if (!srcId || srcId === dstId) return
+        pushHistory()
+        setLayers((ls) => {
+            const src = ls.find((l) => l.id === srcId)
+            if (!src) return ls
+            const without = ls.filter((l) => l.id !== srcId)
+            let idx = without.findIndex((l) => l.id === dstId)
+            if (idx < 0) return ls
+            if (before) idx += 1
+            without.splice(idx, 0, src)
+            return without
+        })
+    }
     const raise = (dir) => {
         if (!selIds.length) return
         pushHistory()
@@ -1127,6 +1390,11 @@ function SignageDesigner({
         duplicate: dupSel,
         delete: removeSel,
         selectAll,
+        group: groupSel,
+        ungroup: ungroupSel,
+        flipH: () => flipSel("h"),
+        flipV: () => flipSel("v"),
+        addText: addTextLayer,
     }
     useEffect(() => {
         window.package?.onSignageDesignerMenu?.((action) => {
@@ -1162,6 +1430,41 @@ function SignageDesigner({
                         type={kind}
                         gold={gold}
                         bar={theme.palette.text.primary}
+                    />
+                </Box>
+            </Box>
+        </Tooltip>
+    )
+
+    const flipBtn = (axis, title) => (
+        <Tooltip key={axis} title={title}>
+            {/* span wrapper so the tooltip works while the button is disabled */}
+            <Box component="span" sx={{ display: "flex" }}>
+                <Box
+                    component="button"
+                    disabled={!hasSel}
+                    onClick={() => hasSel && flipSel(axis)}
+                    sx={{
+                        width: 32,
+                        height: 28,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: "transparent",
+                        border: "none",
+                        borderRight: 1,
+                        borderColor: "divider",
+                        cursor: hasSel ? "pointer" : "not-allowed",
+                        opacity: hasSel ? 1 : 0.35,
+                        p: 0,
+                        color: "text.primary",
+                    }}>
+                    <Flip
+                        sx={{
+                            fontSize: 17,
+                            transform:
+                                axis === "v" ? "rotate(90deg)" : "none",
+                        }}
                     />
                 </Box>
             </Box>
@@ -1444,6 +1747,9 @@ function SignageDesigner({
                         p: 2,
                         bgcolor: "background.default",
                         minWidth: 0,
+                        // Marquee/layer drags must never start a native text
+                        // selection (blue highlight over layers and captions)
+                        userSelect: "none",
                     }}>
                     {/* Toolbar */}
                     <Box
@@ -1486,6 +1792,40 @@ function SignageDesigner({
                             {alignBtn("mv", "Center vertically")}
                             {alignBtn("bottom", "Align bottom")}
                         </Box>
+                        <Box
+                            sx={{
+                                display: "flex",
+                                alignItems: "center",
+                                border: 1,
+                                borderColor: "#555",
+                                borderRadius: 1,
+                                overflow: "hidden",
+                            }}>
+                            {flipBtn("h", "Flip horizontally")}
+                            {flipBtn("v", "Flip vertically")}
+                        </Box>
+                        <Tooltip title="Add text">
+                            <Box
+                                component="button"
+                                onClick={addTextLayer}
+                                sx={{
+                                    width: 32,
+                                    height: 30,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    background: "transparent",
+                                    border: 1,
+                                    borderColor: "#555",
+                                    borderRadius: 1,
+                                    cursor: "pointer",
+                                    color: "text.primary",
+                                    p: 0,
+                                    "&:hover": { bgcolor: "action.hover" },
+                                }}>
+                                <TitleIcon sx={{ fontSize: 18 }} />
+                            </Box>
+                        </Tooltip>
                         <Box sx={{ flex: 1 }} />
                         {/* Zoom controls - Ctrl+scroll on the canvas also zooms */}
                         <Box
@@ -1659,6 +1999,15 @@ function SignageDesigner({
                             overflow: "auto",
                             display: "flex",
                         }}>
+                    {/* The canvas's frame, around it rather than its border:
+                        the canvas is then exactly the sign (disp square) for
+                        its layers, backplate, clip and pointer math */}
+                    <Box
+                        sx={{
+                            border: dropHint ? `2px solid ${gold}` : "2px dashed #555",
+                            flexShrink: 0,
+                            m: "auto",
+                        }}>
                     {/* Canvas */}
                     <Box
                         ref={canvasRef}
@@ -1685,7 +2034,7 @@ function SignageDesigner({
                             width: disp,
                             height: disp,
                             position: "relative",
-                            borderRadius: 2,
+                            // Square like the sign: no corners past its own
                             background: "#ffffff",
                             backgroundImage: (() => {
                                 const grid = `linear-gradient(rgba(0,0,0,0.09) 1px,transparent 1px),linear-gradient(90deg,rgba(0,0,0,0.09) 1px,transparent 1px)`
@@ -1705,11 +2054,13 @@ function SignageDesigner({
                                     parts.push("100% 100%")
                                 return parts.join(",") || "auto"
                             })(),
-                            border: dropHint ? `2px solid ${gold}` : "2px dashed #555",
                             boxShadow: "inset 0 0 0 1px rgba(0,0,0,0.12)",
-                            overflow: "hidden",
-                            flexShrink: 0,
-                            m: "auto",
+                            // clip, not hidden: a hidden box can still be
+                            // scrolled, and typing text past the canvas edge
+                            // scrolled it to keep the caret in view - shifting
+                            // every layer off the grid and throwing off the
+                            // pointer math (toCanvas ignores this box's scroll)
+                            overflow: "clip",
                         }}>
                         {layers.length === 0 && !dropHint && (
                             <Box
@@ -1729,6 +2080,7 @@ function SignageDesigner({
                             </Box>
                         )}
                         {layers.map((l) => {
+                            if (l.hidden) return null
                             const active = selSet.has(l.id)
                             const showHandles = active && selIds.length === 1
                             const handle = (hd, cursor, pos) => (
@@ -1751,6 +2103,12 @@ function SignageDesigner({
                                 <Box
                                     key={l.id}
                                     onMouseDown={(e) => startMove(e, l)}
+                                    onContextMenu={(e) => openLayerMenu(e, l)}
+                                    onDoubleClick={(e) => {
+                                        if (!isTextLayer(l)) return
+                                        e.stopPropagation()
+                                        setEditingTextId(l.id)
+                                    }}
                                     sx={{
                                         position: "absolute",
                                         left: l.x * s,
@@ -1760,25 +2118,115 @@ function SignageDesigner({
                                         transform: `rotate(${l.rot || 0}deg)`,
                                         cursor: "move",
                                     }}>
-                                    <svg
+                                    {/* Flip only the artwork - the selection
+                                        outline and resize handles stay in
+                                        data space so drag math is unaffected */}
+                                    <LayerArt
+                                        markup={
+                                            hasEraserPart(l)
+                                                ? eraserGhostSvg(l, `cv-${l.id}`)
+                                                : layerInnerSvg(l, `cv-${l.id}`)
+                                        }
                                         width={l.w * s}
                                         height={l.h * s}
-                                        viewBox={
-                                            SHAPES[l.glyph]?.vb || "0 0 24 24"
-                                        }
+                                        viewBox={layerVb(l)}
                                         preserveAspectRatio="none"
                                         overflow="visible"
                                         style={{
                                             display: "block",
                                             width: l.w * s,
                                             height: l.h * s,
-                                        }}
-                                        dangerouslySetInnerHTML={{
-                                            __html: hasEraserPart(l)
-                                                ? eraserGhostSvg(l, `cv-${l.id}`)
-                                                : layerInnerSvg(l, `cv-${l.id}`),
+                                            opacity:
+                                                editingTextId === l.id
+                                                    ? 0.15
+                                                    : (l.opacity ?? 1),
+                                            transform: `scale(${l.flipH ? -1 : 1}, ${l.flipV ? -1 : 1})`,
+                                            transformOrigin: "center center",
                                         }}
                                     />
+                                    {/* In-place text editor - lives inside
+                                        the rotated layer box so it tracks
+                                        the object; the svg dims behind it */}
+                                    {editingTextId === l.id &&
+                                        isTextLayer(l) &&
+                                        (() => {
+                                            const vh =
+                                                Number(
+                                                    (l.textVb || "0 0 100 40")
+                                                        .split(/\s+/)[3],
+                                                ) || 100
+                                            const fontPx = Math.max(
+                                                8,
+                                                (100 * (l.h * s)) / vh,
+                                            )
+                                            return (
+                                                <input
+                                                    autoFocus
+                                                    value={l.text || ""}
+                                                    onFocus={(e) =>
+                                                        e.target.select()
+                                                    }
+                                                    onChange={(e) =>
+                                                        updateTextById(l.id, {
+                                                            text: e.target
+                                                                .value,
+                                                        })
+                                                    }
+                                                    onBlur={() =>
+                                                        setEditingTextId(null)
+                                                    }
+                                                    onKeyDown={(e) => {
+                                                        e.stopPropagation()
+                                                        if (
+                                                            e.key ===
+                                                                "Enter" ||
+                                                            e.key === "Escape"
+                                                        ) {
+                                                            setEditingTextId(
+                                                                null,
+                                                            )
+                                                        }
+                                                    }}
+                                                    onMouseDown={(e) =>
+                                                        e.stopPropagation()
+                                                    }
+                                                    onDoubleClick={(e) =>
+                                                        e.stopPropagation()
+                                                    }
+                                                    style={{
+                                                        position: "absolute",
+                                                        inset: 0,
+                                                        width: "100%",
+                                                        height: "100%",
+                                                        boxSizing:
+                                                            "border-box",
+                                                        background:
+                                                            "transparent",
+                                                        border: "none",
+                                                        outline: "none",
+                                                        textAlign: "center",
+                                                        padding: 0,
+                                                        fontFamily:
+                                                            l.fontFamily ||
+                                                            "Arial",
+                                                        fontWeight: l.bold
+                                                            ? 700
+                                                            : 400,
+                                                        fontStyle: l.italic
+                                                            ? "italic"
+                                                            : "normal",
+                                                        fontSize: fontPx,
+                                                        lineHeight: 1,
+                                                        color:
+                                                            l.color ===
+                                                            "transparent"
+                                                                ? "#666666"
+                                                                : l.color,
+                                                        caretColor: "#d2b019",
+                                                    }}
+                                                />
+                                            )
+                                        })()}
                                     {active && (
                                         <Box
                                             sx={{
@@ -1917,6 +2365,7 @@ function SignageDesigner({
                                 )
                             })()}
                     </Box>
+                    </Box>
 
                     {/* Marquee - drawn at viewport level (not clipped by the
                         canvas) so it stays visible when dragging over the bg,
@@ -1998,24 +2447,116 @@ function SignageDesigner({
                     }}
                 />
 
-                {/* Properties */}
+                {/* Right dock: edit controls on top, layers pane pinned at
+                    the bottom, separated by a draggable splitter */}
                 <Box
                     sx={{
                         width: propsW,
                         flexShrink: 0,
                         borderLeft: 1,
                         borderColor: "divider",
-                        p: 2,
-                        overflowY: "auto",
                         display: "flex",
                         flexDirection: "column",
-                        gap: 2,
+                        minHeight: 0,
                     }}>
+                    {/* Edit pane (properties + preview) */}
+                    <Box
+                        sx={{
+                            flex: 1,
+                            minHeight: 0,
+                            p: 2,
+                            overflowY: "auto",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 2,
+                        }}>
                     {selLayer ? (
                         <Stack spacing={1.75}>
                             <Typography variant="subtitle2" fontWeight={600}>
-                                Transform · {SHAPES[selLayer.glyph].label}
+                                Transform ·{" "}
+                                {selLayer.name ||
+                                    (isTextLayer(selLayer)
+                                        ? "Text"
+                                        : SHAPES[selLayer.glyph]?.label ||
+                                          selLayer.glyph)}
                             </Typography>
+                            {isTextLayer(selLayer) && (
+                                <>
+                                    <Typography
+                                        variant="caption"
+                                        color="text.disabled">
+                                        Double-click the text on the canvas to
+                                        edit it.
+                                    </Typography>
+                                    <TextField
+                                        select
+                                        label="Font"
+                                        size="small"
+                                        fullWidth
+                                        value={selLayer.fontFamily || "Arial"}
+                                        onChange={(e) =>
+                                            updateTextLayer({
+                                                fontFamily: e.target.value,
+                                            })
+                                        }>
+                                        {TEXT_FONTS.map((f) => (
+                                            <MenuItem
+                                                key={f}
+                                                value={f}
+                                                sx={{ fontFamily: f }}>
+                                                {f}
+                                            </MenuItem>
+                                        ))}
+                                    </TextField>
+                                    <Box sx={{ display: "flex", gap: 0.5 }}>
+                                        <FormControlLabel
+                                            sx={{ ml: -0.75, mr: 1 }}
+                                            control={
+                                                <Checkbox
+                                                    size="small"
+                                                    checked={!!selLayer.bold}
+                                                    onChange={(e) =>
+                                                        updateTextLayer({
+                                                            bold: e.target
+                                                                .checked,
+                                                        })
+                                                    }
+                                                />
+                                            }
+                                            label={
+                                                <Typography
+                                                    variant="caption"
+                                                    fontWeight={700}>
+                                                    Bold
+                                                </Typography>
+                                            }
+                                        />
+                                        <FormControlLabel
+                                            sx={{ mr: 0 }}
+                                            control={
+                                                <Checkbox
+                                                    size="small"
+                                                    checked={!!selLayer.italic}
+                                                    onChange={(e) =>
+                                                        updateTextLayer({
+                                                            italic:
+                                                                e.target
+                                                                    .checked,
+                                                        })
+                                                    }
+                                                />
+                                            }
+                                            label={
+                                                <Typography
+                                                    variant="caption"
+                                                    fontStyle="italic">
+                                                    Italic
+                                                </Typography>
+                                            }
+                                        />
+                                    </Box>
+                                </>
+                            )}
                             <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25 }}>
                                 <NumField
                                     label="Width"
@@ -2061,6 +2602,29 @@ function SignageDesigner({
                                     sx={{ fontSize: 11.5, px: 0.5, height: 40 }}>
                                     Make square
                                 </Button>
+                            </Box>
+                            <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, px: 0.5 }}>
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    sx={{ whiteSpace: "nowrap" }}>
+                                    Opacity
+                                </Typography>
+                                <Slider
+                                    size="small"
+                                    min={5}
+                                    max={100}
+                                    value={Math.round((selLayer.opacity ?? 1) * 100)}
+                                    onChange={(e, v) =>
+                                        updateSel((l) => ({ ...l, opacity: v / 100 }))
+                                    }
+                                    sx={{ flex: 1 }}
+                                />
+                                <Typography
+                                    variant="caption"
+                                    sx={{ minWidth: 32, textAlign: "right" }}>
+                                    {Math.round((selLayer.opacity ?? 1) * 100)}%
+                                </Typography>
                             </Box>
                             {(() => {
                                 const mode =
@@ -2201,29 +2765,32 @@ function SignageDesigner({
                                                             ? "auto"
                                                             : "none",
                                                     }}>
-                                        <ToggleButtonGroup
-                                            size="small"
-                                            exclusive
-                                            fullWidth
-                                            sx={{ mt: 0.5 }}
-                                            value={selLayer.outlineAlign || "center"}
-                                            onChange={(e, v) =>
-                                                v &&
-                                                updateSel((l) => ({
-                                                    ...l,
-                                                    outlineAlign: v,
-                                                }))
-                                            }>
-                                            <ToggleButton value="inner" sx={{ fontSize: 10.5 }}>
-                                                Inner
-                                            </ToggleButton>
-                                            <ToggleButton value="center" sx={{ fontSize: 10.5 }}>
-                                                Center
-                                            </ToggleButton>
-                                            <ToggleButton value="outer" sx={{ fontSize: 10.5 }}>
-                                                Outer
-                                            </ToggleButton>
-                                        </ToggleButtonGroup>
+                                        {/* Text outlines are always centered strokes */}
+                                        {!isTextLayer(selLayer) && (
+                                            <ToggleButtonGroup
+                                                size="small"
+                                                exclusive
+                                                fullWidth
+                                                sx={{ mt: 0.5 }}
+                                                value={selLayer.outlineAlign || "center"}
+                                                onChange={(e, v) =>
+                                                    v &&
+                                                    updateSel((l) => ({
+                                                        ...l,
+                                                        outlineAlign: v,
+                                                    }))
+                                                }>
+                                                <ToggleButton value="inner" sx={{ fontSize: 10.5 }}>
+                                                    Inner
+                                                </ToggleButton>
+                                                <ToggleButton value="center" sx={{ fontSize: 10.5 }}>
+                                                    Center
+                                                </ToggleButton>
+                                                <ToggleButton value="outer" sx={{ fontSize: 10.5 }}>
+                                                    Outer
+                                                </ToggleButton>
+                                            </ToggleButtonGroup>
+                                        )}
                                         <Box
                                             sx={{
                                                 display: "flex",
@@ -2326,47 +2893,32 @@ function SignageDesigner({
                                                             }}
                                                         />
                                                     </Tooltip>
-                                                    <Box
-                                                        component="label"
+                                                    <ColorPickerButton
                                                         title="Custom outline color"
+                                                        value={
+                                                            selLayer.outlineColor &&
+                                                            selLayer.outlineColor[0] === "#" &&
+                                                            selLayer.outlineColor.length === 7
+                                                                ? selLayer.outlineColor
+                                                                : "#000000"
+                                                        }
+                                                        onChange={(v) =>
+                                                            updateSel((l) => ({
+                                                                ...l,
+                                                                outlineColor: v,
+                                                            }))
+                                                        }
+                                                        presets={["#000000", "#ffffff", gold, ...CUSTOM_PRESET]}
                                                         sx={{
-                                                            position: "relative",
                                                             width: 24,
                                                             height: 24,
                                                             borderRadius: "5px",
-                                                            cursor: "pointer",
-                                                            overflow: "hidden",
                                                             boxSizing: "border-box",
                                                             border: "1px solid #555",
                                                             background:
                                                                 "conic-gradient(from 0deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
-                                                        }}>
-                                                        <input
-                                                            type="color"
-                                                            value={
-                                                                selLayer.outlineColor &&
-                                                                selLayer.outlineColor[0] === "#" &&
-                                                                selLayer.outlineColor.length === 7
-                                                                    ? selLayer.outlineColor
-                                                                    : "#000000"
-                                                            }
-                                                            onChange={(e) => {
-                                                                const v = e.target.value
-                                                                updateSel((l) => ({
-                                                                    ...l,
-                                                                    outlineColor: v,
-                                                                }))
-                                                            }}
-                                                            style={{
-                                                                position: "absolute",
-                                                                inset: 0,
-                                                                opacity: 0,
-                                                                cursor: "pointer",
-                                                                border: "none",
-                                                                padding: 0,
-                                                            }}
-                                                        />
-                                                    </Box>
+                                                        }}
+                                                    />
                                                 </Box>
                                             </Box>
                                         )}
@@ -2500,16 +3052,23 @@ function SignageDesigner({
                                             selLayer.color !== "transparent" &&
                                             presets.indexOf(selLayer.color.toLowerCase()) < 0
                                         return (
-                                            <Box
-                                                component="label"
+                                            <ColorPickerButton
                                                 title="Custom color"
+                                                value={
+                                                    selLayer.color &&
+                                                    selLayer.color[0] === "#" &&
+                                                    selLayer.color.length === 7
+                                                        ? selLayer.color
+                                                        : "#d2b019"
+                                                }
+                                                onChange={(v) =>
+                                                    updateSel((l) => ({ ...l, color: v }))
+                                                }
+                                                presets={presets}
                                                 sx={{
-                                                    position: "relative",
                                                     width: 24,
                                                     height: 24,
                                                     borderRadius: "5px",
-                                                    cursor: "pointer",
-                                                    overflow: "hidden",
                                                     boxSizing: "border-box",
                                                     border: isCustom
                                                         ? `2px solid ${gold}`
@@ -2517,47 +3076,11 @@ function SignageDesigner({
                                                     background: isCustom
                                                         ? selLayer.color
                                                         : "conic-gradient(from 0deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
-                                                }}>
-                                                <input
-                                                    type="color"
-                                                    value={
-                                                        selLayer.color &&
-                                                        selLayer.color[0] === "#" &&
-                                                        selLayer.color.length === 7
-                                                            ? selLayer.color
-                                                            : "#d2b019"
-                                                    }
-                                                    onChange={(e) => {
-                                                        const v = e.target.value
-                                                        updateSel((l) => ({ ...l, color: v }))
-                                                    }}
-                                                    style={{
-                                                        position: "absolute",
-                                                        inset: 0,
-                                                        opacity: 0,
-                                                        cursor: "pointer",
-                                                        border: "none",
-                                                        padding: 0,
-                                                    }}
-                                                />
-                                            </Box>
+                                                }}
+                                            />
                                         )
                                     })()}
                                 </Box>
-                            </Box>
-                            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
-                                <Button variant="outlined" size="small" onClick={() => raise(1)}>
-                                    Front
-                                </Button>
-                                <Button variant="outlined" size="small" onClick={() => raise(-1)}>
-                                    Back
-                                </Button>
-                                <Button variant="outlined" size="small" onClick={dupSel}>
-                                    Duplicate
-                                </Button>
-                                <Button variant="outlined" size="small" color="error" onClick={removeSel}>
-                                    Delete
-                                </Button>
                             </Box>
                         </Stack>
                     ) : selIds.length > 1 ? (
@@ -2565,6 +3088,63 @@ function SignageDesigner({
                             <Typography variant="subtitle2" fontWeight={600}>
                                 {selIds.length} layers selected
                             </Typography>
+                            {(() => {
+                                const sel = layers.filter((l) =>
+                                    selSet.has(l.id),
+                                )
+                                const anyGrouped = sel.some((l) => l.group)
+                                return (
+                                    <Box
+                                        sx={{
+                                            display: "grid",
+                                            gridTemplateColumns: "1fr 1fr",
+                                            gap: 1,
+                                        }}>
+                                        <Button
+                                            variant="outlined"
+                                            size="small"
+                                            startIcon={
+                                                <LinkIcon sx={{ fontSize: 15 }} />
+                                            }
+                                            onClick={groupSel}
+                                            sx={{ fontSize: 11.5, px: 0.5 }}>
+                                            Group
+                                        </Button>
+                                        <Button
+                                            variant="outlined"
+                                            size="small"
+                                            disabled={!anyGrouped}
+                                            startIcon={
+                                                <LinkOff sx={{ fontSize: 15 }} />
+                                            }
+                                            onClick={ungroupSel}
+                                            sx={{ fontSize: 11.5, px: 0.5 }}>
+                                            Ungroup
+                                        </Button>
+                                    </Box>
+                                )
+                            })()}
+                            <Box sx={{ display: "flex", alignItems: "center", gap: 1.25, px: 0.5 }}>
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    sx={{ whiteSpace: "nowrap" }}>
+                                    Opacity
+                                </Typography>
+                                <Slider
+                                    size="small"
+                                    min={5}
+                                    max={100}
+                                    value={Math.round(
+                                        (layers.find((l) => selSet.has(l.id))
+                                            ?.opacity ?? 1) * 100,
+                                    )}
+                                    onChange={(e, v) =>
+                                        updateSel((l) => ({ ...l, opacity: v / 100 }))
+                                    }
+                                    sx={{ flex: 1 }}
+                                />
+                            </Box>
                             <Box>
                                 <Typography
                                     variant="caption"
@@ -2604,20 +3184,6 @@ function SignageDesigner({
                                     )}
                                 </Box>
                             </Box>
-                            <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1 }}>
-                                <Button variant="outlined" size="small" onClick={() => raise(1)}>
-                                    Front
-                                </Button>
-                                <Button variant="outlined" size="small" onClick={() => raise(-1)}>
-                                    Back
-                                </Button>
-                                <Button variant="outlined" size="small" onClick={dupSel}>
-                                    Duplicate
-                                </Button>
-                                <Button variant="outlined" size="small" color="error" onClick={removeSel}>
-                                    Delete
-                                </Button>
-                            </Box>
                             <Typography
                                 variant="caption"
                                 color="text.disabled"
@@ -2635,19 +3201,355 @@ function SignageDesigner({
                             Ctrl-click toggles, Shift-click adds.
                         </Typography>
                     )}
-                    <Box sx={{ flex: 1 }} />
-                    <Box>
-                        <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>
-                            Preview
+                    </Box>
+
+                    {/* Splitter - drag to resize the layers pane */}
+                    <Box
+                        onMouseDown={(e) => {
+                            e.preventDefault()
+                            sideDrag.current = {
+                                side: "layers",
+                                startY: e.clientY,
+                                startH: layersH,
+                            }
+                        }}
+                        sx={{
+                            height: "5px",
+                            mt: "-3px",
+                            flexShrink: 0,
+                            cursor: "row-resize",
+                            zIndex: 2,
+                            "&:hover": { bgcolor: "primary.main", opacity: 0.4 },
+                        }}
+                    />
+
+                    {/* Layers pane - topmost layer first, Photoshop style */}
+                    <Box
+                        sx={{
+                            height: layersH,
+                            flexShrink: 0,
+                            borderTop: 1,
+                            borderColor: "divider",
+                            bgcolor: "background.paper",
+                            display: "flex",
+                            flexDirection: "column",
+                            px: 2,
+                            pt: 1,
+                            pb: 1.25,
+                            minHeight: 0,
+                        }}>
+                        <Typography
+                            variant="subtitle2"
+                            fontWeight={600}
+                            sx={{ mb: 0.75 }}>
+                            Layers
+                            {layers.length > 0 && (
+                                <Typography
+                                    component="span"
+                                    variant="caption"
+                                    color="text.disabled"
+                                    sx={{ ml: 0.75 }}>
+                                    {layers.length}
+                                </Typography>
+                            )}
                         </Typography>
-                        <Box sx={{ display: "flex", gap: 1 }}>
-                            <Box sx={{ p: 0.75, bgcolor: "background.default", border: 1, borderColor: "divider", borderRadius: 1 }}>
-                                <LayersThumb layers={layers} size={56} />
-                            </Box>
-                            <Box sx={{ p: 0.75, bgcolor: "background.default", border: 1, borderColor: "divider", borderRadius: 1 }}>
-                                <LayersThumb layers={layers} size={32} />
-                            </Box>
+                        <Box
+                            sx={{
+                                flex: 1,
+                                minHeight: 0,
+                                overflowY: "auto",
+                                border: 1,
+                                borderColor: "divider",
+                                borderRadius: 1,
+                                bgcolor: "background.default",
+                            }}
+                            onDragOver={(e) => {
+                                // Allow dropping in the empty area below the
+                                // rows (sends the layer to the back)
+                                if (layerDrag.current) e.preventDefault()
+                            }}
+                            onDrop={(e) => {
+                                if (!layerDrag.current) return
+                                e.preventDefault()
+                                const last = layers[0]
+                                if (last)
+                                    reorderLayer(
+                                        layerDrag.current,
+                                        last.id,
+                                        false,
+                                    )
+                                layerDrag.current = null
+                                setDropMark(null)
+                            }}>
+                            {layers.length === 0 && (
+                                <Typography
+                                    variant="caption"
+                                    color="text.disabled"
+                                    sx={{ display: "block", p: 1.25 }}>
+                                    No layers yet.
+                                </Typography>
+                            )}
+                            {[...layers].reverse().map((l) => {
+                                const active = selSet.has(l.id)
+                                const label =
+                                    l.name ||
+                                    (isTextLayer(l)
+                                        ? `"${l.text || "Text"}"`
+                                        : SHAPES[l.glyph]?.label || l.glyph)
+                                return (
+                                    <Box
+                                        key={l.id}
+                                        draggable={renameId !== l.id}
+                                        onDragStart={(e) => {
+                                            layerDrag.current = l.id
+                                            e.dataTransfer.effectAllowed =
+                                                "move"
+                                        }}
+                                        onDragEnd={() => {
+                                            layerDrag.current = null
+                                            setDropMark(null)
+                                        }}
+                                        onDragOver={(e) => {
+                                            if (!layerDrag.current) return
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            const r =
+                                                e.currentTarget.getBoundingClientRect()
+                                            setDropMark({
+                                                id: l.id,
+                                                before:
+                                                    e.clientY <
+                                                    r.top + r.height / 2,
+                                            })
+                                        }}
+                                        onDrop={(e) => {
+                                            if (!layerDrag.current) return
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            reorderLayer(
+                                                layerDrag.current,
+                                                l.id,
+                                                e.clientY <
+                                                    e.currentTarget.getBoundingClientRect()
+                                                        .top +
+                                                        e.currentTarget.getBoundingClientRect()
+                                                            .height /
+                                                            2,
+                                            )
+                                            layerDrag.current = null
+                                            setDropMark(null)
+                                        }}
+                                        onMouseDown={(e) => {
+                                            if (renameId === l.id) return
+                                            if (e.ctrlKey || e.metaKey) {
+                                                setSelIds((ids) =>
+                                                    ids.includes(l.id)
+                                                        ? ids.filter(
+                                                              (x) => x !== l.id,
+                                                          )
+                                                        : [...ids, l.id],
+                                                )
+                                            } else if (e.shiftKey) {
+                                                setSelIds((ids) =>
+                                                    expandWithGroups(
+                                                        [
+                                                            ...new Set([
+                                                                ...ids,
+                                                                l.id,
+                                                            ]),
+                                                        ],
+                                                        layers,
+                                                    ),
+                                                )
+                                            } else {
+                                                setSelIds(
+                                                    expandWithGroups(
+                                                        [l.id],
+                                                        layers,
+                                                    ),
+                                                )
+                                            }
+                                        }}
+                                        onDoubleClick={() => {
+                                            setRenameId(l.id)
+                                            setRenameDraft(label)
+                                        }}
+                                        onContextMenu={(e) =>
+                                            openLayerMenu(e, l)
+                                        }
+                                        sx={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 0.75,
+                                            px: 0.75,
+                                            py: 0.5,
+                                            cursor: "pointer",
+                                            userSelect: "none",
+                                            bgcolor: active
+                                                ? "action.selected"
+                                                : "transparent",
+                                            opacity: l.hidden ? 0.45 : 1,
+                                            borderTop:
+                                                dropMark?.id === l.id &&
+                                                dropMark.before
+                                                    ? `2px solid ${gold}`
+                                                    : "2px solid transparent",
+                                            borderBottom:
+                                                dropMark?.id === l.id &&
+                                                !dropMark.before
+                                                    ? `2px solid ${gold}`
+                                                    : "2px solid transparent",
+                                            "&:hover": {
+                                                bgcolor: active
+                                                    ? "action.selected"
+                                                    : "action.hover",
+                                            },
+                                        }}>
+                                        <Tooltip
+                                            title={
+                                                l.hidden
+                                                    ? "Show layer"
+                                                    : "Hide layer"
+                                            }>
+                                            <IconButton
+                                                size="small"
+                                                sx={{ p: 0.25 }}
+                                                onMouseDown={(e) =>
+                                                    e.stopPropagation()
+                                                }
+                                                onClick={() =>
+                                                    setLayerProps(l.id, {
+                                                        hidden: !l.hidden,
+                                                    })
+                                                }>
+                                                {l.hidden ? (
+                                                    <VisibilityOff
+                                                        sx={{ fontSize: 15 }}
+                                                    />
+                                                ) : (
+                                                    <Visibility
+                                                        sx={{ fontSize: 15 }}
+                                                    />
+                                                )}
+                                            </IconButton>
+                                        </Tooltip>
+                                        <Box
+                                            sx={{
+                                                width: 22,
+                                                height: 22,
+                                                flexShrink: 0,
+                                                display: "flex",
+                                                alignItems: "center",
+                                                justifyContent: "center",
+                                                bgcolor: "background.default",
+                                                border: 1,
+                                                borderColor: "divider",
+                                                borderRadius: 0.5,
+                                                transform: `scale(${l.flipH ? -1 : 1}, ${l.flipV ? -1 : 1})`,
+                                            }}>
+                                            {isTextLayer(l) ? (
+                                                <TitleIcon
+                                                    sx={{
+                                                        fontSize: 15,
+                                                        color:
+                                                            l.color ===
+                                                            "transparent"
+                                                                ? "#999999"
+                                                                : l.color,
+                                                    }}
+                                                />
+                                            ) : (
+                                                <ShapeSvg
+                                                    id={l.glyph}
+                                                    color={
+                                                        l.color ===
+                                                        "transparent"
+                                                            ? "#999999"
+                                                            : l.color
+                                                    }
+                                                    w={14}
+                                                />
+                                            )}
+                                        </Box>
+                                        {renameId === l.id ? (
+                                            <TextField
+                                                size="small"
+                                                variant="standard"
+                                                autoFocus
+                                                value={renameDraft}
+                                                onChange={(e) =>
+                                                    setRenameDraft(
+                                                        e.target.value,
+                                                    )
+                                                }
+                                                onBlur={() => {
+                                                    const v =
+                                                        renameDraft.trim()
+                                                    if (v && v !== label) {
+                                                        setLayerProps(l.id, {
+                                                            name: v,
+                                                        })
+                                                    }
+                                                    setRenameId(null)
+                                                }}
+                                                onKeyDown={(e) => {
+                                                    e.stopPropagation()
+                                                    if (e.key === "Enter")
+                                                        e.target.blur()
+                                                    if (e.key === "Escape")
+                                                        setRenameId(null)
+                                                }}
+                                                sx={{ flex: 1 }}
+                                                inputProps={{
+                                                    style: { fontSize: 12 },
+                                                }}
+                                            />
+                                        ) : (
+                                            <Typography
+                                                variant="caption"
+                                                noWrap
+                                                sx={{ flex: 1, minWidth: 0 }}>
+                                                {label}
+                                            </Typography>
+                                        )}
+                                        {(l.opacity ?? 1) < 1 && (
+                                            <Typography
+                                                variant="caption"
+                                                color="text.disabled"
+                                                sx={{
+                                                    fontSize: 10,
+                                                    flexShrink: 0,
+                                                }}>
+                                                {Math.round(
+                                                    (l.opacity ?? 1) * 100,
+                                                )}
+                                                %
+                                            </Typography>
+                                        )}
+                                        {l.group && (
+                                            <Tooltip title="Grouped - click selects the whole group (Ctrl+Shift+G to ungroup)">
+                                                <LinkIcon
+                                                    sx={{
+                                                        fontSize: 13,
+                                                        flexShrink: 0,
+                                                        color: groupColor(
+                                                            l.group,
+                                                        ),
+                                                    }}
+                                                />
+                                            </Tooltip>
+                                        )}
+                                    </Box>
+                                )
+                            })}
                         </Box>
+                        <Typography
+                            variant="caption"
+                            color="text.disabled"
+                            noWrap
+                            sx={{ mt: 0.5, flexShrink: 0 }}>
+                            Drag to reorder
+                        </Typography>
                     </Box>
                 </Box>
             </Box>
@@ -2666,7 +3568,7 @@ function SignageDesigner({
                         const parsed = parseSvgToGlyph(await file.text(), { importHeuristics: true })
                         if (!parsed) {
                             console.warn(
-                                "No usable paths found in SVG:",
+                                "Skipped SVG import, no usable paths found:",
                                 file.name,
                             )
                             return
@@ -2680,8 +3582,14 @@ function SignageDesigner({
                         )
                         setCustomIds((ids) => [...new Set([...ids, id])])
                         setOpenSections((s) => ({ ...s, custom: true }))
+                        console.log(
+                            `Imported SVG "${file.name}" as a custom shape`,
+                        )
                     } catch (err) {
-                        console.error("Failed to import SVG:", err)
+                        console.error(
+                            `Failed to import SVG "${file.name}":`,
+                            err,
+                        )
                     }
                 }}
             />
@@ -2706,6 +3614,91 @@ function SignageDesigner({
                     </Button>
                 </Stack>
             </Box>
+
+            {/* Layer context menu (right-click a canvas layer or panel row) */}
+            {(() => {
+                const ctxLayer = ctxMenu
+                    ? layers.find((l) => l.id === ctxMenu.layerId)
+                    : null
+                const act = (fn) => () => {
+                    setCtxMenu(null)
+                    fn()
+                }
+                const anyGrouped = layers.some(
+                    (l) => selSet.has(l.id) && l.group,
+                )
+                return (
+                    <Menu
+                        open={!!ctxMenu && !!ctxLayer}
+                        onClose={() => setCtxMenu(null)}
+                        anchorReference="anchorPosition"
+                        anchorPosition={
+                            ctxMenu
+                                ? { top: ctxMenu.mouseY, left: ctxMenu.mouseX }
+                                : undefined
+                        }
+                        slotProps={{
+                            list: { dense: true },
+                            paper: { sx: { minWidth: 220 } },
+                        }}>
+                        <MenuItem onClick={act(() => raise(1))}>
+                            Bring to Front
+                        </MenuItem>
+                        <MenuItem onClick={act(() => raise(-1))}>
+                            Send to Back
+                        </MenuItem>
+                        <Divider />
+                        <MenuItem onClick={act(() => flipSel("h"))}>
+                            Flip Horizontal
+                        </MenuItem>
+                        <MenuItem onClick={act(() => flipSel("v"))}>
+                            Flip Vertical
+                        </MenuItem>
+                        <Divider />
+                        <MenuItem
+                            disabled={selIds.length < 2}
+                            onClick={act(groupSel)}>
+                            Group
+                        </MenuItem>
+                        <MenuItem
+                            disabled={!anyGrouped}
+                            onClick={act(ungroupSel)}>
+                            Ungroup
+                        </MenuItem>
+                        <Divider />
+                        <MenuItem
+                            onClick={act(() => {
+                                if (!ctxLayer) return
+                                setRenameId(ctxLayer.id)
+                                setRenameDraft(
+                                    ctxLayer.name ||
+                                        (isTextLayer(ctxLayer)
+                                            ? ctxLayer.text || "Text"
+                                            : SHAPES[ctxLayer.glyph]?.label ||
+                                              ctxLayer.glyph),
+                                )
+                            })}>
+                            Rename
+                        </MenuItem>
+                        <MenuItem
+                            onClick={act(() => {
+                                if (!ctxLayer) return
+                                setLayerProps(ctxLayer.id, {
+                                    hidden: !ctxLayer.hidden,
+                                })
+                            })}>
+                            {ctxLayer?.hidden ? "Show" : "Hide"}
+                        </MenuItem>
+                        <Divider />
+                        <MenuItem onClick={act(dupSel)}>Duplicate</MenuItem>
+                        <MenuItem
+                            onClick={act(removeSel)}
+                            sx={{ color: "error.main" }}>
+                            Delete
+                        </MenuItem>
+                    </Menu>
+                )
+            })()}
 
             {/* Confirm discarding unsaved edits */}
             <Dialog

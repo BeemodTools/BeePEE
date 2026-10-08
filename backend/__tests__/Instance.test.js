@@ -293,12 +293,16 @@ describe("Instance VMF Parsing", () => {
 
             expect(consoleSpy).toHaveBeenCalledWith(
                 expect.stringContaining(`Failed to parse VMF file`),
-                expect.stringContaining("VDF.parse: invalid syntax"),
+                expect.objectContaining({
+                    message: expect.stringContaining(
+                        "VDF.parse: invalid syntax",
+                    ),
+                }),
             )
 
             expect(consoleSpy).toHaveBeenCalledWith(
                 expect.stringContaining(
-                    "VMF parsing failed. The file may contain malformed syntax.",
+                    "The VMF file may have malformed syntax",
                 ),
             )
 

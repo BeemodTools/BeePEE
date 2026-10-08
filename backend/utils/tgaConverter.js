@@ -1,6 +1,9 @@
 const fs = require("fs")
 const path = require("path")
 const sharp = require("sharp")
+const { logger } = require("./logger")
+
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
 /**
  * Native TGA Header structure
@@ -185,7 +188,9 @@ function decodeRLE(buffer, offset, pixelCount, bytesPerPixel) {
 async function convertTgaToPng(tgaPath, pngPath) {
     try {
         if (!fs.existsSync(tgaPath)) {
-            console.warn(`TGA file not found: ${tgaPath}`)
+            console.warn(
+                `Failed to convert ${tgaPath} to PNG: the file doesn't exist`,
+            )
             return false
         }
 
@@ -199,13 +204,11 @@ async function convertTgaToPng(tgaPath, pngPath) {
         try {
             await sharp(tgaPath).png().toFile(pngPath)
 
-            console.log(
-                `✅ Converted TGA to PNG (Sharp): ${path.basename(tgaPath)} -> ${path.basename(pngPath)}`,
-            )
+            logger.debug(`Converted ${path.basename(tgaPath)} to PNG`)
             return true
         } catch (sharpError) {
-            console.log(
-                `🔄 Sharp failed for ${path.basename(tgaPath)}, using native TGA loader...`,
+            logger.debug(
+                `Sharp can't read ${path.basename(tgaPath)} (${sharpError.message}), decoding it directly`,
             )
 
             // Fallback to native TGA parser
@@ -224,16 +227,13 @@ async function convertTgaToPng(tgaPath, pngPath) {
                 .png()
                 .toFile(pngPath)
 
-            console.log(
-                `✅ Converted TGA to PNG (Native): ${path.basename(tgaPath)} -> ${path.basename(pngPath)}`,
+            logger.debug(
+                `Converted ${path.basename(tgaPath)} to PNG with the built-in TGA decoder`,
             )
             return true
         }
     } catch (error) {
-        console.error(
-            `❌ Failed to convert TGA to PNG: ${tgaPath}`,
-            error.message,
-        )
+        console.error(`Failed to convert ${tgaPath} to PNG:`, error)
         return false
     }
 }
@@ -247,14 +247,13 @@ async function convertAllTgaInDirectory(materialsDir) {
     const results = { converted: [], failed: [] }
 
     if (!fs.existsSync(materialsDir)) {
-        console.warn(`Materials directory not found: ${materialsDir}`)
+        console.warn(`Skipped TGA conversion: ${materialsDir} doesn't exist`)
         return results
     }
 
     try {
         // Find all TGA files recursively
         const tgaFiles = findTgaFiles(materialsDir)
-        console.log(`Found ${tgaFiles.length} TGA files to convert`)
 
         // Convert each TGA file to PNG
         for (const tgaPath of tgaFiles) {
@@ -272,11 +271,15 @@ async function convertAllTgaInDirectory(materialsDir) {
             }
         }
 
+        const failed = results.failed.length
         console.log(
-            `TGA conversion complete: ${results.converted.length} converted, ${results.failed.length} failed`,
+            `Converted ${plural(results.converted.length, "TGA texture")} to PNG${failed ? ` (${failed} failed)` : ""}`,
         )
     } catch (error) {
-        console.error("Error during TGA conversion:", error)
+        console.error(
+            `Failed to convert the TGA textures in ${materialsDir}:`,
+            error,
+        )
     }
 
     return results
@@ -307,7 +310,7 @@ function findTgaFiles(dir) {
                 }
             }
         } catch (error) {
-            console.warn(`Cannot read directory: ${currentDir}`, error.message)
+            console.warn(`Failed to read ${currentDir}, skipping it:`, error)
         }
     }
 
@@ -323,7 +326,7 @@ function findTgaFiles(dir) {
 async function updateMtlForPngTextures(mtlPath) {
     try {
         if (!fs.existsSync(mtlPath)) {
-            console.warn(`MTL file not found: ${mtlPath}`)
+            console.warn(`Failed to update ${mtlPath}: the file doesn't exist`)
             return false
         }
 
@@ -363,17 +366,17 @@ async function updateMtlForPngTextures(mtlPath) {
             // Write updated MTL file
             fs.writeFileSync(mtlPath, mtlContent, "utf8")
             console.log(
-                `📝 Updated MTL file to reference PNG textures: ${path.basename(mtlPath)}`,
+                `Updated ${path.basename(mtlPath)} to use the PNG textures`,
             )
             return true
         } else {
             console.log(
-                `No TGA references found in MTL file: ${path.basename(mtlPath)}`,
+                `Found no TGA textures to replace in ${path.basename(mtlPath)}`,
             )
             return true
         }
     } catch (error) {
-        console.error(`Failed to update MTL file: ${mtlPath}`, error)
+        console.error(`Failed to update ${mtlPath}:`, error)
         return false
     }
 }
@@ -385,51 +388,45 @@ async function updateMtlForPngTextures(mtlPath) {
  * @returns {Promise<{success: boolean, converted: string[], failed: string[]}>}
  */
 async function convertTexturesForModel(outputDir, baseName) {
-    console.log(`🔄 Starting TGA to PNG conversion for model: ${baseName}`)
+    const title = `Converting the TGA textures of ${baseName} to PNG`
+    return logger.section(title, async () => {
+        const results = { success: false, converted: [], failed: [] }
 
-    const results = { success: false, converted: [], failed: [] }
-
-    try {
-        // Find materials directory
-        const materialsDir = path.join(outputDir, "materials")
-        if (!fs.existsSync(materialsDir)) {
-            console.log("No materials directory found, skipping TGA conversion")
-            results.success = true
-            return results
-        }
-
-        // Convert all TGA files to PNG
-        const conversionResults = await convertAllTgaInDirectory(materialsDir)
-        results.converted = conversionResults.converted
-        results.failed = conversionResults.failed
-
-        // Update MTL file if any conversions were successful
-        const mtlPath = path.join(outputDir, `${baseName}.mtl`)
-        if (conversionResults.converted.length > 0) {
-            const mtlUpdated = await updateMtlForPngTextures(mtlPath)
-            // Consider it successful even if some files failed, as long as MTL was updated
-            results.success = mtlUpdated
-
-            if (conversionResults.failed.length > 0) {
-                console.log(
-                    `⚠️  Some TGA files failed to convert, but continuing with successful ones`,
-                )
+        try {
+            // Find materials directory
+            const materialsDir = path.join(outputDir, "materials")
+            if (!fs.existsSync(materialsDir)) {
+                console.log("Skipped, there's no materials folder")
+                results.success = true
+                return results
             }
-        } else if (conversionResults.failed.length === 0) {
-            console.log("No TGA files found; nothing to convert")
-            results.success = true
-        } else {
-            console.log("❌ All TGA files failed to convert")
+
+            // Convert all TGA files to PNG
+            const conversionResults = await convertAllTgaInDirectory(materialsDir)
+            results.converted = conversionResults.converted
+            results.failed = conversionResults.failed
+
+            // Update MTL file if any conversions were successful
+            const mtlPath = path.join(outputDir, `${baseName}.mtl`)
+            if (conversionResults.converted.length > 0) {
+                const mtlUpdated = await updateMtlForPngTextures(mtlPath)
+                // Consider it successful even if some files failed, as long as MTL was updated
+                results.success = mtlUpdated
+            } else if (conversionResults.failed.length === 0) {
+                results.success = true
+            } else {
+                results.success = false
+            }
+        } catch (error) {
+            console.error(
+                `Failed to convert the TGA textures of ${baseName}:`,
+                error,
+            )
             results.success = false
         }
 
-        console.log(`✅ TGA to PNG conversion completed for ${baseName}`)
-    } catch (error) {
-        console.error("❌ Error in TGA to PNG conversion workflow:", error)
-        results.success = false
-    }
-
-    return results
+        return results
+    })
 }
 
 module.exports = {

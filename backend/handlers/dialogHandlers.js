@@ -7,8 +7,13 @@ const fs = require("fs")
 const path = require("path")
 const { packages } = require("../packageManager")
 const { sendItemUpdateToEditor, createModelPreviewWindow } = require("../items/itemEditor")
+const { Instance } = require("../items/Instance")
+const { behindSurfaceParts } = require("../utils/behindSurface")
+const { convertVmfToObj } = require("../utils/vmf2obj")
+const { instanceModel, findItem } = require("./iconHandlers")
 const { Item } = require("../models/items")
 const { createIconPreviewWindow, loadOriginalItemJSON } = require("./shared")
+const { logger } = require("../utils/logger")
 
 /**
  * Convert a file path to a beep:// URL for secure protocol
@@ -37,18 +42,103 @@ function toBeepUrl(p) {
 
         return `beep://${normalized}`
     } catch (error) {
-        console.error("Error creating beep URL from path:", p, error)
+        console.error(`Failed to make a beep:// URL for ${p}:`, error)
         return null
     }
 }
 
+/**
+ * Open an instance's model with what it has behind the item's surface
+ * outlined (the Instances tab's warning, clicked): a saved instance's
+ * (instanceKey), or a VMF the item doesn't have saved yet (vmfPath). What's
+ * behind is turned as the converter turns the model (x, z, -y). With no model
+ * to show (an instance of only logic entities), it's shown on its own.
+ */
+async function showBehindSurface({ itemId, instanceKey, vmfPath, title }) {
+    const item = findItem(itemId)
+    const frame = item.instanceFrame()
+    if (!frame) {
+        throw new Error("This item's instances are meant to be outside the map")
+    }
+
+    let vmf = vmfPath
+    let model = null
+    let modelError = null
+    try {
+        if (vmf) {
+            // Made now, in the item's staging folder
+            const safeId = item.id.replace(/[^a-zA-Z0-9_-]/g, "_").toLowerCase()
+            const folder = path.join(item.packagePath, ".bpee", safeId, "behind")
+            fs.rmSync(folder, { recursive: true, force: true })
+            model = await convertVmfToObj(vmf, {
+                outputDir: folder,
+                textureStyle: "cartoon",
+            })
+        } else {
+            const instance = item.instances?.[instanceKey]
+            if (!instance?.Name) throw new Error("Instance not found")
+            vmf = Instance.getCleanPath(item.packagePath, instance.Name)
+            // The icon maker's (kept until the VMF changes)
+            model = await instanceModel(item, instanceKey)
+        }
+    } catch (error) {
+        if (!vmf || !fs.existsSync(vmf)) throw error
+        console.warn(`No model of ${path.basename(vmf)} to show: ${error.message}`)
+        modelError = error.message
+    }
+
+    const parts = behindSurfaceParts(vmf, frame)
+    const turn = ([x, y, z]) => [x, z, -y]
+    createModelPreviewWindow({
+        key: `behind-surface:${vmf}`,
+        objPath: model?.objPath ?? null,
+        objUrl: model ? toBeepUrl(model.objPath) : null,
+        mtlUrl: model?.mtlPath ? toBeepUrl(model.mtlPath) : null,
+        title,
+        behindSurface: {
+            surface: parts.surface,
+            brushes: parts.brushes.map(({ depth, faces }) => ({
+                depth,
+                faces: faces.map((face) => face.map(turn)),
+            })),
+            entities: parts.entities.map((entity) => ({
+                ...entity,
+                origin: turn(entity.origin),
+            })),
+            modelError,
+        },
+    })
+}
+
 function register(ipcMain, mainWindow) {
+    // Show what an instance has behind the item's surface, in 3D
+    ipcMain.handle(
+        "show-behind-surface",
+        async (event, { itemId, instanceKey, vmfPath, title }) => {
+            try {
+                await showBehindSurface({ itemId, instanceKey, vmfPath, title })
+                return { success: true }
+            } catch (error) {
+                console.error(
+                    `Failed to show what an instance of item ${itemId} has behind its surface:`,
+                    error,
+                )
+                return { success: false, error: error.message }
+            }
+        },
+    )
+
     // Register icon preview handler
     ipcMain.handle(
         "show-icon-preview",
         async (event, { iconPath, itemName }) => {
             try {
                 if (!iconPath || !fs.existsSync(iconPath)) {
+                    // Like a staged icon replaced since
+                    dialog.showErrorBox(
+                        "Can't Show the Icon",
+                        `The icon's file isn't there anymore:\n${iconPath}`,
+                    )
                     throw new Error("Icon file not found")
                 }
 
@@ -56,7 +146,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true }
             } catch (error) {
-                console.error("Failed to show icon preview:", error)
+                console.error(
+                    `Failed to show the icon preview of ${iconPath}:`,
+                    error,
+                )
                 throw error
             }
         },
@@ -108,7 +201,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success: true, segments: objFiles, modelsDir }
             } catch (error) {
-                console.error("Failed to list model segments:", error)
+                console.error(
+                    `Failed to list the model segments of item ${itemId}:`,
+                    error,
+                )
                 return { success: false, error: error.message, segments: [] }
             }
         },
@@ -155,8 +251,6 @@ function register(ipcMain, mainWindow) {
 
                     actualObjPath = path.join(objPath, objFile)
                     actualMtlPath = actualObjPath.replace(".obj", ".mtl")
-
-                    console.log(`Found OBJ file for preview: ${objFile}`)
                 }
 
                 // Convert paths to beep:// URLs
@@ -170,10 +264,9 @@ function register(ipcMain, mainWindow) {
                     mtlUrl: seg.mtlPath ? toBeepUrl(seg.mtlPath) : null
                 })) : null
 
-                console.log("Creating model preview window with:")
-                console.log("  objUrl:", objUrl)
-                console.log("  mtlUrl:", mtlUrl)
-                console.log("  segments:", segmentsWithUrls?.length || 0)
+                logger.debug(
+                    `Opening the model preview of ${actualObjPath} (${mtlUrl ? "with" : "without"} MTL, ${segmentsWithUrls?.length || 0} segments)`,
+                )
 
                 // Create the preview window with model data
                 createModelPreviewWindow({
@@ -185,7 +278,10 @@ function register(ipcMain, mainWindow) {
                 })
                 return { success: true }
             } catch (error) {
-                console.error("Failed to show model preview:", error)
+                console.error(
+                    `Failed to show the model preview of ${objPath}:`,
+                    error,
+                )
                 throw error
             }
         },
@@ -319,9 +415,14 @@ function register(ipcMain, mainWindow) {
                     format: "DXT5",
                     generateMipmaps: true,
                 })
-                console.log(`Created VTF icon at: ${vtfPath}`)
+                console.log(
+                    `Converted ${fileName} to VTF for the icon of "${item.name}"`,
+                )
             } catch (error) {
-                console.error("Failed to convert icon to VTF:", error)
+                console.error(
+                    `Failed to convert the icon of "${item.name}" to VTF:`,
+                    error,
+                )
             }
 
             // Update the item's icon path in the properties file
@@ -372,7 +473,7 @@ function register(ipcMain, mainWindow) {
 
             return { success: true, iconPath: targetIconPath }
         } catch (error) {
-            console.error("Failed to browse for icon:", error)
+            console.error(`Failed to set the icon of item ${itemId}:`, error)
             dialog.showErrorBox(
                 "Failed to Set Icon",
                 `Could not set icon: ${error.message}`,

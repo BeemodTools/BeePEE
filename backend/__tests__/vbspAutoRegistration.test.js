@@ -98,8 +98,10 @@ describe("VBSP Auto-Registration", () => {
             JSON.stringify(vbspConfig, null, 2),
         )
 
-        // Create the Item instance (this should trigger auto-registration)
+        // Load the item, and register its VBSP instances as loading its
+        // package does
         const item = new Item({ packagePath: testPackagePath, itemJSON })
+        item.autoImportVBSPInstances()
 
         // Verify that editoritems.json was updated with VBSP instances
         const updatedEditorItems = JSON.parse(
@@ -201,8 +203,10 @@ describe("VBSP Auto-Registration", () => {
             JSON.stringify(vbspConfig, null, 2),
         )
 
-        // Create the Item instance (this should trigger auto-registration)
+        // Load the item, and register its VBSP instances as loading its
+        // package does
         const item = new Item({ packagePath: testPackagePath, itemJSON })
+        item.autoImportVBSPInstances()
 
         // Verify that editoritems.json was updated correctly
         const updatedEditorItems = JSON.parse(
@@ -295,8 +299,9 @@ describe("VBSP Auto-Registration", () => {
             JSON.stringify(vbspConfig, null, 2),
         )
 
-        // Create the Item instance (this should not crash)
+        // Load the item and its VBSP instances (this should not crash)
         const item = new Item({ packagePath: testPackagePath, itemJSON })
+        item.autoImportVBSPInstances()
 
         // Verify that editoritems.json was not modified
         const updatedEditorItems = JSON.parse(
@@ -383,8 +388,10 @@ describe("VBSP Auto-Registration", () => {
             JSON.stringify(vbspConfig, null, 2),
         )
 
-        // Create the Item instance (this should trigger auto-registration)
+        // Load the item, and register its VBSP instances as loading its
+        // package does
         const item = new Item({ packagePath: testPackagePath, itemJSON })
+        item.autoImportVBSPInstances()
 
         // Verify that editoritems.json was updated correctly
         const updatedEditorItems = JSON.parse(

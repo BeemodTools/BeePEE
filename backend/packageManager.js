@@ -2,14 +2,42 @@ const { dialog, ipcMain, app } = require("electron")
 const { Package } = require("./models/package")
 const fs = require("fs")
 const path = require("path")
-const vdf = require("vdf-parser")
 let path7za = require("7zip-bin").path7za
 const { extractFull } = require("node-7z")
 const { add } = require("node-7z")
 const { spawn } = require("child_process")
-const { timeOperation } = require("./utils/timing")
+const { logger } = require("./utils/logger")
 const { vmfStatsCache } = require("./utils/vmfParser")
 const { getPackagesDir, ensurePackagesDir } = require("./utils/packagesDir")
+const {
+    GENERATED_HEADER,
+    beepeeVersionOf,
+    toObject,
+    vdfToken,
+} = require("./utils/keyvalues")
+
+/** "1 item", "3 items" */
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
+
+/**
+ * Note in an item's meta.json (the Meta tab's) whether BeePEE made its
+ * editoritems.txt, and the BeePEE version that did, as its first line says
+ * (beepeeVersionOf). One BeePEE didn't make gets no meta.json for that.
+ */
+function noteMadeWith(itemDir, version) {
+    const metaPath = path.join(itemDir, "meta.json")
+    let meta = null
+    try {
+        meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
+    } catch {
+        // None (or one that can't be read)
+    }
+    if (version === null && !meta) return
+    meta = meta && typeof meta === "object" ? meta : {}
+    meta.madeWithBeePEE = version !== null
+    if (version) meta.lastSavedVersion = version
+    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 4))
+}
 
 // Fix 7zip-bin path for packaged app
 // When app is packaged, use extraResources directory
@@ -45,20 +73,20 @@ if (app && app.isPackaged) {
         execName
     )
 
-    console.log("Looking for 7zip at:", extraResourcesPath)
     if (fs.existsSync(extraResourcesPath)) {
         path7za = extraResourcesPath
-        console.log("Using packaged 7zip-bin path:", path7za)
+        console.log(`Using 7-Zip at ${path7za}`)
     } else {
-        console.error("7zip-bin not found in extraResources:", extraResourcesPath)
-        console.error("Available files in extraResources:")
+        console.error(`7-Zip not found at ${extraResourcesPath}`)
         try {
             const extraResourcesRoot = path.join(resourcesPath, "extraResources")
             if (fs.existsSync(extraResourcesRoot)) {
-                console.error(fs.readdirSync(extraResourcesRoot))
+                console.log(
+                    `extraResources contains: ${fs.readdirSync(extraResourcesRoot).join(", ")}`,
+                )
             }
         } catch (e) {
-            console.error("Could not list extraResources:", e.message)
+            console.error("Failed to list extraResources:", e)
         }
     }
 }
@@ -68,18 +96,102 @@ let mainWindow = null
 
 // Track current package directory and last saved path
 let currentPackageDir = null
-let lastSavedBpeePath = null
+let lastSavedBpeePath = null // .bpee the open package was last saved to
 let currentPackageSourcePath = null // .bpee/.zip the package was opened from
 
 // Helper function to send progress updates
-function sendProgressUpdate(progress, message, error = null) {
+function sendProgressUpdate(progress, message, error = null, failureId = null) {
     if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("package-loading-progress", {
             progress,
             message,
             error,
+            // A package that failed to open: the popup offers to report it
+            failureId,
         })
     }
+}
+
+/**
+ * Packages that failed to open (the newest few) by id: what was opened, and
+ * why it failed. A bug report about one sends that package (see
+ * crashReporter).
+ */
+const failedPackages = new Map()
+const MAX_FAILED_PACKAGES = 10
+let failureCount = 0
+
+/** Remember a package that failed to open; its id goes on the error */
+function rememberFailedPackage(source, error) {
+    const id = `failure_${++failureCount}`
+    failedPackages.set(id, {
+        source,
+        message: error.message,
+        stack: error.stack,
+        time: new Date().toISOString(),
+    })
+    for (const old of failedPackages.keys()) {
+        if (failedPackages.size <= MAX_FAILED_PACKAGES) break
+        failedPackages.delete(old)
+    }
+    error.failureId = id
+    return id
+}
+
+/** A package that failed to open, by its id (see rememberFailedPackage) */
+function getFailedPackage(id) {
+    return failedPackages.get(id) ?? null
+}
+
+/** The name of what was opened: a package's file, or the folder of its info.json */
+function openedName(source) {
+    return path.basename(source).toLowerCase() === "info.json"
+        ? path.basename(path.dirname(source))
+        : path.basename(source)
+}
+
+/**
+ * Open a bug report about a package that failed to open, with its error.
+ * Returns whether the failure was known.
+ */
+function reportFailedPackage(failureId) {
+    const failed = getFailedPackage(failureId)
+    if (!failed) return false
+    const { createCrashReportWindow } = require("./items/itemEditor")
+    createCrashReportWindow(
+        {
+            type: "packageOpenFailed",
+            failureId,
+            package: openedName(failed.source),
+            message: failed.message,
+            stack: failed.stack,
+            timestamp: failed.time,
+        },
+        { replace: true },
+    )
+    return true
+}
+
+/**
+ * An error box for a package that failed to open, with a Report button when
+ * the failure is known (see rememberFailedPackage)
+ */
+async function showPackageOpenError(window, title, message, error) {
+    const canReport = Boolean(getFailedPackage(error?.failureId))
+    const options = {
+        type: "error",
+        title,
+        message,
+        buttons: canReport ? ["OK", "Report"] : ["OK"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+    }
+    const { response } =
+        window && !window.isDestroyed()
+            ? await dialog.showMessageBox(window, options)
+            : await dialog.showMessageBox(options)
+    if (canReport && response === 1) reportFailedPackage(error.failureId)
 }
 
 // Helper function to forcefully remove directory using multiple strategies
@@ -126,15 +238,18 @@ async function removeDirectoryWithRetry(dirPath, maxRetries = 5) {
             }
 
             fs.rmSync(dirPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
-            console.log(`Successfully removed directory on attempt ${attempt + 1}`)
+            if (attempt > 0) {
+                console.log(`Removed ${dirPath} on attempt ${attempt + 1}`)
+            }
             return true
         } catch (error) {
-            console.warn(`rmSync attempt ${attempt + 1}/${maxRetries} failed (${error.code}): ${dirPath}`)
+            console.warn(
+                `Failed to remove ${dirPath} (attempt ${attempt + 1} of ${maxRetries}, ${error.code})`,
+            )
 
             if (attempt < maxRetries - 1) {
                 // Exponential backoff: 200ms, 400ms, 800ms, 1600ms
                 const delay = 200 * Math.pow(2, attempt)
-                console.log(`Waiting ${delay}ms before retry...`)
                 await sleep(delay)
 
                 // Force garbage collection if available
@@ -147,42 +262,48 @@ async function removeDirectoryWithRetry(dirPath, maxRetries = 5) {
 
     // Strategy 2: Try Windows-specific rd command (sometimes works when Node.js can't)
     if (process.platform === 'win32') {
-        console.log('Trying Windows rd command...')
         try {
             const { execSync } = require('child_process')
             // Use cmd /c rd /s /q which is Windows' native recursive delete
             execSync(`cmd /c rd /s /q "${dirPath}"`, { stdio: 'pipe', timeout: 30000 })
 
             if (!fs.existsSync(dirPath)) {
-                console.log('Windows rd command succeeded')
+                console.log(`Removed ${dirPath} with rd /s /q`)
                 return true
             }
         } catch (cmdError) {
-            console.warn(`Windows rd command failed: ${cmdError.message}`)
+            console.warn(
+                `Failed to remove ${dirPath} with rd /s /q: ${cmdError.message}`,
+            )
         }
     }
 
     // Strategy 3: Rename-then-delete (last resort)
-    console.log('Trying rename-then-delete strategy...')
     const renamedPath = `${dirPath}_deleted_${Date.now()}`
     try {
         fs.renameSync(dirPath, renamedPath)
-        console.log(`Renamed locked directory to: ${renamedPath}`)
+        console.log(
+            `Renamed the locked directory ${dirPath} to ${path.basename(renamedPath)}, deleting it in the background`,
+        )
 
         // Now try to delete the renamed directory in background
         setImmediate(async () => {
             await sleep(500) // Give some time for handles to release
             try {
                 fs.rmSync(renamedPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
-                console.log(`Successfully deleted renamed directory`)
+                console.log(`Deleted ${renamedPath}`)
             } catch (deleteError) {
-                console.warn(`Will clean up renamed directory on next startup: ${renamedPath}`)
+                console.warn(
+                    `Failed to delete ${renamedPath} (${deleteError.code}), will retry on next startup`,
+                )
             }
         })
         return true
     } catch (renameError) {
         // If rename fails too, just let the extraction proceed and overwrite
-        console.warn(`Rename also failed (${renameError.code}), extraction will overwrite existing files`)
+        console.warn(
+            `Failed to remove or rename ${dirPath} (${renameError.code}), its files will be overwritten`,
+        )
         return false
     }
 }
@@ -199,7 +320,7 @@ function cleanupDeletedDirectories() {
                 const fullPath = path.join(packagesDir, entry.name)
                 try {
                     fs.rmSync(fullPath, { recursive: true, force: true })
-                    console.log(`Cleaned up leftover directory: ${fullPath}`)
+                    console.log(`Removed leftover directory ${fullPath}`)
                 } catch (e) {
                     // Ignore, will try again next time
                 }
@@ -226,7 +347,7 @@ async function clearAllWindowCaches() {
                 storages: ["appcache", "cookies", "filesystem", "indexdb", "localstorage", "shadercache", "websql", "serviceworkers", "cachestorage"],
             })
         } catch (e) {
-            console.warn("Could not clear main window cache:", e.message)
+            console.warn("Failed to clear the main window's cache:", e)
         }
     }
 
@@ -301,46 +422,6 @@ function isVdfFile(filePath) {
     }
 }
 
-// Helper function to add UUIDs to VBSP blocks that can have duplicates
-function addUuidsToVbspConditions(data) {
-    const generateUuid = () =>
-        `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
-
-    function processObject(obj) {
-        if (typeof obj !== "object" || obj === null) {
-            return obj
-        }
-
-        const newObj = {}
-        for (const [key, value] of Object.entries(obj)) {
-            let newKey = key
-            let newValue = value
-
-            // Add UUID to blocks that can have multiple instances
-            if (
-                (key === "Switch" ||
-                    key === "Condition" ||
-                    key === "MapInstVar") &&
-                typeof value === "object"
-            ) {
-                newKey = `${key}_${generateUuid()}`
-                newValue =
-                    typeof value === "object" ? processObject(value) : value
-            } else {
-                // Recursively process nested objects
-                newValue =
-                    typeof value === "object" ? processObject(value) : value
-            }
-
-            newObj[newKey] = newValue
-        }
-
-        return newObj
-    }
-
-    return processObject(data)
-}
-
 // Helper function to remove UUIDs from VBSP blocks for export
 function removeUuidsFromVbspConditions(data) {
     function processObject(obj) {
@@ -397,25 +478,35 @@ function isArrayLikeObject(obj) {
     return true
 }
 
-// Helper function to convert JSON to VDF format
+/**
+ * Put condition flags kept in keys (see convertVdfToJson) back after the
+ * value or the block's name: "Tooltip [lang_zh]" "..." becomes "Tooltip"
+ * "..." [lang_zh]
+ */
+function restoreConditionFlags(vdfText) {
+    return vdfText.replace(
+        /^(\s*)"([^"\n]*?) (\[[^\]\n]+\])"(\s+"(?:[^"\\\n]|\\.)*")?[ \t]*$/gm,
+        (line, indent, key, flag, value = "") =>
+            `${indent}"${key}"${value} ${flag}`,
+    )
+}
+
 // VDF quoted tokens can't contain raw newlines or double quotes (the BEE2
 // parser has no escape handling for them) - sanitize so a stray character in
 // user-entered text can't produce a malformed file that hangs BEEmod on load
-function sanitizeVdfToken(value) {
-    return String(value)
-        .replace(/\r?\n/g, " ")
-        .replace(/"/g, "'")
-}
+const sanitizeVdfToken = vdfToken
 
+// Helper function to convert JSON to VDF format
 function convertJsonToVdf(jsonData, indent = 0, parentKey = null) {
     const indentStr = "\t".repeat(indent)
     let vdfString = ""
 
-    // Add BeePEE signature at the top of root-level files. parentKey is set
-    // when recursing for a root-level array section (e.g. "Signage") with
-    // indent still 0 - that's not the file start, so no header there.
+    // Add BeePEE signature, with the version that made the file, at the top
+    // of root-level files. parentKey is set when recursing for a root-level
+    // array section (e.g. "Signage") with indent still 0 - that's not the
+    // file start, so no header there.
     if (indent === 0 && parentKey === null) {
-        vdfString += "//Generated by BeePEE (@https://github.com/BeemodTools/BeePEE )\n"
+        vdfString += `${GENERATED_HEADER}\n`
     }
 
     if (typeof jsonData !== "object" || jsonData === null) {
@@ -462,7 +553,10 @@ function convertJsonToVdf(jsonData, indent = 0, parentKey = null) {
         // Regular object - write key-value pairs
         for (const [key, value] of Object.entries(jsonData)) {
             // Handle desc_ keys - convert them back to empty string keys
-            const vdfKey = key.startsWith("desc_") ? "" : key
+            // (keeping a condition flag: "desc_3 [lang_zh]")
+            const vdfKey = key.startsWith("desc_")
+                ? key.replace(/^desc_\d+/, "")
+                : key
 
             // Root-level sections with no entries (e.g. "Item": [] in a
             // signage-only package) would export as an empty block, which
@@ -493,7 +587,9 @@ function convertJsonToVdf(jsonData, indent = 0, parentKey = null) {
                         )
                         for (const k of sortedKeys) {
                             // Handle desc_ prefix - convert to empty string
-                            const innerKey = k.startsWith("desc_") ? "" : k
+                            const innerKey = k.startsWith("desc_")
+                                ? k.replace(/^desc_\d+/, "")
+                                : k
                             vdfString += `${"\t".repeat(indent + 1)}"${innerKey}" "${sanitizeVdfToken(value[k])}"\n`
                         }
                         vdfString += `${indentStr}}\n`
@@ -544,31 +640,19 @@ function convertJsonToVdf(jsonData, indent = 0, parentKey = null) {
         }
     }
 
+    // The whole file: condition flags go back after their values
+    if (indent === 0 && parentKey === null) {
+        return restoreConditionFlags(vdfString)
+    }
     return vdfString
 }
 
 // Helper function to convert VDF to JSON
 function convertVdfToJson(filePath) {
     try {
-        const rawData = fs.readFileSync(filePath, "utf-8")
-        let emptyKeyCounter = 0
-
-        // Split into lines and process each line
-        const lines = rawData.split("\n")
-        const fixedLines = lines.map((line) => {
-            return line.replace(/^(\s*)""\s+(".*")/, (match, indent, value) => {
-                return `${indent}"desc_${emptyKeyCounter++}" ${value}`
-            })
-        })
-
-        const parsedData = vdf.parse(fixedLines.join("\n"))
-
-        // Add UUIDs to VBSP condition keys if this is a vbsp_config file
-        if (filePath.includes("vbsp_config")) {
-            return addUuidsToVbspConditions(parsedData)
-        }
-
-        return parsedData
+        // Condition flags go into their keys (convertJsonToVdf puts them
+        // back after the values)
+        return toObject(fs.readFileSync(filePath, "utf-8"))
     } catch (error) {
         // Extract item name from file path for better error reporting
         const fileName = path.basename(filePath, ".txt")
@@ -587,7 +671,9 @@ function processVdfFiles(directory) {
         files = fs.readdirSync(directory)
     } catch (error) {
         // Skip directories we can't read (locked by another process, permission denied, etc.)
-        console.warn(`Skipping unreadable directory: ${directory} (${error.code || error.message})`)
+        console.warn(
+            `Skipped unreadable directory ${directory} (${error.code || error.message})`,
+        )
         return
     }
 
@@ -603,7 +689,9 @@ function processVdfFiles(directory) {
             stat = fs.statSync(fullPath)
         } catch (error) {
             // Skip files/directories we can't stat
-            console.warn(`Skipping inaccessible path: ${fullPath} (${error.code || error.message})`)
+            console.warn(
+                `Skipped inaccessible path ${fullPath} (${error.code || error.message})`,
+            )
             continue
         }
 
@@ -617,6 +705,17 @@ function processVdfFiles(directory) {
         ) {
             // Always convert these specific files to JSON
             try {
+                // An item's: whether BeePEE made it (its first line says so)
+                const inItems = directory
+                    .split(/[\\/]/)
+                    .some((part) => part.toLowerCase() === "items")
+                if (file === "editoritems.txt" && inItems) {
+                    noteMadeWith(
+                        directory,
+                        beepeeVersionOf(fs.readFileSync(fullPath, "utf-8")),
+                    )
+                }
+
                 // Convert VDF to JSON
                 const jsonData = convertVdfToJson(fullPath)
 
@@ -625,22 +724,6 @@ function processVdfFiles(directory) {
                 fs.writeFileSync(jsonPath, JSON.stringify(jsonData, null, 4))
 
                 // Delete the original .txt file
-                fs.unlinkSync(fullPath)
-            } catch (error) {
-                // The error already contains the file context from convertVdfToJson
-                throw error
-            }
-        } else if (file === "vbsp_config.cfg") {
-            // Convert vbsp_config.cfg to JSON
-            try {
-                // Convert VDF to JSON
-                const jsonData = convertVdfToJson(fullPath)
-
-                // Save as JSON file (same name but .json extension)
-                const jsonPath = fullPath.replace(/\.cfg$/i, ".json")
-                fs.writeFileSync(jsonPath, JSON.stringify(jsonData, null, 4))
-
-                // Delete the original .cfg file
                 fs.unlinkSync(fullPath)
             } catch (error) {
                 // The error already contains the file context from convertVdfToJson
@@ -676,7 +759,9 @@ function processJsonFilesToVdf(directory) {
     try {
         files = fs.readdirSync(directory)
     } catch (error) {
-        console.warn(`Skipping unreadable directory: ${directory} (${error.code || error.message})`)
+        console.warn(
+            `Skipped unreadable directory ${directory} (${error.code || error.message})`,
+        )
         return
     }
 
@@ -691,7 +776,9 @@ function processJsonFilesToVdf(directory) {
         try {
             stat = fs.statSync(fullPath)
         } catch (error) {
-            console.warn(`Skipping inaccessible path: ${fullPath} (${error.code || error.message})`)
+            console.warn(
+                `Skipped inaccessible path ${fullPath} (${error.code || error.message})`,
+            )
             continue
         }
 
@@ -738,7 +825,13 @@ function processJsonFilesToVdf(directory) {
                 )
             }
         } else if (file === "vbsp_config.json") {
-            // Convert vbsp_config.json to vbsp_config.cfg
+            // An item saved since keeps its conditions in vbsp_config.cfg
+            if (fs.existsSync(path.join(directory, "vbsp_config.cfg"))) {
+                fs.unlinkSync(fullPath)
+                continue
+            }
+            // Convert vbsp_config.json (from an import before BeePEE kept
+            // vbsp_config.cfg as it is) to vbsp_config.cfg
             try {
                 let jsonData = JSON.parse(fs.readFileSync(fullPath, "utf-8"))
                 // Remove UUIDs from VBSP conditions before export
@@ -758,7 +851,7 @@ function processJsonFilesToVdf(directory) {
 
 // Helper function to update VMF stats for all instances in a package
 const updateVMFStatsForPackage = async (packageDir) => {
-    return timeOperation("Update VMF stats", async () => {
+    return logger.section("Updating VMF stats", async () => {
         try {
             // Find all editoritems.json files in the package
             const findEditorItemsFiles = (dir) => {
@@ -767,7 +860,9 @@ const updateVMFStatsForPackage = async (packageDir) => {
                 try {
                     items = fs.readdirSync(dir)
                 } catch (error) {
-                    console.warn(`Skipping unreadable directory: ${dir} (${error.code || error.message})`)
+                    console.warn(
+                        `Skipped unreadable directory ${dir} (${error.code || error.message})`,
+                    )
                     return files
                 }
 
@@ -782,7 +877,9 @@ const updateVMFStatsForPackage = async (packageDir) => {
                     try {
                         stat = fs.statSync(fullPath)
                     } catch (error) {
-                        console.warn(`Skipping inaccessible path: ${fullPath} (${error.code || error.message})`)
+                        console.warn(
+                            `Skipped inaccessible path ${fullPath} (${error.code || error.message})`,
+                        )
                         continue
                     }
 
@@ -798,6 +895,9 @@ const updateVMFStatsForPackage = async (packageDir) => {
 
             const editorItemsFiles = findEditorItemsFiles(packageDir)
             let updatedFiles = 0
+            // For the log: how many instance files are missing, and where
+            let missingFiles = 0
+            const itemsWithMissingFiles = new Set()
 
             if (editorItemsFiles.length > 0) {
                 sendProgressUpdate(
@@ -818,13 +918,20 @@ const updateVMFStatsForPackage = async (packageDir) => {
                         const editorItems = JSON.parse(
                             fs.readFileSync(editorItemsPath, "utf-8"),
                         )
+                        // The item's own block, when there are several
+                        const item = [editorItems.Item].flat()[0]
                         let hasChanges = false
 
-                        if (editorItems.Item?.Exporting?.Instances) {
-                            for (const [index, instance] of Object.entries(
-                                editorItems.Item.Exporting.Instances,
+                        if (item?.Exporting?.Instances) {
+                            for (const [index, entry] of Object.entries(
+                                item.Exporting.Instances,
                             )) {
-                                if (instance.Name) {
+                                // BEE2's short form is the path itself
+                                const instance =
+                                    typeof entry === "string"
+                                        ? { Name: entry }
+                                        : entry
+                                if (instance?.Name) {
                                     // Check if this is a VMF file (not VBSP)
                                     const isVbspInstance =
                                         instance.Name.includes(
@@ -849,10 +956,6 @@ const updateVMFStatsForPackage = async (packageDir) => {
                                                 vmfStatsCache.getStats(
                                                     fullInstancePath,
                                                 )
-                                            console.log(
-                                                `Raw VMF stats for ${instance.Name}:`,
-                                                vmfStats,
-                                            )
 
                                             // Always update the instance data with current stats
                                             const updatedInstance = {
@@ -865,20 +968,23 @@ const updateVMFStatsForPackage = async (packageDir) => {
                                                     vmfStats.BrushSideCount ||
                                                     0,
                                             }
-                                            editorItems.Item.Exporting.Instances[
-                                                index
-                                            ] = updatedInstance
+                                            item.Exporting.Instances[index] =
+                                                updatedInstance
                                             hasChanges = true
-                                            console.log(
-                                                `Updated VMF stats for ${instance.Name}: ${updatedInstance.EntityCount} entities, ${updatedInstance.BrushCount} brushes, ${updatedInstance.BrushSideCount} brush sides`,
-                                            )
-                                            console.log(
-                                                `Saved instance data:`,
-                                                updatedInstance,
+                                            logger.debug(
+                                                `${instance.Name}: ${updatedInstance.EntityCount} entities, ${updatedInstance.BrushCount} brushes, ${updatedInstance.BrushSideCount} brush sides`,
                                             )
                                         } else {
-                                            console.warn(
-                                                `VMF file not found: ${fullInstancePath}`,
+                                            missingFiles++
+                                            itemsWithMissingFiles.add(
+                                                path.basename(
+                                                    path.dirname(
+                                                        editorItemsPath,
+                                                    ),
+                                                ),
+                                            )
+                                            logger.debug(
+                                                `Instance file not found: ${instance.Name}`,
                                             )
                                         }
                                     }
@@ -898,21 +1004,23 @@ const updateVMFStatsForPackage = async (packageDir) => {
                             path.dirname(editorItemsPath),
                         )
                         console.warn(
-                            `[${itemName} : editoritems.json]: Failed to update VMF stats - ${error.message}`,
+                            `Failed to update the VMF stats of item ${itemName}:`,
+                            error,
                         )
                     }
                 }
             }
 
-            if (updatedFiles > 0) {
-                console.log(
-                    `Updated VMF stats in ${updatedFiles} editoritems.json files`,
+            console.log(
+                `Updated the VMF stats of ${updatedFiles} of ${plural(editorItemsFiles.length, "item")}`,
+            )
+            if (missingFiles > 0) {
+                console.warn(
+                    `Missing ${plural(missingFiles, "instance file")} in ${plural(itemsWithMissingFiles.size, "item")}: ${[...itemsWithMissingFiles].join(", ")}`,
                 )
             }
         } catch (error) {
-            console.error(
-                `[package : ${path.basename(packageDir)}]: Failed to update VMF stats - ${error.message}`,
-            )
+            console.error("Failed to update VMF stats:", error)
         }
     })
 }
@@ -932,31 +1040,27 @@ const unloadPackage = async (packageName, remove = false) => {
 }
 
 const extractPackage = async (pathToPackage, packageDir) => {
-    console.log("Extracting package from:", pathToPackage)
-    console.log("Extracting to:", packageDir)
-
     const stream = extractFull(pathToPackage, packageDir, {
         $bin: path7za,
         recursive: true,
         overwrite: 'a', // Overwrite all existing files without prompt
     })
 
-    // Log extraction progress
-    stream.on("progress", (progress) => {
-        console.log("Extraction progress:", progress.percent + "%")
-    })
-
-    stream.on("data", (data) => {
-        console.log("Extracted:", data.file)
+    // One "data" event per extracted file or folder
+    let extractedCount = 0
+    stream.on("data", () => {
+        extractedCount++
     })
 
     await new Promise((resolve, reject) => {
         stream.on("end", () => {
-            console.log("Extraction stream ended successfully")
             resolve()
         })
         stream.on("error", (error) => {
-            console.error("Extraction error details:", error)
+            console.error(
+                `7-Zip failed to extract ${path.basename(pathToPackage)}:`,
+                error,
+            )
             const rawMessage = String(error.message || error)
             // 7zip reports disk-full as "There is not enough space on the disk",
             // Node as ENOSPC - surface a clear, actionable message instead
@@ -973,11 +1077,13 @@ const extractPackage = async (pathToPackage, packageDir) => {
             )
         })
     })
-    console.log("Extraction complete")
+    console.log(
+        `Extracted ${extractedCount} files and folders to ${packageDir}`,
+    )
 }
 
 const importPackage = async (pathToPackage) => {
-    return timeOperation("Import package", async () => {
+    return logger.section(`Importing package ${pathToPackage}`, async () => {
         let tempPkg = null
         try {
             // Close all editor/preview windows to release file handles
@@ -985,11 +1091,9 @@ const importPackage = async (pathToPackage) => {
                 const { closeAllWindows } = require("./items/itemEditor")
                 await closeAllWindows()
             } catch (e) {
-                console.warn("Could not close windows before import:", e.message)
+                console.warn("Failed to close the windows before importing:", e)
                 // Ignore if itemEditor module not available yet
             }
-
-            console.log("Importing package from:", pathToPackage)
 
             // Validate that the file exists and is an archive
             if (!fs.existsSync(pathToPackage)) {
@@ -1006,8 +1110,6 @@ const importPackage = async (pathToPackage) => {
             sendProgressUpdate(0, "Starting package import...")
 
             tempPkg = new Package(pathToPackage)
-            console.log("Package name:", tempPkg.name)
-            console.log("Package will be extracted to:", tempPkg.packageDir)
 
             sendProgressUpdate(10, "Preparing package directory...")
 
@@ -1018,21 +1120,14 @@ const importPackage = async (pathToPackage) => {
             if (fs.existsSync(tempPkg.packageDir)) {
                 const stat = fs.statSync(tempPkg.packageDir)
                 if (stat.isDirectory()) {
-                    console.log(
-                        "Removing existing package directory:",
-                        tempPkg.packageDir,
-                    )
+                    console.log("Deleting the existing package directory")
                     try {
                         await removeDirectoryWithRetry(tempPkg.packageDir)
-                        console.log(
-                            "Wiped existing package directory before import extraction",
-                        )
                     } catch (deleteError) {
                         console.warn(
-                            "Could not delete existing directory (files may be locked):",
-                            deleteError.message,
+                            "Failed to delete the existing package directory, extracting over it:",
+                            deleteError,
                         )
-                        console.log("Will extract over existing directory instead...")
                     }
                 } else {
                     // If it's a file, remove it
@@ -1046,7 +1141,7 @@ const importPackage = async (pathToPackage) => {
 
             sendProgressUpdate(50, "Processing VDF files...")
             // Process all VDF files recursively
-            await timeOperation("Process VDF files", () => {
+            await logger.section("Converting VDF files to JSON", () => {
                 processVdfFiles(tempPkg.packageDir)
                 return Promise.resolve()
             })
@@ -1058,10 +1153,15 @@ const importPackage = async (pathToPackage) => {
             // Don't send 100% here since we're continuing to load
             return true
         } catch (error) {
-            console.error("Failed to import package:", error.message)
+            console.error("Failed to import package:", error)
 
-            // Send error to frontend
-            sendProgressUpdate(100, "Package import failed!", error.message)
+            // Send error to frontend, which offers to report it
+            sendProgressUpdate(
+                100,
+                "Package import failed!",
+                error.message,
+                rememberFailedPackage(pathToPackage, error),
+            )
 
             // Cleanup on failure
             if (tempPkg?.packageDir && fs.existsSync(tempPkg.packageDir)) {
@@ -1070,11 +1170,13 @@ const importPackage = async (pathToPackage) => {
                         recursive: true,
                         force: true,
                     })
-                    console.log("Cleaned up failed package directory")
+                    console.log(
+                        `Removed the partly imported package directory ${tempPkg.packageDir}`,
+                    )
                 } catch (cleanupError) {
                     console.error(
-                        "Failed to cleanup package directory:",
-                        cleanupError.message,
+                        `Failed to remove the partly imported package directory ${tempPkg.packageDir}:`,
+                        cleanupError,
                     )
                 }
             }
@@ -1090,8 +1192,12 @@ const importPackage = async (pathToPackage) => {
     })
 }
 
-const loadPackage = async (pathToPackage, skipProgressReset = false) => {
-    return timeOperation("Load package", async () => {
+const loadPackage = async (
+    pathToPackage,
+    skipProgressReset = false,
+    alreadyExtracted = false,
+) => {
+    return logger.section(`Loading package ${pathToPackage}`, async () => {
         let extractionDir = null
         try {
             // Close all editor/preview windows to release file handles before loading
@@ -1121,10 +1227,6 @@ const loadPackage = async (pathToPackage, skipProgressReset = false) => {
 
             if (isInfoJson) {
                 // Loading from already-extracted package directory
-                console.log(
-                    "Loading from already-extracted package:",
-                    pathToPackage,
-                )
                 packageDir = path.dirname(pathToPackage)
 
                 // Create a temporary Package instance just to get the packageDir path structure
@@ -1135,9 +1237,24 @@ const loadPackage = async (pathToPackage, skipProgressReset = false) => {
                 if (!skipProgressReset) {
                     sendProgressUpdate(50, "Loading extracted package...")
                 }
+            } else if (alreadyExtracted) {
+                // The archive was just extracted and converted by
+                // importPackage() - re-extracting would wipe that work
+                // (including the VMF stats analysis, which this path
+                // doesn't redo) and double the load time.
+                console.log("Reading the files extracted by the import")
+                pkg = new Package(pathToPackage)
+                packageDir = pkg.packageDir
+                if (!fs.existsSync(path.join(packageDir, "info.json"))) {
+                    throw new Error(
+                        `Imported package directory is missing info.json: ${packageDir}`,
+                    )
+                }
+                if (!skipProgressReset) {
+                    sendProgressUpdate(50, "Loading imported package...")
+                }
             } else {
                 // Loading from archive - need to extract
-                console.log("Loading from archive:", pathToPackage)
 
                 // Create package instance
                 pkg = new Package(pathToPackage)
@@ -1150,17 +1267,14 @@ const loadPackage = async (pathToPackage, skipProgressReset = false) => {
                 // Try to wipe existing directory first, but don't fail if it can't be deleted
                 // (antivirus may lock files - 7zip can still overwrite)
                 if (fs.existsSync(packageDir)) {
+                    console.log("Deleting the previously extracted files")
                     try {
                         await removeDirectoryWithRetry(packageDir)
-                        console.log(
-                            "Wiped existing package directory before extraction",
-                        )
                     } catch (deleteError) {
                         console.warn(
-                            "Could not delete existing directory (files may be locked):",
-                            deleteError.message,
+                            "Failed to delete the previously extracted files, extracting over them:",
+                            deleteError,
                         )
-                        console.log("Will extract over existing directory instead...")
                     }
                 }
                 fs.mkdirSync(packageDir, { recursive: true })
@@ -1175,7 +1289,7 @@ const loadPackage = async (pathToPackage, skipProgressReset = false) => {
                     sendProgressUpdate(50, "Processing VDF files...")
                 }
                 // Process all VDF files recursively (convert .txt to .json)
-                await timeOperation("Process VDF files", () => {
+                await logger.section("Converting VDF files to JSON", () => {
                     processVdfFiles(packageDir)
                     return Promise.resolve()
                 })
@@ -1185,14 +1299,31 @@ const loadPackage = async (pathToPackage, skipProgressReset = false) => {
                 sendProgressUpdate(80, "Loading package data...")
             }
 
-            // Close existing package
-            await closePackage()
-            currentPackageDir = null
-            lastSavedBpeePath = null
-            mainWindow.webContents.send("package:closed")
-
-            // Now load the package
+            // Load the package before closing the open one, so one that
+            // fails to load leaves the open one as it was. Not when it's the
+            // same package: its files were just replaced.
+            const closeOpenPackage = async () => {
+                await closePackage()
+                currentPackageDir = null
+                lastSavedBpeePath = null
+                mainWindow.webContents.send("package:closed")
+            }
+            const samePackage =
+                currentPackageDir &&
+                path.resolve(currentPackageDir).toLowerCase() ===
+                    path.resolve(pkg.packageDir).toLowerCase()
+            if (samePackage) await closeOpenPackage()
             await pkg.load()
+            // A .bpee is BeePEE's own, so BeePEE made its items (the Meta tab
+            // says so)
+            if (path.extname(pathToPackage).toLowerCase() === ".bpee") {
+                for (const item of pkg.items) {
+                    if (item.getMetadata()?.madeWithBeePEE !== true) {
+                        item.updateMetadata({ madeWithBeePEE: true })
+                    }
+                }
+            }
+            if (!samePackage) await closeOpenPackage()
             packages.push(pkg)
 
             // Set the current package directory
@@ -1207,7 +1338,7 @@ const loadPackage = async (pathToPackage, skipProgressReset = false) => {
                     setSetting("lastPackagePath", pathToPackage)
                 }
             } catch (err) {
-                console.warn("Failed to remember last package:", err.message)
+                console.warn("Failed to remember the last opened package:", err)
             }
 
             // Update window title with package name
@@ -1217,6 +1348,41 @@ const loadPackage = async (pathToPackage, skipProgressReset = false) => {
 
             if (!skipProgressReset) {
                 sendProgressUpdate(100, "Package loaded successfully!")
+            }
+
+            // Say which items couldn't be read and were left out
+            const skipped = pkg.skippedItems ?? []
+            if (skipped.length > 0 && mainWindow && !mainWindow.isDestroyed()) {
+                const were = skipped.length === 1 ? "was" : "were"
+                dialog
+                    .showMessageBox(mainWindow, {
+                        type: "warning",
+                        title: "Some Items Weren't Loaded",
+                        message: `${plural(skipped.length, "item")} of "${pkg.name}" couldn't be read and ${were} left out.`,
+                        detail: `${skipped.map(({ reason }) => `• ${reason}`).join("\n")}\n\nTheir files stay in the package, so saving and exporting keep them.`,
+                        buttons: ["OK", "Report"],
+                        defaultId: 0,
+                        cancelId: 0,
+                        noLink: true,
+                    })
+                    .then(({ response }) => {
+                        if (response !== 1) return
+                        const {
+                            createCrashReportWindow,
+                        } = require("./items/itemEditor")
+                        createCrashReportWindow(
+                            {
+                                type: "itemsSkipped",
+                                package: pkg.name,
+                                message: `${plural(skipped.length, "item")} of "${pkg.name}" couldn't be read`,
+                                stack: skipped
+                                    .map(({ reason }) => reason)
+                                    .join("\n"),
+                                timestamp: new Date().toISOString(),
+                            },
+                            { replace: true },
+                        )
+                    })
             }
 
             return pkg
@@ -1229,18 +1395,24 @@ const loadPackage = async (pathToPackage, skipProgressReset = false) => {
                 try {
                     fs.rmSync(extractionDir, { recursive: true, force: true })
                     console.log(
-                        "Cleaned up partially extracted package directory",
+                        `Removed the partly extracted package directory ${extractionDir}`,
                     )
                 } catch (cleanupError) {
                     console.warn(
-                        "Failed to clean up package directory:",
-                        cleanupError.message,
+                        `Failed to remove the partly extracted package directory ${extractionDir}:`,
+                        cleanupError,
                     )
                 }
             }
 
-            // Send error to frontend
-            sendProgressUpdate(100, "Package load failed!", error.message)
+            // Send error to frontend, which offers to report it. In an
+            // import, the package is the file imported.
+            sendProgressUpdate(
+                100,
+                "Package load failed!",
+                error.message,
+                rememberFailedPackage(pathToPackage, error),
+            )
 
             throw error
         }
@@ -1282,49 +1454,53 @@ const reg_loadPackagePopup = () => {
  * @returns {Promise<void>} Resolves when done, rejects on error.
  */
 function savePackageAsBpee(packageDir, outputBpeePath) {
-    return new Promise((resolve, reject) => {
-        const fs = require("fs")
-        const path = require("path")
-        // Ensure output directory exists
-        const outDir = path.dirname(outputBpeePath)
-        if (!fs.existsSync(outDir)) {
-            fs.mkdirSync(outDir, { recursive: true })
-        }
-
-        // Delete existing file if it exists
-        if (fs.existsSync(outputBpeePath)) {
-            fs.unlinkSync(outputBpeePath)
-        }
-
-        // Use 7z command directly to create ZIP format
-        // Command: 7za a -tzip output.bpee packageDir\*
-        const args = [
-            "a", // add to archive
-            "-tzip", // use ZIP format
-            "-r", // recursive
-            outputBpeePath,
-            path.join(packageDir, "*"),
-        ]
-
-        const process = spawn(path7za, args)
-
-        let errorOutput = ""
-        process.stderr.on("data", (data) => {
-            errorOutput += data.toString()
-        })
-
-        process.on("close", (code) => {
-            if (code === 0) {
-                resolve()
-            } else {
-                reject(
-                    new Error(`7zip failed with code ${code}: ${errorOutput}`),
-                )
+    return logger.section(`Saving package to ${outputBpeePath}`, () => {
+        return new Promise((resolve, reject) => {
+            const fs = require("fs")
+            const path = require("path")
+            // Ensure output directory exists
+            const outDir = path.dirname(outputBpeePath)
+            if (!fs.existsSync(outDir)) {
+                fs.mkdirSync(outDir, { recursive: true })
             }
-        })
 
-        process.on("error", (error) => {
-            reject(error)
+            // Delete existing file if it exists
+            if (fs.existsSync(outputBpeePath)) {
+                fs.unlinkSync(outputBpeePath)
+            }
+
+            // Use 7z command directly to create ZIP format
+            // Command: 7za a -tzip output.bpee packageDir\*
+            const args = [
+                "a", // add to archive
+                "-tzip", // use ZIP format
+                "-r", // recursive
+                outputBpeePath,
+                path.join(packageDir, "*"),
+            ]
+
+            const process = spawn(path7za, args)
+
+            let errorOutput = ""
+            process.stderr.on("data", (data) => {
+                errorOutput += data.toString()
+            })
+
+            process.on("close", (code) => {
+                if (code === 0) {
+                    resolve()
+                } else {
+                    reject(
+                        new Error(
+                            `7zip failed with code ${code}: ${errorOutput}`,
+                        ),
+                    )
+                }
+            })
+
+            process.on("error", (error) => {
+                reject(error)
+            })
         })
     })
 }
@@ -1337,7 +1513,8 @@ function savePackageAsBpee(packageDir, outputBpeePath) {
  * @returns {Promise<void>} Resolves when done, rejects on error.
  */
 async function exportPackageAsBeePack(packageDir, outputBeePackPath) {
-    return timeOperation("Export package", async () => {
+    const title = `Exporting package to ${outputBeePackPath}`
+    return logger.section(title, async () => {
         // Create a temporary directory for the export
         const tempExportDir = path.join(
             path.dirname(packageDir),
@@ -1362,9 +1539,7 @@ async function exportPackageAsBeePack(packageDir, outputBeePackPath) {
                 for (const entry of entries) {
                     // Skip .bpee directory - it's only used for local staging and temp files
                     if (entry.name === ".bpee") {
-                        console.log(
-                            "Skipping .bpee directory during export",
-                        )
+                        logger.debug(`Skipped ${path.join(src, entry.name)}`)
                         continue
                     }
 
@@ -1456,7 +1631,7 @@ async function exportPackageAsBeePack(packageDir, outputBeePackPath) {
 
             sendProgressUpdate(100, "Package exported successfully!")
         } catch (error) {
-            console.error("Failed to export package:", error.message)
+            console.error("Failed to export package:", error)
 
             // Send error to frontend
             sendProgressUpdate(100, "Package export failed!", error.message)
@@ -1467,8 +1642,8 @@ async function exportPackageAsBeePack(packageDir, outputBeePackPath) {
                     fs.rmSync(tempExportDir, { recursive: true, force: true })
                 } catch (cleanupError) {
                     console.error(
-                        "Failed to cleanup export directory:",
-                        cleanupError.message,
+                        `Failed to remove the temporary export directory ${tempExportDir}:`,
+                        cleanupError,
                     )
                 }
             }
@@ -1484,37 +1659,34 @@ async function exportPackageAsBeePack(packageDir, outputBeePackPath) {
  */
 function clearPackagesDirectory() {
     const packagesDir = getPackagesDir()
-    console.log(`Clearing packages directory: ${packagesDir}`)
 
     if (!fs.existsSync(packagesDir)) {
-        console.log("Packages directory does not exist, nothing to clean")
         return
     }
 
     const entries = fs.readdirSync(packagesDir)
-    console.log(`Found ${entries.length} entries to clean up`)
 
     for (const entry of entries) {
         const entryPath = path.join(packagesDir, entry)
         try {
             const stat = fs.statSync(entryPath)
             if (stat.isDirectory()) {
-                console.log(`Removing directory: ${entry}`)
                 fs.rmSync(entryPath, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
             } else {
-                console.log(`Removing file: ${entry}`)
                 fs.unlinkSync(entryPath)
             }
         } catch (error) {
-            console.error(`Failed to remove ${entry}: ${error.message}`)
+            console.error(`Failed to remove ${entryPath}:`, error)
             // Continue with other entries even if one fails
         }
     }
 
-    console.log("Packages directory cleanup completed")
+    console.log(`Cleared the packages directory ${packagesDir}`)
 }
 
 const closePackage = async () => {
+    const names = packages.map((pkg) => `"${pkg?.name}"`).join(", ")
+
     // Remove all packages from memory
     packages.length = 0
 
@@ -1522,6 +1694,7 @@ const closePackage = async () => {
     // features (save/export menu items, etc.) know nothing is loaded
     currentPackageDir = null
     currentPackageSourcePath = null
+    lastSavedBpeePath = null
     notifyPackageStateChanged()
 
     // Clear window title
@@ -1529,6 +1702,9 @@ const closePackage = async () => {
         global.titleManager.clearPackage()
     }
 
+    if (names) {
+        console.log(`Closed package ${names}`)
+    }
     return true
 }
 
@@ -1553,6 +1729,14 @@ const getCurrentPackageDir = () => currentPackageDir
 // Where the loaded package was opened from (.bpee/.zip), if anywhere
 const getCurrentPackageSourcePath = () => currentPackageSourcePath
 
+// The .bpee the open package was last saved to, where Save writes again.
+// Forgotten when the package is closed or another one is opened, so Save
+// never writes one package into another's file.
+const getLastSavedBpeePath = () => lastSavedBpeePath
+const setLastSavedBpeePath = (bpeePath) => {
+    lastSavedBpeePath = bpeePath
+}
+
 module.exports = {
     reg_loadPackagePopup,
     loadPackage,
@@ -1567,8 +1751,14 @@ module.exports = {
     setMainWindow,
     getCurrentPackageDir,
     getCurrentPackageSourcePath,
+    getLastSavedBpeePath,
+    setLastSavedBpeePath,
     convertJsonToVdf,
+    removeUuidsFromVbspConditions,
     extractPackage,
+    getFailedPackage,
+    reportFailedPackage,
+    showPackageOpenError,
     processVdfFiles,
     cleanupDeletedDirectories,
 }

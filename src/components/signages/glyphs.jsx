@@ -98,7 +98,9 @@ export const SHAPES = { ...GLYPHS, ...PRIMS }
 // Builds a SHAPES entry for an SVG with its own coordinate space. The
 // strokeScale keeps outline thickness feeling the same as on the built-in
 // 24-unit shapes; fillRule preserves evenodd holes from exported SVGs.
-const makeShapeEntry = (label, paths, vbString, fillRule) => {
+// A picture (an uploaded PNG, as a data URL in `image`) has no paths: it's
+// drawn as it is, filling its viewBox.
+const makeShapeEntry = (label, paths, vbString, fillRule, image) => {
     const [x, y, w, h] = vbString.split(/[\s,]+/).map(Number)
     return {
         label,
@@ -110,8 +112,13 @@ const makeShapeEntry = (label, paths, vbString, fillRule) => {
         vbH: h || 24,
         strokeScale: Math.max(w || 24, h || 24) / 24,
         fillRule,
+        ...(image && { image }),
     }
 }
+
+// A picture glyph's markup: the image over its whole viewBox
+const pictureSvg = (g) =>
+    `<image href="${g.image}" x="${g.vbX}" y="${g.vbY}" width="${g.vbW}" height="${g.vbH}" preserveAspectRatio="none"/>`
 
 // A glyph's paths array holds plain "d" strings (filled subpaths) or
 // { d, sw } objects (stroke-only subpaths from imported SVGs - sw is the
@@ -123,17 +130,17 @@ export const pathEntries = (g) =>
 export const CUSTOM = {}
 let _cid = 0
 
-export function registerCustomGlyph(label, paths, vbString, fillRule) {
+export function registerCustomGlyph(label, paths, vbString, fillRule, image) {
     // Dedupe by geometry: uploading a file that's also in the SVG folder,
     // remounting the designer (edit reload, HMR), or re-opening a .bpsign
     // would otherwise register the same shape again under a fresh id and
     // the palette would show duplicates.
-    const sig = JSON.stringify([paths, vbString, fillRule || null])
+    const sig = JSON.stringify([paths, vbString, fillRule || null, image || null])
     for (const [id, entry] of Object.entries(CUSTOM)) {
         if (entry._sig === sig) return id
     }
     const id = `custom_${++_cid}`
-    const entry = makeShapeEntry(label, paths, vbString, fillRule)
+    const entry = makeShapeEntry(label, paths, vbString, fillRule, image)
     entry._sig = sig
     CUSTOM[id] = entry
     SHAPES[id] = entry
@@ -156,6 +163,7 @@ export function serializeDesign(layers) {
                     paths: shape.paths,
                     vb: shape.vb,
                     fillRule: shape.fillRule,
+                    ...(shape.image && { image: shape.image }),
                 }
             }
             return out
@@ -182,12 +190,67 @@ export function rehydrateDesign(design) {
                         shape.paths,
                         shape.vb,
                         shape.fillRule,
+                        shape.image,
                     ),
                 )
             }
             glyph = glyphMap.get(glyph)
         }
         return { ...rest, glyph, id: `IMP${++_impId}` }
+    })
+}
+
+/**
+ * A layer showing a picture (like a signage's uploaded PNG), fit to the
+ * canvas: what the designer starts from for a signage with no design
+ * @param {string} label
+ * @param {string} dataUrl - The image
+ * @param {number} width - Its size in pixels
+ * @param {number} height
+ */
+export function pictureLayer(label, dataUrl, width, height) {
+    const glyph = registerCustomGlyph(
+        label,
+        [],
+        `0 0 ${width} ${height}`,
+        undefined,
+        dataUrl,
+    )
+    const scale = Math.min(CANVAS_SIZE / width, CANVAS_SIZE / height)
+    const w = Math.round(width * scale)
+    const h = Math.round(height * scale)
+    return {
+        id: `IMP${++_impId}`,
+        glyph,
+        x: Math.round((CANVAS_SIZE - w) / 2),
+        y: Math.round((CANVAS_SIZE - h) / 2),
+        w,
+        h,
+        color: "#000000",
+        rot: 0,
+        styleMode: "fill",
+        outlineAlign: "center",
+        outlineWidth: 3,
+        outlineColor: "#ffffff",
+        rounded: false,
+    }
+}
+
+/** pictureLayer for an image data URL, at the image's own size */
+export function loadPictureLayer(label, dataUrl) {
+    return new Promise((resolve, reject) => {
+        const img = new Image()
+        img.onload = () =>
+            resolve(
+                pictureLayer(
+                    label,
+                    dataUrl,
+                    img.naturalWidth || CANVAS_SIZE,
+                    img.naturalHeight || CANVAS_SIZE,
+                ),
+            )
+        img.onerror = () => reject(new Error("The picture couldn't be read"))
+        img.src = dataUrl
     })
 }
 
@@ -208,12 +271,40 @@ export function parseSvgToGlyph(svgText, opts = {}) {
 
     const num = (el, attr, fallback = 0) =>
         parseFloat(el.getAttribute(attr)) || fallback
-    // Presentation lookup: inline style wins over the attribute
+
+    // Illustrator/Inkscape exports often carry presentation via CSS classes
+    // in a <style> block (.cls-1 { fill: none; stroke: #000; ... }) instead
+    // of attributes - collect those class rules so prop() can resolve them.
+    // Without this, stroke-only art (e.g. motion lines) parses as zero-area
+    // fills and renders invisible.
+    const classRules = {}
+    for (const styleEl of doc.querySelectorAll("style")) {
+        const css = styleEl.textContent || ""
+        for (const m of css.matchAll(/\.([\w-]+)\s*\{([^}]*)\}/g)) {
+            const props = classRules[m[1]] || (classRules[m[1]] = {})
+            for (const decl of m[2].split(";")) {
+                const i = decl.indexOf(":")
+                if (i > 0) {
+                    props[decl.slice(0, i).trim()] = decl
+                        .slice(i + 1)
+                        .trim()
+                }
+            }
+        }
+    }
+
+    // Presentation lookup: inline style > attribute > class rule
     const prop = (el, name) => {
         const style = el.getAttribute("style") || ""
         const m = style.match(new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([^;]+)`))
         if (m) return m[1].trim()
-        return el.getAttribute(name)
+        const attr = el.getAttribute(name)
+        if (attr != null) return attr
+        for (const cls of (el.getAttribute("class") || "").split(/\s+/)) {
+            const rule = classRules[cls]
+            if (rule && rule[name] != null) return rule[name]
+        }
+        return null
     }
     const isFillNone = (el) => (prop(el, "fill") || "").trim() === "none"
     const hasStroke = (el) => {
@@ -380,6 +471,80 @@ for (const s of SIGN_SECTIONS) {
 
 const shapeVb = (g) => g.vb || "0 0 24 24"
 
+// ---- Text layers ---------------------------------------------------------
+// A text layer is a layer whose glyph is the TEXT_GLYPH sentinel: instead of
+// SHAPES paths it renders an SVG <text> element. Its own viewBox (textVb)
+// and baseline are measured from the string + font at creation/edit time,
+// so the text fills the layer bounds edge-to-edge like the path glyphs do.
+export const TEXT_GLYPH = "__text"
+export const isTextLayer = (l) => l.glyph === TEXT_GLYPH
+
+export const TEXT_FONTS = [
+    "Arial",
+    "Verdana",
+    "Georgia",
+    "Times New Roman",
+    "Courier New",
+    "Impact",
+    "Trebuchet MS",
+    "Comic Sans MS",
+]
+
+// Layer viewBox: text layers carry their own, path glyphs use the shape's
+export const layerVb = (l) =>
+    isTextLayer(l)
+        ? l.textVb || "0 0 100 40"
+        : (SHAPES[l.glyph] || {}).vb || "0 0 24 24"
+
+const escapeXml = (s) =>
+    String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+
+// Measure a string at 100px in the given font and return the tight-bounds
+// viewBox + baseline for rendering it edge-to-edge in a layer.
+export function measureTextGlyph(text, fontFamily = "Arial", bold, italic) {
+    const ctx = document.createElement("canvas").getContext("2d")
+    ctx.font = `${italic ? "italic " : ""}${bold ? "bold " : ""}100px ${fontFamily}`
+    const m = ctx.measureText(text || " ")
+    const asc = Math.ceil(m.actualBoundingBoxAscent ?? 80)
+    const desc = Math.ceil(m.actualBoundingBoxDescent ?? 20)
+    const left = Math.ceil(m.actualBoundingBoxLeft ?? 0)
+    const w = Math.max(4, Math.ceil(m.width))
+    const h = Math.max(4, asc + desc)
+    return {
+        vb: `${-left} ${-asc} ${w} ${h}`,
+        aspect: h / w, // multiply a width by this to get the height
+    }
+}
+
+// SVG markup for a text layer (fill / outline / both, honoring the shared
+// styleMode + colors). Outlines are always centered strokes; in "both" mode
+// the stroke is painted UNDER the fill so it surrounds the glyphs.
+const textLayerSvg = (l) => {
+    const [, , vw, vh] = (l.textVb || "0 0 100 40").split(/\s+/).map(Number)
+    const sc = Math.max(vw || 100, vh || 40) / 24
+    const font =
+        ` font-family="${escapeXml(l.fontFamily || "Arial")}" font-size="100"` +
+        (l.bold ? ' font-weight="bold"' : "") +
+        (l.italic ? ' font-style="italic"' : "")
+    const tEl = (fill, stroke, sw) =>
+        `<text x="0" y="0"${font} fill="${fill}"${
+            stroke
+                ? ` stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round" stroke-linecap="round"`
+                : ""
+        }>${escapeXml(l.text || "")}</text>`
+    const mode = l.styleMode || (l.outline ? "outline" : "fill")
+    const w = (l.outlineWidth || 3) * sc
+    if (mode === "fill") return tEl(l.color)
+    if (mode === "outline") return tEl("none", l.color, w)
+    return (
+        tEl("none", l.outlineColor || "#000000", w * 2) + tEl(l.color)
+    )
+}
+
 export function ShapeSvg({ id, color, w, h }) {
     const uid = useId()
     const g = SHAPES[id]
@@ -398,6 +563,18 @@ export function ShapeSvg({ id, color, w, h }) {
                 flexShrink: 0,
             }}>
             {(() => {
+                if (g.image) {
+                    return (
+                        <image
+                            href={g.image}
+                            x={g.vbX}
+                            y={g.vbY}
+                            width={g.vbW}
+                            height={g.vbH}
+                            preserveAspectRatio="none"
+                        />
+                    )
+                }
                 const entries = pathEntries(g)
                 const fills = entries.filter((p) => !p.sw)
                 const strokes = entries.filter((p) => p.sw > 0)
@@ -509,6 +686,8 @@ export const hasEraserPart = (l) => {
     return p.fillTrans || p.outlineTrans
 }
 
+const clampOpacity = (v) => Math.max(0, Math.min(1, v))
+
 // Renders a layer's inner SVG markup (shared by the designer canvas, the
 // thumbnails, and the PNG rasterizer so all three agree pixel-for-pixel).
 // Layer style props: styleMode ("fill"|"outline"|"both"), outlineAlign
@@ -517,8 +696,13 @@ export const hasEraserPart = (l) => {
 // SVG can only stroke centered on the edge, so inner clips the stroke to the
 // shape and outer masks the shape out of it (double width, half survives).
 export function layerInnerSvg(l, uid, opts = {}) {
+    // Text layers render an SVG <text> element instead of shape paths.
+    // The same markup works inside eraser masks (black text hides).
+    if (isTextLayer(l)) return textLayerSvg(l)
     const g = SHAPES[l.glyph]
     if (!g) return ""
+    // A picture is drawn as it is, without a color or an outline
+    if (g.image) return pictureSvg(g)
     const c = l.color
     const mode = l.styleMode || (l.outline ? "outline" : "fill")
     // High miter limit keeps sharp corners (triangles, stars) pointed
@@ -633,13 +817,30 @@ export function layerInnerSvg(l, uid, opts = {}) {
 // masks over everything below them. Shared by the thumbnails and the PNG
 // rasterizer (the interactive canvas renders layers individually for
 // hit-testing, showing erasers as a checkerboard ghost instead).
+// Hidden layers are skipped; flipH/flipV mirror the layer around its own
+// center (composed after the rotation, matching the canvas CSS transform);
+// opacity < 1 fades the layer (and proportionally weakens eraser cuts).
 export function layersSvgMarkup(layers, uidPrefix) {
-    const wrap = (l, inner) =>
-        `<g transform="translate(${l.x},${l.y}) rotate(${l.rot || 0} ${l.w / 2} ${l.h / 2})">` +
-        `<svg x="0" y="0" width="${l.w}" height="${l.h}" viewBox="${(SHAPES[l.glyph] || {}).vb || "0 0 24 24"}" preserveAspectRatio="none" overflow="visible">${inner}</svg>` +
-        `</g>`
+    const wrap = (l, inner) => {
+        const cx = l.w / 2
+        const cy = l.h / 2
+        const flip =
+            l.flipH || l.flipV
+                ? ` translate(${cx} ${cy}) scale(${l.flipH ? -1 : 1} ${l.flipV ? -1 : 1}) translate(${-cx} ${-cy})`
+                : ""
+        const op =
+            l.opacity != null && l.opacity < 1
+                ? ` opacity="${clampOpacity(l.opacity)}"`
+                : ""
+        return (
+            `<g${op} transform="translate(${l.x},${l.y}) rotate(${l.rot || 0} ${cx} ${cy})${flip}">` +
+            `<svg x="0" y="0" width="${l.w}" height="${l.h}" viewBox="${layerVb(l)}" preserveAspectRatio="none" overflow="visible">${inner}</svg>` +
+            `</g>`
+        )
+    }
     let acc = ""
     layers.forEach((l, i) => {
+        if (l.hidden) return
         const uid = `${uidPrefix}-${l.id}-${i}`
         const p = layerParts(l)
 
@@ -652,7 +853,10 @@ export function layersSvgMarkup(layers, uidPrefix) {
         }
 
         let cutSpec = null
+        // Text outlines are always center-aligned, so the inner-cut repaint
+        // pass (which needs shape paths) never applies to them
         const innerOnlyCut =
+            !isTextLayer(l) &&
             p.outlineTrans &&
             !p.fillTrans &&
             (l.outlineAlign || "center") === "inner"
@@ -770,9 +974,9 @@ export function LayersThumb({ layers, size }) {
     )
 }
 
-// Rasterize a layer stack to a PNG data URL at the locked 512x512 output
-// size - the signage backplate first, then the layers (WYSIWYG with the
-// designer canvas).
+// Rasterize a layer stack to a size x size PNG data URL (the texture size
+// setting; 512 by default) - the signage backplate first, then the layers
+// (WYSIWYG with the designer canvas).
 export function rasterizeLayers(layers, size = CANVAS_SIZE) {
     const inner = layersSvgMarkup(layers, "r")
     const svg =

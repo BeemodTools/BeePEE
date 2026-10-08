@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import {
     Box,
     Typography,
@@ -26,7 +26,14 @@ import {
     FormControl,
     InputLabel,
 } from "@mui/material"
-import { Add, DragIndicator, Delete, Info, Code } from "@mui/icons-material"
+import {
+    Add,
+    DragIndicator,
+    Delete,
+    Info,
+    Code,
+    Palette,
+} from "@mui/icons-material"
 import {
     DndContext,
     closestCenter,
@@ -43,6 +50,7 @@ import {
 } from "@dnd-kit/sortable"
 import { useSortable } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
+import { DEFAULT_TIMER_COLORS } from "../../utils/timerColors"
 
 // Custom modifier to restrict drag movement to parent bounds
 const restrictToParentBounds = ({
@@ -63,7 +71,12 @@ const restrictToParentBounds = ({
 }
 
 // Sortable Variable Item Component
-function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
+function SortableVariableItem({
+    variable,
+    onUpdateValue,
+    onEditColors,
+    onDelete,
+}) {
     const {
         attributes,
         listeners,
@@ -109,9 +122,15 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
                     </div>
 
                     {/* Variable Type Icon */}
-                    <Tooltip title="VBSP Variable">
-                        <Code fontSize="small" />
-                    </Tooltip>
+                    {variable.type === "colors" ? (
+                        <Tooltip title="Colors players pick in BEE2's ItemVar menu">
+                            <Palette fontSize="small" />
+                        </Tooltip>
+                    ) : (
+                        <Tooltip title="VBSP Variable">
+                            <Code fontSize="small" />
+                        </Tooltip>
+                    )}
 
                     {/* Variable Name + Default Value - LEFT ALIGNED */}
                     <Box
@@ -139,15 +158,17 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
                                 alignItems: "center",
                                 gap: 1,
                             }}>
-                            <Typography
-                                variant="caption"
-                                color="text.secondary"
-                                sx={{
-                                    fontSize: "0.7rem",
-                                    whiteSpace: "nowrap",
-                                }}>
-                                Default value:
-                            </Typography>
+                            {variable.type !== "colors" && (
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    sx={{
+                                        fontSize: "0.7rem",
+                                        whiteSpace: "nowrap",
+                                    }}>
+                                    Default value:
+                                </Typography>
+                            )}
                             {variable.type === "boolean" ? (
                                 <Checkbox
                                     checked={variable.customValue === "1"}
@@ -200,6 +221,15 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
                                         ))}
                                     </Select>
                                 </FormControl>
+                            ) : variable.type === "colors" ? (
+                                <Button
+                                    size="small"
+                                    variant="outlined"
+                                    startIcon={<Palette fontSize="small" />}
+                                    onClick={() => onEditColors(variable)}
+                                    sx={{ height: 28, fontSize: "0.75rem" }}>
+                                    Default Colors
+                                </Button>
                             ) : (
                                 <TextField
                                     size="small"
@@ -252,15 +282,26 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
 
                     {/* Fixup Name - RIGHT ALIGNED */}
                     <Box sx={{ minWidth: "120px", textAlign: "right" }}>
-                        <Typography
-                            variant="body2"
-                            color="text.secondary"
-                            sx={{
-                                fontFamily: "monospace",
-                                fontSize: "0.75rem",
-                            }}>
-                            {variable.fixupName}
-                        </Typography>
+                        {variable.type === "colors" ? (
+                            <Tooltip title="Put one in a fixup with a Set Color block in the Conditions tab">
+                                <Typography
+                                    variant="body2"
+                                    color="text.secondary"
+                                    sx={{ fontSize: "0.75rem" }}>
+                                    Set Color
+                                </Typography>
+                            </Tooltip>
+                        ) : (
+                            <Typography
+                                variant="body2"
+                                color="text.secondary"
+                                sx={{
+                                    fontFamily: "monospace",
+                                    fontSize: "0.75rem",
+                                }}>
+                                {variable.fixupName}
+                            </Typography>
+                        )}
                     </Box>
 
                     {/* Action Buttons */}
@@ -369,6 +410,16 @@ const VARIABLE_PRESETS = {
         defaultValue: "0",
         type: "number",
     },
+    // Not an editoritems property: a timer color widget in the item's config
+    // group (info.txt), for Set Color blocks
+    Color: {
+        displayName: "Color",
+        fixupName: "",
+        description:
+            "Colors players pick in BEE2's ItemVar menu, like the Cube Coloriser's. Put one in a fixup with a Set Color block.",
+        defaultValue: "1",
+        type: "colors",
+    },
 }
 
 function Variables({ item, formData, onUpdateVariables }) {
@@ -376,14 +427,6 @@ function Variables({ item, formData, onUpdateVariables }) {
     const [variables, setVariables] = useState(() => {
         // Ensure initial state is always an array
         const initialVariables = formData.variables
-        console.log(
-            "Variables component: Initial formData.variables =",
-            initialVariables,
-            "type:",
-            typeof initialVariables,
-            "isArray:",
-            Array.isArray(initialVariables),
-        )
         return Array.isArray(initialVariables) ? initialVariables : []
     })
 
@@ -398,14 +441,6 @@ function Variables({ item, formData, onUpdateVariables }) {
     useEffect(() => {
         // Ensure variables is always an array
         const variablesData = formData.variables
-        console.log(
-            "Variables component: formData.variables =",
-            variablesData,
-            "type:",
-            typeof variablesData,
-            "isArray:",
-            Array.isArray(variablesData),
-        )
         if (Array.isArray(variablesData)) {
             setVariables(variablesData)
         } else {
@@ -419,7 +454,9 @@ function Variables({ item, formData, onUpdateVariables }) {
             (v) => v.presetKey === presetKey,
         )
         if (existingVariable) {
-            console.warn(`Variable ${presetKey} is already added`)
+            console.warn(
+                `Skipped adding variable ${presetKey} to item "${item?.name}", it is already added`,
+            )
             return
         }
 
@@ -434,6 +471,10 @@ function Variables({ item, formData, onUpdateVariables }) {
             type: preset.type,
             enumValues: preset.enumValues,
             customValue: preset.defaultValue,
+            // The Color variable: each timer value's default color
+            ...(preset.type === "colors"
+                ? { colors: { ...DEFAULT_TIMER_COLORS } }
+                : {}),
         }
 
         const updatedVariables = [...variables, newVariable]
@@ -472,6 +513,45 @@ function Variables({ item, formData, onUpdateVariables }) {
         setVariables(updatedVariables)
         onUpdateVariables(updatedVariables)
     }
+
+    // The Color variable's default colors
+    const handleUpdateVariableColors = (variableId, colors) => {
+        const updatedVariables = variables.map((v) =>
+            v.id === variableId ? { ...v, colors } : v,
+        )
+        setVariables(updatedVariables)
+        onUpdateVariables(updatedVariables)
+    }
+
+    // Its Default Colors window, with the colors it has here
+    const handleEditColors = async (variable) => {
+        try {
+            const result = await window.package.openTimerColors(
+                item.id,
+                variable.colors,
+            )
+            if (!result?.success) throw new Error(result?.error)
+        } catch (error) {
+            console.error(
+                `Failed to open the Default Colors of item "${item?.name}":`,
+                error,
+            )
+        }
+    }
+
+    // The colors that window saves
+    const colorsPickedRef = useRef(null)
+    colorsPickedRef.current = (colors) => {
+        const color = variables.find((v) => v.type === "colors")
+        if (color) handleUpdateVariableColors(color.id, colors)
+    }
+    useEffect(
+        () =>
+            window.package?.onTimerColorsPicked?.((colors) =>
+                colorsPickedRef.current(colors),
+            ),
+        [],
+    )
 
     const handleDragEnd = (event) => {
         const { active, over } = event
@@ -568,6 +648,7 @@ function Variables({ item, formData, onUpdateVariables }) {
                                           onUpdateValue={
                                               handleUpdateVariableValue
                                           }
+                                          onEditColors={handleEditColors}
                                           onDelete={handleDeleteVariable}
                                       />
                                   ))
@@ -627,9 +708,19 @@ function Variables({ item, formData, onUpdateVariables }) {
                                                             {preset.displayName}
                                                         </Typography>
                                                         <Chip
-                                                            icon={<Code />}
+                                                            icon={
+                                                                preset.type ===
+                                                                "colors" ? (
+                                                                    <Palette />
+                                                                ) : (
+                                                                    <Code />
+                                                                )
+                                                            }
                                                             label={
-                                                                preset.fixupName
+                                                                preset.type ===
+                                                                "colors"
+                                                                    ? "ItemVar menu"
+                                                                    : preset.fixupName
                                                             }
                                                             size="small"
                                                             variant="outlined"
@@ -646,12 +737,10 @@ function Variables({ item, formData, onUpdateVariables }) {
                                                         <Typography
                                                             variant="caption"
                                                             color="text.secondary">
-                                                            Default value:{" "}
-                                                            {
-                                                                preset.defaultValue
-                                                            }{" "}
-                                                            • Type:{" "}
-                                                            {preset.type}
+                                                            {preset.type ===
+                                                            "colors"
+                                                                ? "A color for each timer value, 3 to 30"
+                                                                : `Default value: ${preset.defaultValue} • Type: ${preset.type}`}
                                                         </Typography>
                                                     </Box>
                                                 }

@@ -45,18 +45,6 @@ const createWindow = () => {
         show: false, // Don't show until ready
     })
 
-    // Pipe renderer console output into main-process logger for easier debugging
-    win.webContents.on("console-message", (event, level, message, line, sourceId) => {
-        const prefix = `[renderer:${sourceId}:${line}] ${message}`
-        if (level >= 2) {
-            logger.error(prefix)
-        } else if (level === 1) {
-            logger.warn(prefix)
-        } else {
-            logger.info(prefix)
-        }
-    })
-
     // Initialize window title manager
     const titleManager = new WindowTitleManager(win)
     global.titleManager = titleManager
@@ -98,12 +86,7 @@ const createWindow = () => {
 
     // Show window when ready (unless loading a file on startup)
     win.once("ready-to-show", () => {
-        if (!isLoadingFileOnStartup) {
-            win.show()
-            logger.info("Window shown (no file loading on startup)")
-        } else {
-            logger.info("Window ready but hidden (loading file on startup)")
-        }
+        if (!isLoadingFileOnStartup) win.show()
     })
 
     // Load content
@@ -134,74 +117,29 @@ const createWindow = () => {
 
 ipcMain.handle("api:loadImage", async (event, filePath) => {
     try {
-        const imageBuffer = fs.readFileSync(filePath)
-        const base64 = imageBuffer.toString("base64")
-        const ext = path.extname(filePath).toLowerCase()
-
-        // Determine MIME type
-        let mimeType = "image/png"
-        if (ext === ".jpg" || ext === ".jpeg") mimeType = "image/jpeg"
-        if (ext === ".gif") mimeType = "image/gif"
-        if (ext === ".svg") mimeType = "image/svg+xml"
-
-        return `data:${mimeType};base64,${base64}`
+        // A VTF (like an item's palette image) as a PNG
+        const { imageDataUrl } = require("./utils/imageDataUrl.js")
+        return imageDataUrl(filePath)
     } catch (error) {
-        logger.error("Error loading image:", error)
+        logger.error(`Failed to load image ${filePath}:`, error)
         return null
     }
 })
 
-// Check if required Python bin folders exist for areng_ tools
-function checkArengBinFolders() {
-    const baseDir = app.isPackaged
-        ? path.join(process.resourcesPath, "extraResources")
-        : path.join(__dirname, "libs")
-
-    const requiredFolders = [
-        path.join(baseDir, "areng_cartoonify", "_internal"),
-        path.join(baseDir, "areng_obj23ds", "_internal"),
-    ]
-
-    const missingFolders = []
-    for (const folder of requiredFolders) {
-        if (!fs.existsSync(folder)) {
-            missingFolders.push(path.basename(path.dirname(folder)))
-        }
-    }
-
-    return missingFolders
-}
-
 app.whenReady().then(async () => {
-    // Initialize logger
+    // Initialize logger, and log the windows' console output too
     initializeLogger()
+    require("./handlers/logHandlers").register(ipcMain)
 
     // Clean up any leftover renamed directories from previous sessions
     cleanupDeletedDirectories()
 
-    // Check for required Python bin folders
-    const missingBins = checkArengBinFolders()
-    if (missingBins.length > 0) {
-        const { dialog } = require("electron")
-        logger.error("Missing Python bin folders for:", missingBins.join(", "))
-
-        dialog.showErrorBox(
-            "Missing Python Runtime",
-            `BeePEE is missing required Python runtime files.\n\n` +
-            `Missing folders: ${missingBins.join(", ")}\n\n` +
-            `The following features will not work:\n` +
-            `• VMF to OBJ conversion (cartoonify)\n` +
-            `• OBJ to 3DS conversion (model generation)\n\n` +
-            `Please download the full BeePEE release from GitHub or rebuild the Python executables.`
-        )
-    }
-
     // Ensure packages directory exists at startup
     try {
         ensurePackagesDir()
-        logger.info("Packages directory initialized")
+        logger.info(`Packages folder: ${getPackagesDir()}`)
     } catch (error) {
-        logger.error("Failed to initialize packages directory:", error)
+        logger.error("Failed to create the packages folder:", error)
         // Continue anyway - error will be caught when trying to create packages
     }
 
@@ -216,7 +154,7 @@ app.whenReady().then(async () => {
     const needsSetup = !setupComplete || !beemodPath
 
     if (needsSetup) {
-        logger.info("First run detected - showing setup window")
+        logger.info("Setup isn't complete, showing the setup window")
 
         // Register settings handlers early so setup window can use them
         const { registerSettingsHandlersEarly } = require("./handlers")
@@ -224,16 +162,16 @@ app.whenReady().then(async () => {
 
         // Show setup window and wait for it to close
         await createSetupWindow(null)
-        logger.info("Setup window closed")
 
         // Check if setup was completed - if not, quit the app
         const setupCompleteNow = getSetting("setupComplete", false)
         const beemodPathNow = getSetting("beemodPath", null)
         if (!setupCompleteNow || !beemodPathNow) {
-            logger.info("Setup was cancelled - quitting app")
+            logger.info("Setup was cancelled, quitting")
             app.quit()
             return
         }
+        logger.info("Setup complete")
     }
 
     // Register custom file protocol for secure local file access
@@ -245,7 +183,7 @@ app.whenReady().then(async () => {
             try {
                 url = decodeURIComponent(url)
             } catch (decodeError) {
-                logger.error("Failed to decode URL:", url, decodeError)
+                logger.error(`Bad beep:// URL encoding: ${url}`, decodeError)
                 return new Response("Bad Request: Invalid URL encoding", {
                     status: 400,
                 })
@@ -272,7 +210,7 @@ app.whenReady().then(async () => {
             try {
                 filePath = path.resolve(url)
             } catch (pathError) {
-                logger.error("Failed to resolve path:", url, pathError)
+                logger.error(`Bad beep:// path: ${url}`, pathError)
                 return new Response("Bad Request: Invalid file path", {
                     status: 400,
                 })
@@ -290,7 +228,7 @@ app.whenReady().then(async () => {
 
             if (!isInProject && !isInPackages) {
                 logger.warn(
-                    `Security check failed: ${normalizedFilePath} is not within ${normalizedProjectRoot} or ${normalizedPackagesRoot}`,
+                    `Blocked beep:// access outside the app and packages folders: ${normalizedFilePath}`,
                 )
                 return new Response("Forbidden: Access denied", { status: 403 })
             }
@@ -299,16 +237,13 @@ app.whenReady().then(async () => {
             let stats
             try {
                 if (!fs.existsSync(filePath)) {
-                    logger.warn(`File not found: ${filePath}`)
+                    logger.warn(`beep:// file not found: ${filePath}`)
                     return new Response("Not Found", { status: 404 })
                 }
 
                 stats = fs.statSync(filePath)
             } catch (fsError) {
-                logger.error(
-                    `File system error accessing ${filePath}:`,
-                    fsError,
-                )
+                logger.error(`Could not read beep:// file ${filePath}:`, fsError)
                 return new Response(
                     "Internal Server Error: File access error",
                     { status: 500 },
@@ -317,7 +252,7 @@ app.whenReady().then(async () => {
 
             // Check if it's actually a file (not a directory)
             if (!stats.isFile()) {
-                logger.warn(`Not a file: ${filePath}`)
+                logger.warn(`beep:// path is not a file: ${filePath}`)
                 return new Response("Bad Request: Path is not a file", {
                     status: 400,
                 })
@@ -327,13 +262,11 @@ app.whenReady().then(async () => {
             try {
                 fs.accessSync(filePath, fs.constants.R_OK)
             } catch (accessError) {
-                logger.error(`File not readable: ${filePath}`, accessError)
+                logger.error(`beep:// file is not readable: ${filePath}`, accessError)
                 return new Response("Forbidden: File not readable", {
                     status: 403,
                 })
             }
-
-            logger.debug(`Serving file: ${filePath}`)
 
             // Get file extension and set appropriate MIME type
             const ext = path.extname(filePath).toLowerCase()
@@ -366,12 +299,10 @@ app.whenReady().then(async () => {
                 },
             })
         } catch (error) {
-            logger.error("Beep protocol handler error:", error)
+            logger.error(`Failed to serve ${request.url}:`, error)
             return new Response("Internal Server Error", { status: 500 })
         }
     })
-
-    logger.info("🔧 Registered beep:// protocol for secure file access")
 
     const window = createWindow()
 
@@ -396,7 +327,9 @@ app.whenReady().then(async () => {
               ? lastPackagePath
               : null
     if (!isLoadingFileOnStartup && startupPackage) {
-        logger.info(`Opening package on startup: ${startupPackage}`)
+        logger.info(
+            `Opening ${startupPackage} (${pendingReopen ? "reopening after the settings reset" : "last package"})`,
+        )
         window.webContents.once("did-finish-load", () => {
             setTimeout(() => handleFileOpen(startupPackage), 500)
         })
@@ -409,13 +342,14 @@ app.whenReady().then(async () => {
             setTimeout(() => {
                 dialog.showMessageBox(window, {
                     type: "warning",
-                    title: "Beta Version",
+                    title: "Beta Release",
                     message: `You are running a BETA version of BeePEE (v${require("../package.json").version})`,
                     detail:
                         "Beta builds are bug prone and less stable than regular releases.\n\n" +
-                        "• Please stress test as much as you can - that's what betas are for!\n" +
-                        "• If you encounter any bugs, report them via Help > Report Bug.\n" +
-                        "• Keep backups of important packages before opening them in this version.",
+                        "\n" +
+                        "Please stress test as much as you can. We must find bugs.\n" +
+                        "If you encounter any bugs, report them via Help > Report Bug.\n" +
+                        "Keep backups of important packages before opening them in this version.",
                     buttons: ["Got it"],
                 })
             }, 500)
@@ -431,7 +365,7 @@ app.whenReady().then(async () => {
 
     // Show changelog only once after update (not on first install)
     if (lastSeenVersion && lastSeenVersion !== currentVersion) {
-        logger.info(`Version changed from ${lastSeenVersion} to ${currentVersion}, showing changelog`)
+        logger.info(`Updated from ${lastSeenVersion}, showing the changelog`)
         // Wait for window to be ready before showing changelog
         window.webContents.once("did-finish-load", () => {
             setTimeout(() => {
@@ -441,138 +375,95 @@ app.whenReady().then(async () => {
         })
     } else if (!lastSeenVersion) {
         // First run - just set the version without showing changelog
-        logger.info(`First run detected, setting version to ${currentVersion}`)
         setLastSeenVersion(currentVersion)
-    } else {
-        logger.info(`Version unchanged: ${currentVersion}`)
     }
 
     // Configure VMF2OBJ resource paths on startup
     try {
-        const { findPortal2Resources } = require("./data")
-
-        // Create a console-compatible wrapper for logger
-        const logWrapper = {
-            log: (...args) => logger.info(...args),
-            error: (...args) => logger.error(...args),
-            warn: (...args) => logger.warn(...args),
-            debug: (...args) => logger.debug(...args),
-        }
-
-        const p2Resources = await findPortal2Resources(logWrapper)
-
-        if (p2Resources?.root) {
-            const { setExtraResourcePaths } = require("./utils/vmf2obj")
-            const resourcePaths = []
-
-            logger.info("🔍 Portal 2 resources found:")
-            logger.debug("  Root:", p2Resources.root)
-            logger.debug("  Search paths:", p2Resources.searchPaths || [])
-            logger.debug("  DLC folders:", p2Resources.dlcFolders || [])
-
-            // Add main Portal 2 VPK file (contains all materials and models)
-            resourcePaths.push(`${p2Resources.root}\\portal2\\pak01_dir.vpk`)
-            // Note: We don't add the portal2 folder directly to avoid VMF2OBJ scanning
-            // thousands of unrelated files that can cause StringIndexOutOfBoundsException
-
-            // Add search paths from gameinfo.txt
-            if (p2Resources.searchPaths) {
-                logger.debug(
-                    `🔍 Processing ${p2Resources.searchPaths.length} search paths...`,
-                )
-                for (const searchPath of p2Resources.searchPaths) {
-                    logger.debug(`  📁 Processing search path: "${searchPath}"`)
-
-                    // Handle |gameinfo_path| placeholder
-                    let processedPath = searchPath
-                    if (searchPath.includes("|gameinfo_path|")) {
-                        processedPath = searchPath.replace(
-                            "|gameinfo_path|",
-                            "",
-                        )
-                        logger.debug(
-                            `    🔄 Replaced |gameinfo_path| with: "${processedPath}"`,
-                        )
-                    }
-
-                    // Search paths are relative to Portal 2 root, not portal2 subfolder
-                    let fullPath
-                    if (processedPath.startsWith("..")) {
-                        // Handle relative paths like "../bee2" - go up from portal2/ to Portal 2/
-                        fullPath = path.join(p2Resources.root, processedPath)
-                    } else {
-                        // Handle absolute paths like "Hammer" - they're relative to Portal 2 root
-                        fullPath = path.join(p2Resources.root, processedPath)
-                    }
-                    logger.debug(`    🎯 Full path: ${fullPath}`)
-
-                    if (fs.existsSync(fullPath)) {
-                        // Check if this path actually contains useful resources for VMF2OBJ
-                        const isVpk = fullPath.toLowerCase().endsWith(".vpk")
-
-                        if (isVpk) {
-                            // Only add VPK files to avoid directory scanning issues
-                            resourcePaths.push(fullPath)
-                            logger.debug(`    ✅ Added VPK: ${fullPath}`)
-                        } else {
-                            // For custom content (BEE2, mods), we allow directories with materials/models
-                            // Note: VMF2OBJ crashes on files without extensions - ensure your
-                            // custom content folders don't contain extension-less files
-                            const materialsPath = path.join(fullPath, "materials")
-                            const modelsPath = path.join(fullPath, "models")
-                            const hasMaterials = fs.existsSync(materialsPath)
-                            const hasModels = fs.existsSync(modelsPath)
-
-                            if (hasMaterials || hasModels) {
-                                resourcePaths.push(fullPath)
-                                logger.debug(
-                                    `    ✅ Added custom content folder: ${fullPath}`,
-                                )
-                            } else {
-                                logger.debug(
-                                    `    ⚠️ Path exists but no materials/models/VPK: ${fullPath}`,
-                                )
-                            }
-                        }
-                    } else {
-                        logger.debug(`    ❌ Path does not exist: ${fullPath}`)
-                    }
-                }
-            }
-
-            // Add DLC folders
-            if (p2Resources.dlcFolders) {
-                logger.debug(
-                    `🔍 Processing ${p2Resources.dlcFolders.length} DLC folders...`,
-                )
-                for (const dlc of p2Resources.dlcFolders) {
-                    logger.debug(
-                        `  📁 Processing DLC: ${dlc.name} at ${dlc.path}`,
-                    )
-
-                    // Add DLC VPK if it exists (VPK files are safe)
-                    const dlcVpkPath = path.join(dlc.path, "pak01_dir.vpk")
-                    if (fs.existsSync(dlcVpkPath)) {
-                        resourcePaths.push(dlcVpkPath)
-                        logger.debug(`    ✅ Added DLC VPK: ${dlcVpkPath}`)
-                    } else {
-                        logger.debug(`    ❌ DLC VPK not found: ${dlcVpkPath}`)
-                    }
-
-                    // Note: We don't add DLC folders directly to avoid VMF2OBJ
-                    // scanning issues. VPK files contain all necessary content.
-                }
-            } else {
-                logger.debug(`⚠️ No DLC folders found`)
-            }
-
-            setExtraResourcePaths(resourcePaths)
-            logger.info("VMF2OBJ resource paths configured:", resourcePaths)
-        }
+        await logger.section("Setting up model generation resources", () =>
+            setUpResourcePaths(),
+        )
     } catch (error) {
-        logger.warn("Could not setup Portal 2 resource paths:", error?.message || error)
+        logger.warn(
+            "Could not set up the resource paths for model generation:",
+            error,
+        )
     }
 })
+
+/**
+ * Where model generation (VMF2OBJ) looks up textures and models: Portal 2's
+ * pak01_dir.vpk, gameinfo.txt's search paths (like bee2) and the DLC VPKs
+ */
+async function setUpResourcePaths() {
+    const { findPortal2Resources } = require("./data")
+    const p2Resources = await findPortal2Resources()
+    if (!p2Resources?.root) {
+        logger.warn(
+            "Portal 2 was not found, so generated models can't use its textures and models",
+        )
+        return
+    }
+
+    const { setExtraResourcePaths } = require("./utils/vmf2obj")
+
+    // Add main Portal 2 VPK file (contains all materials and models)
+    const resourcePaths = [`${p2Resources.root}\\portal2\\pak01_dir.vpk`]
+    // Note: We don't add the portal2 folder directly to avoid VMF2OBJ scanning
+    // thousands of unrelated files
+
+    // Add search paths from gameinfo.txt
+    for (const searchPath of p2Resources.searchPaths ?? []) {
+        // |gameinfo_path| is the folder holding gameinfo.txt (portal2/),
+        // so "|gameinfo_path|../bee2" is "Portal 2/bee2". Other search
+        // paths (e.g. "Hammer") are relative to the Portal 2 root.
+        const gameinfoDir = path.join(p2Resources.root, "portal2")
+        const fullPath = searchPath.includes("|gameinfo_path|")
+            ? path.join(gameinfoDir, searchPath.replace("|gameinfo_path|", ""))
+            : path.join(p2Resources.root, searchPath)
+
+        // The gameinfo folder itself is covered by pak01_dir.vpk above
+        if (path.resolve(fullPath) === path.resolve(gameinfoDir)) continue
+
+        if (!fs.existsSync(fullPath)) {
+            logger.debug(
+                `Skipped search path "${searchPath}": ${fullPath} doesn't exist`,
+            )
+        } else if (fullPath.toLowerCase().endsWith(".vpk")) {
+            // Only add VPK files to avoid directory scanning issues
+            resourcePaths.push(fullPath)
+        } else if (
+            // For custom content (BEE2, mods), we allow directories with
+            // materials/models
+            fs.existsSync(path.join(fullPath, "materials")) ||
+            fs.existsSync(path.join(fullPath, "models"))
+        ) {
+            resourcePaths.push(fullPath)
+        } else {
+            logger.debug(
+                `Skipped search path "${searchPath}": no materials or models in ${fullPath}`,
+            )
+        }
+    }
+
+    // Add DLC VPKs (not the DLC folders themselves: the VPKs hold all the
+    // content, and scanning the folders would be slow)
+    for (const dlc of p2Resources.dlcFolders ?? []) {
+        const dlcVpkPath = path.join(dlc.path, "pak01_dir.vpk")
+        if (fs.existsSync(dlcVpkPath)) {
+            resourcePaths.push(dlcVpkPath)
+        } else {
+            logger.debug(`Skipped ${dlc.name}: it has no pak01_dir.vpk`)
+        }
+    }
+
+    setExtraResourcePaths(resourcePaths)
+    logger.info(
+        `Resource paths, in priority order:\n${resourcePaths
+            .map((p, i) => `  ${i + 1}. ${p}`)
+            .join("\n")}`,
+    )
+}
 
 // Handle uncaught exceptions and unhandled rejections
 // Debounce crash report dialogs to avoid spamming on rapid errors
@@ -593,10 +484,7 @@ function sendCrashReportEvent(errorData) {
 }
 
 process.on("uncaughtException", (error) => {
-    logger.error("Uncaught Exception:", error)
-    if (logger.originalConsole) {
-        logger.originalConsole.error("Uncaught Exception:", error)
-    }
+    logger.error("Uncaught exception:", error)
     sendCrashReportEvent({
         type: "uncaughtException",
         message: error.message,
@@ -605,11 +493,8 @@ process.on("uncaughtException", (error) => {
     })
 })
 
-process.on("unhandledRejection", (reason, promise) => {
-    logger.error("Unhandled Rejection at:", promise, "reason:", reason)
-    if (logger.originalConsole) {
-        logger.originalConsole.error("Unhandled Rejection at:", promise, "reason:", reason)
-    }
+process.on("unhandledRejection", (reason) => {
+    logger.error("Unhandled promise rejection:", reason)
     const message = reason instanceof Error ? reason.message : String(reason)
     const stack = reason instanceof Error ? reason.stack : undefined
     sendCrashReportEvent({
@@ -625,15 +510,9 @@ app.on("before-quit", () => {
     try {
         // Only clean up packages in production - in dev mode the packages folder
         // is inside the project and we don't want to delete user's work
-        if (!isDev) {
-            logger.info("Cleaning up packages directory...")
-            clearPackagesDirectory()
-            logger.info("Packages directory cleaned up successfully")
-        } else {
-            logger.info("Skipping packages cleanup in development mode")
-        }
+        if (!isDev) clearPackagesDirectory()
     } catch (error) {
-        logger.error("Failed to clean up packages directory:", error.message)
+        logger.error("Failed to clear the packages folder:", error)
     } finally {
         // Stop periodic update checks
         if (updaterInstance) {
@@ -656,7 +535,6 @@ if (process.platform === "win32" || process.platform === "linux") {
         arg.endsWith(".bpee") || arg.endsWith(".bee_pack")
     )
     if (startupFilePath && !startupFilePath.startsWith("--")) {
-        logger.info(`File detected on startup (before app ready): ${startupFilePath}`)
         isLoadingFileOnStartup = true
     }
 }
@@ -664,42 +542,43 @@ if (process.platform === "win32" || process.platform === "linux") {
 // Helper function to handle opening a file
 async function handleFileOpen(filePath, isStartup = false) {
     if (!filePath || !fs.existsSync(filePath)) {
-        logger.warn(`File does not exist: ${filePath}`)
+        logger.warn(`Can't open ${filePath}: the file doesn't exist`)
         return
     }
 
     const ext = path.extname(filePath).toLowerCase()
-    logger.info(`Opening file: ${filePath} (${ext}) [startup: ${isStartup}]`)
 
     // Wait for app to be ready
     await app.whenReady()
 
     // Get or create main window
     if (!mainWindow || mainWindow.isDestroyed()) {
-        logger.info("Main window not available, waiting for it to be created...")
         // Window will be created by app.whenReady, wait a bit
         await new Promise(resolve => setTimeout(resolve, 1000))
     }
 
     if (!mainWindow || mainWindow.isDestroyed()) {
-        logger.error("Main window still not available")
+        logger.error(`Can't open ${filePath}: the main window isn't open`)
         return
     }
+
+    // It replaces the open package: ask about its unsaved changes first
+    const { confirmUnsavedChanges } = require("./menu.js")
+    const discardLabel =
+        ext === ".bee_pack" ? "Import Without Saving" : "Open Without Saving"
+    if (!(await confirmUnsavedChanges(mainWindow, discardLabel))) return
 
     try {
         if (ext === ".bpee") {
             // Load .bpee package
-            logger.info("Loading .bpee package...")
             const { loadPackage } = require("./packageManager")
             const pkg = await loadPackage(filePath)
             mainWindow.webContents.send("package:loaded", {
                 items: pkg.items,
                 signages: pkg.signages,
             })
-            logger.info("Package loaded successfully")
         } else if (ext === ".bee_pack") {
             // Import .bee_pack package
-            logger.info("Importing .bee_pack package...")
             const { importPackage, loadPackage } = require("./packageManager")
             await importPackage(filePath)
 
@@ -709,7 +588,8 @@ async function handleFileOpen(filePath, isStartup = false) {
                 message: "Loading imported package...",
             })
 
-            const pkg = await loadPackage(filePath, true)
+            // Already extracted and converted by importPackage() above
+            const pkg = await loadPackage(filePath, true, true)
 
             // Send final completion message
             mainWindow.webContents.send("package-loading-progress", {
@@ -721,28 +601,27 @@ async function handleFileOpen(filePath, isStartup = false) {
                 items: pkg.items,
                 signages: pkg.signages,
             })
-            logger.info("Package imported and loaded successfully")
         } else {
-            logger.warn(`Unsupported file type: ${ext}`)
+            logger.warn(`Can't open ${filePath}: unsupported file type`)
         }
 
         // Show window after loading completes (if it was hidden during startup)
         if (isStartup && isLoadingFileOnStartup) {
-            logger.info("Showing window after file load completed")
             mainWindow.show()
             isLoadingFileOnStartup = false // Reset flag
         }
     } catch (error) {
-        logger.error(`Failed to open file ${filePath}:`, error)
-        const { dialog } = require("electron")
-        dialog.showErrorBox(
+        logger.error(`Failed to open ${filePath}:`, error)
+        const { showPackageOpenError } = require("./packageManager")
+        await showPackageOpenError(
+            mainWindow,
             "Open Failed",
-            `Failed to open ${path.basename(filePath)}: ${error.message}`
+            `Failed to open ${path.basename(filePath)}: ${error.message}`,
+            error,
         )
 
         // Show window even on error (if it was hidden during startup)
         if (isStartup && isLoadingFileOnStartup) {
-            logger.info("Showing window after file load error")
             mainWindow.show()
             isLoadingFileOnStartup = false // Reset flag
         }
@@ -754,12 +633,11 @@ const gotTheLock = app.requestSingleInstanceLock()
 
 if (!gotTheLock) {
     // Another instance is already running, quit this one
-    logger.info("Another instance is already running, quitting...")
+    logger.info("BeePEE is already running, handing over to it and quitting")
     app.quit()
 } else {
     // Handle second-instance event (when user tries to open another file while app is running)
     app.on("second-instance", (event, commandLine, workingDirectory) => {
-        logger.info("Second instance detected, processing command line:", commandLine)
 
         // Focus the existing window
         if (mainWindow) {
@@ -774,7 +652,7 @@ if (!gotTheLock) {
         )
 
         if (filePath) {
-            logger.info(`Opening file from second instance: ${filePath}`)
+            logger.info(`Opening ${filePath} (opened while BeePEE was running)`)
             handleFileOpen(filePath)
         }
     })
@@ -782,7 +660,7 @@ if (!gotTheLock) {
     // Handle macOS open-file event
     app.on("open-file", (event, filePath) => {
         event.preventDefault()
-        logger.info(`macOS open-file event: ${filePath}`)
+        logger.info(`Opening ${filePath} (from the system)`)
         handleFileOpen(filePath)
     })
 
@@ -795,7 +673,7 @@ if (!gotTheLock) {
         )
 
         if (filePath && !filePath.startsWith("--")) {
-            logger.info(`Starting file load: ${filePath}`)
+            logger.info(`Opening ${filePath} (from the command line)`)
             // Delay the file open until the window is created
             app.whenReady().then(() => {
                 setTimeout(() => handleFileOpen(filePath, true), 1500)

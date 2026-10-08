@@ -1,15 +1,24 @@
 // MDL conversion using STUDIOMDL from Source SDK
 const fs = require("fs")
 const path = require("path")
-const { exec, spawn } = require("child_process")
+const { exec } = require("child_process")
+const { convertObjFileTo3ds } = require("./objTo3ds")
 const { promisify } = require("util")
 const { app } = require("electron")
 const sharp = require("sharp")
 const { findPortal2Resources } = require("../data")
 const { convertImageToVTF } = require("./vtfConverter")
 const { isDev } = require("./isDev.js")
+const { logger } = require("./logger")
+const { runConditions } = require("./vbspEvaluator")
 
 const execAsync = promisify(exec)
+
+/** "1 texture", "3 textures" */
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
+
+/** Lines of studiomdl's output logged when it fails (it ends with the error) */
+const STUDIOMDL_OUTPUT_LINES = 12
 
 /**
  * Helper to create directory with retry logic for EPERM errors
@@ -25,7 +34,7 @@ async function mkdirWithRetry(dirPath, maxAttempts = 5) {
         } catch (error) {
             if (error.code === "EPERM" || error.code === "EBUSY") {
                 if (attempt < maxAttempts - 1) {
-                    console.warn(`mkdir attempt ${attempt + 1} failed (${error.code}), retrying in ${(attempt + 1) * 200}ms...`)
+                    console.warn(`Could not create ${dirPath} (${error.code}), retrying in ${(attempt + 1) * 200} ms`)
                     await new Promise(resolve => setTimeout(resolve, (attempt + 1) * 200))
                 } else {
                     throw error
@@ -87,82 +96,6 @@ $sequence idle "${objFileName}" fps 30
     fs.writeFileSync(outputPath, qcContent, "utf-8")
 
     return outputPath
-}
-
-/**
- * Apply cartoonification to an image using the cartoon.exe tool
- * @param {string} inputPath - Path to the input image
- * @param {string} outputPath - Path for the cartoonified output
- */
-async function applyCartoonification(inputPath, outputPath) {
-    const cartoonExePath = isDev
-        ? path.join(__dirname, "..", "libs", "areng_cartoonify", "cartoon.exe")
-        : path.join(
-              process.resourcesPath,
-              "extraResources",
-              "areng_cartoonify",
-              "cartoon.exe",
-          )
-
-    if (!fs.existsSync(cartoonExePath)) {
-        console.warn(`⚠️ cartoon.exe not found, using original textures`)
-        fs.copyFileSync(inputPath, outputPath)
-        return
-    }
-
-    // Copy original file to output path FIRST
-    // Cartoon.exe modifies files IN-PLACE!
-    fs.copyFileSync(inputPath, outputPath)
-
-    return new Promise((resolve, reject) => {
-        // Get file size and modified time BEFORE cartoonification for validation
-        const statsBefore = fs.statSync(outputPath)
-        const sizeBefore = statsBefore.size
-        const mtimeBefore = statsBefore.mtime.getTime()
-
-        // Run cartoon.exe on the OUTPUT file (not the original)
-        const child = spawn(cartoonExePath, [outputPath], {
-            cwd: path.dirname(cartoonExePath),
-            stdio: "pipe",
-            windowsHide: true,
-        })
-
-        let stdout = ""
-        let stderr = ""
-
-        child.stdout?.on("data", (data) => {
-            stdout += data.toString()
-        })
-
-        child.stderr?.on("data", (data) => {
-            stderr += data.toString()
-        })
-
-        child.on("close", (code) => {
-            if (code === 0) {
-                // Verify the file was actually modified
-                const statsAfter = fs.statSync(outputPath)
-                const sizeAfter = statsAfter.size
-                const mtimeAfter = statsAfter.mtime.getTime()
-
-                // Check if file was actually modified (size or mtime changed)
-                if (sizeAfter === sizeBefore && mtimeAfter === mtimeBefore) {
-                    console.warn(`⚠️ Cartoon: ${path.basename(outputPath)} not modified, using original`)
-                }
-                resolve()
-            } else {
-                console.warn(`⚠️ Cartoon failed (code ${code}) for ${path.basename(outputPath)}, using original`)
-                // File was already copied, just use the original
-                resolve()
-            }
-        })
-
-        child.on("error", (error) => {
-            console.warn(`⚠️ Cartoon spawn error: ${error.message}, using original`)
-            // File was already copied, just use the original
-            resolve()
-        })
-    })
 }
 
 /**
@@ -274,8 +207,6 @@ async function convertObjToMDL(objPath, outputDir, options = {}) {
         modelFolder: options.modelFolder, // Allow override for model parent folder
     })
 
-    console.log(`Compiling MDL: ${path.basename(qcPath)}`)
-
     // Get Portal 2 game directory for STUDIOMDL -game parameter
     let gameDir = null
     try {
@@ -284,7 +215,7 @@ async function convertObjToMDL(objPath, outputDir, options = {}) {
             gameDir = path.join(p2Resources.root, "portal2")
         }
     } catch (error) {
-        console.warn("Could not find Portal 2 directory:", error.message)
+        console.warn("Could not find Portal 2:", error.message)
     }
 
     if (!gameDir || !fs.existsSync(gameDir)) {
@@ -329,20 +260,22 @@ async function convertObjToMDL(objPath, outputDir, options = {}) {
         }
         copyDir(packageMaterialsDir, gameMaterialsDir)
     } else {
-        console.warn(`⚠️ Package materials directory not found`)
+        console.warn(`No converted materials to copy for studiomdl: ${packageMaterialsDir}`)
     }
 
     // Run STUDIOMDL
     const cmd = `"${studiomdlPath}" -game "${gameDir}" -nop4 -verbose "${qcPath}"`
 
+    let compileOutput = ""
     try {
         const { stdout, stderr } = await execAsync(cmd, {
             cwd: path.dirname(studiomdlPath),
             maxBuffer: 1024 * 1024 * 10, // 10MB buffer for large outputs
             timeout: 120000, // 2 minute timeout
         })
+        compileOutput = stdout
 
-        if (stderr && !stderr.includes("already exists")) console.warn("STUDIOMDL stderr:", stderr)
+        if (stderr && !stderr.includes("already exists")) console.warn(`studiomdl reported: ${stderr.trim()}`)
 
         // STUDIOMDL outputs to the game directory structure
         // The model will be at: gameDir/models/props_map_editor/bpee/{modelFolder}/{modelName}.mdl
@@ -371,7 +304,7 @@ async function convertObjToMDL(objPath, outputDir, options = {}) {
             )
         }
 
-        console.log(`✅ MDL compiled: ${path.basename(mdlPath)}`)
+        console.log(`Compiled ${path.basename(mdlPath)} with studiomdl`)
 
         // Collect all VTX files that exist
         const result = {
@@ -394,9 +327,44 @@ async function convertObjToMDL(objPath, outputDir, options = {}) {
 
         return result
     } catch (error) {
-        console.error("STUDIOMDL execution failed:", error)
+        // studiomdl prints its errors at the end of its output
+        const output = (error.stdout ?? compileOutput)
+            .trim()
+            .split(/\r?\n/)
+            .slice(-STUDIOMDL_OUTPUT_LINES)
+            .join("\n")
+        if (output) console.error(`studiomdl's output ended with:\n${output}`)
         throw new Error(`STUDIOMDL compilation failed: ${error.message}`)
     }
+}
+
+/**
+ * VMT for an editor model texture (a patch of item_lighting_common.vmt)
+ * @param {string} folderName - Folder under materials/models/props_map_editor/bpee
+ * @param {string} textureName - Texture file name without extension
+ * @param {"translucent"|"alphatest"|null} [alphaMode] - How the texture's alpha
+ *   is used; the VMF2OBJ converter marks this in the MTL ("# beepee:<mode>")
+ * @returns {string}
+ */
+function editorVmt(folderName, textureName, alphaMode = null) {
+    // $selfillum makes the shader read the base alpha as a self-illumination
+    // mask instead of opacity, so transparent textures go without it (like
+    // Valve's own translucent editor materials)
+    const materialLines =
+        alphaMode === "translucent"
+            ? "$model 1\n$translucent 1\n"
+            : alphaMode === "alphatest"
+              ? "$model 1\n$alphatest 1\n$alphatestreference .5\n"
+              : "$selfillum 1\n$model 1\n"
+    return `patch
+{
+include "materials/models/props_map_editor/item_lighting_common.vmt"
+insert
+{
+$basetexture "models/props_map_editor/bpee/${folderName}/${textureName}"
+${materialLines}}
+}
+`
 }
 
 /**
@@ -413,19 +381,28 @@ async function convertMaterialsToPackage(
     itemName,
 ) {
     if (!materialsSourceDir || !fs.existsSync(materialsSourceDir)) {
-        console.warn(
-            `⚠️ Materials source directory not found: ${materialsSourceDir}`,
-        )
+        console.warn(`No textures to convert: ${materialsSourceDir} doesn't exist`)
         return
     }
+    return logger.section("Converting textures to VTF", () =>
+        writePackageMaterials(materialsSourceDir, materialTargetDir, tempDir, itemName),
+    )
+}
 
-    console.log("Converting materials to VTF/VMT...")
+async function writePackageMaterials(
+    materialsSourceDir,
+    materialTargetDir,
+    tempDir,
+    itemName,
+) {
+    let converted = 0
+    let failed = 0
 
     // Find all PNG/TGA files and convert them to VTF + create VMT
     // FLAT structure - all VTFs go directly in materialTargetDir
     const convertMaterials = async (src, flatDest) => {
         if (!fs.existsSync(src)) {
-            console.warn(`⚠️ Source materials directory not found: ${src}`)
+            console.warn(`Texture folder not found: ${src}`)
             return
         }
 
@@ -456,20 +433,15 @@ async function convertMaterialsToPackage(
                     })
 
                     // Create VMT file immediately after VTF
-                    const vmtContent = `patch
-{
-include "materials/models/props_map_editor/item_lighting_common.vmt"
-insert
-{
-$basetexture "models/props_map_editor/bpee/${itemName}/${baseFileName}"
-$selfillum 1
-$model 1
-}
-}
-`
-                    fs.writeFileSync(vmtPath, vmtContent, "utf-8")
+                    fs.writeFileSync(
+                        vmtPath,
+                        editorVmt(itemName, baseFileName),
+                        "utf-8",
+                    )
+                    converted++
                 } catch (error) {
-                    console.error(`  Failed to convert ${entry.name}: ${error.message}`)
+                    failed++
+                    console.error(`Failed to convert ${entry.name} to VTF:`, error.message)
                 }
             }
         }
@@ -494,6 +466,7 @@ $model 1
     }
 
     const materialMap = {}
+    const alphaModes = {}
     if (fs.existsSync(mtlFilePath)) {
         const mtlContent = fs.readFileSync(mtlFilePath, "utf-8")
         const lines = mtlContent.split("\n")
@@ -508,86 +481,79 @@ $model 1
                     .trim()
                     .replace("materials/", "")
                 materialMap[currentMaterial] = texturePath
+            } else if (currentMaterial && line.startsWith("# beepee:")) {
+                // Translucent/alphatest marker written by the VMF2OBJ converter
+                alphaModes[currentMaterial] = line.substring(9).trim()
             }
         }
-        console.log(`Found ${Object.keys(materialMap).length} materials in MTL file`)
     } else {
-        console.warn(`⚠️ MTL file not found: ${mtlFilePath}`)
+        console.warn(`No MTL file in ${tempDir}, so every texture gets an opaque VMT`)
     }
 
     // Convert all materials from temp_models/materials/ to resources/materials/models/props_map_editor/
     // And create VMT files based on MATERIAL NAMES, not file paths
-    try {
-        await convertMaterials(materialsSourceDir, materialTargetDir)
+    await convertMaterials(materialsSourceDir, materialTargetDir)
 
-        // Now create VMT files based on TEXTURE filenames (not material names!)
-        // STUDIOMDL references materials by their TEXTURE filename, not the MTL material name
-        const createdVmts = new Set()
+    // Now create VMT files based on TEXTURE filenames (not material names!)
+    // STUDIOMDL references materials by their TEXTURE filename, not the MTL material name
+    const createdVmts = new Set()
 
-        for (const [materialName, texturePath] of Object.entries(materialMap)) {
-            try {
-                // Extract just the texture filename (no path, no extension)
-                // Use split on BOTH / and \ since MTL files use forward slashes
-                const textureFileName = texturePath
-                    .split(/[/\\]/)
-                    .pop()
-                    .replace(/\.(png|tga)$/i, "")
+    for (const [materialName, texturePath] of Object.entries(materialMap)) {
+        try {
+            // Extract just the texture filename (no path, no extension)
+            // Use split on BOTH / and \ since MTL files use forward slashes
+            const textureFileName = texturePath
+                .split(/[/\\]/)
+                .pop()
+                .replace(/\.(png|tga)$/i, "")
 
-                // VMT filename MUST match the texture filename (what STUDIOMDL uses)
-                const vmtPath = path.join(
-                    materialTargetDir,
-                    textureFileName + ".vmt",
-                )
+            // VMT filename MUST match the texture filename (what STUDIOMDL uses)
+            const vmtPath = path.join(
+                materialTargetDir,
+                textureFileName + ".vmt",
+            )
 
-                const vmtContent = `patch
-{
-include "materials/models/props_map_editor/item_lighting_common.vmt"
-insert
-{
-$basetexture "models/props_map_editor/bpee/${itemName}/${textureFileName}"
-$selfillum 1
-$model 1
-}
-}
-`
-                fs.writeFileSync(vmtPath, vmtContent, "utf-8")
-                createdVmts.add(textureFileName)
-            } catch (error) {
-                console.error(`  Failed to create VMT for ${materialName}: ${error.message}`)
-            }
+            fs.writeFileSync(
+                vmtPath,
+                editorVmt(
+                    itemName,
+                    textureFileName,
+                    alphaModes[materialName],
+                ),
+                "utf-8",
+            )
+            createdVmts.add(textureFileName)
+        } catch (error) {
+            console.error(`Failed to write the VMT for ${materialName}:`, error.message)
         }
+    }
 
-        // Fallback: Create VMT files for any VTF that doesn't have a corresponding VMT
-        // This handles cases where MTL parsing failed or was incomplete
-        if (fs.existsSync(materialTargetDir)) {
-            const vtfFiles = fs.readdirSync(materialTargetDir).filter(f => f.endsWith('.vtf'))
-            for (const vtfFile of vtfFiles) {
-                const baseName = vtfFile.replace('.vtf', '')
-                if (!createdVmts.has(baseName)) {
-                    const vmtPath = path.join(materialTargetDir, baseName + ".vmt")
-                    if (!fs.existsSync(vmtPath)) {
-                        const vmtContent = `patch
-{
-include "materials/models/props_map_editor/item_lighting_common.vmt"
-insert
-{
-$basetexture "models/props_map_editor/bpee/${itemName}/${baseName}"
-$selfillum 1
-$model 1
-}
-}
-`
-                        fs.writeFileSync(vmtPath, vmtContent, "utf-8")
-                    }
+    // Fallback: Create VMT files for any VTF that doesn't have a corresponding VMT
+    // This handles cases where MTL parsing failed or was incomplete
+    if (fs.existsSync(materialTargetDir)) {
+        const vtfFiles = fs.readdirSync(materialTargetDir).filter(f => f.endsWith('.vtf'))
+        for (const vtfFile of vtfFiles) {
+            const baseName = vtfFile.replace('.vtf', '')
+            if (!createdVmts.has(baseName)) {
+                const vmtPath = path.join(materialTargetDir, baseName + ".vmt")
+                if (!fs.existsSync(vmtPath)) {
+                    fs.writeFileSync(
+                        vmtPath,
+                        editorVmt(itemName, baseName),
+                        "utf-8",
+                    )
                 }
             }
         }
-
-        console.log(`✅ Materials converted: ${Object.keys(materialMap).length} materials`)
-    } catch (error) {
-        console.warn(`⚠️  Failed to convert materials: ${error.message}`)
-        throw error
     }
+
+    const transparent = Object.values(alphaModes).length
+    // A warning when textures failed (the model would show them missing)
+    const summarize = failed > 0 ? console.warn : console.log
+    summarize(
+        `Converted ${converted} of ${plural(converted + failed, "texture")} for ${plural(Object.keys(materialMap).length, "material")}` +
+            (transparent ? ` (${transparent} transparent)` : ""),
+    )
 }
 
 /**
@@ -651,7 +617,7 @@ async function copyMDLToPackage(
                 if (!cleanupDir) cleanupDir = path.dirname(filePath)
             }
         } catch (error) {
-            console.warn(`  Failed to delete ${path.basename(filePath)}: ${error.message}`)
+            console.warn(`Could not remove the compiled ${path.basename(filePath)} from Portal 2's folder: ${error.message}`)
         }
     }
 
@@ -696,8 +662,15 @@ async function convertAndInstallMDL(
     itemName,
     options = {},
 ) {
-    console.log(`🔄 Converting OBJ to MDL: ${itemName}`)
+    return logger.section(
+        `Making ${itemName}.mdl`,
+        () => makeMDL(objPath, packagePath, itemName, options),
+        // Made alongside other models: keep its lines together
+        { buffered: !!options.logBuffered },
+    )
+}
 
+async function makeMDL(objPath, packagePath, itemName, options) {
     // STAGING MODE: Use .bpee/tempmdl instead of temp_models
     const useStaging = options.useStaging !== false  // Default to true
     const tempDir = path.dirname(objPath)
@@ -757,7 +730,7 @@ async function convertAndInstallMDL(
         useStaging,
     )
 
-    console.log(`✅ MDL complete: ${result.relativeModelPath}`)
+    console.log(`Model: ${result.relativeModelPath}`)
 
     // Step 4: Generate 3DS collision model
     let threeDSResult = null
@@ -791,9 +764,9 @@ async function convertAndInstallMDL(
             useStaging,
         )
 
-        console.log(`✅ 3DS collision model: ${threeDSResult.relativeModelPath}`)
+        console.log(`Collision model: ${threeDSResult.relativeModelPath}`)
     } catch (threeDSError) {
-        console.warn(`⚠️ 3DS collision model failed: ${threeDSError.message}`)
+        console.warn(`Could not make the collision model: ${threeDSError.message}`)
         // Don't throw - 3DS is optional, MDL is the main output
         threeDSResult = { success: false, error: threeDSError.message }
     }
@@ -813,267 +786,109 @@ async function convertAndInstallMDL(
     }
 }
 
-// VBSP PARSER FOR MULTI-MODEL GENERATION
+// THE INSTANCE OF EACH VALUE OF A VARIABLE
 // ===========================================
 
-/**
- * Converts VBSP format conditions to blocks format for processing
- * @param {Object} vbspConditions - VBSP format conditions
- * @returns {Array} Array of blocks
- */
-function convertVbspToBlocks(vbspConditions) {
-    const blocks = []
-    
-    if (!vbspConditions || !vbspConditions.Conditions) {
-        return blocks
-    }
-    
-    // Handle different VBSP structure patterns
-    let conditions = []
-    
-    if (vbspConditions.Conditions.Condition) {
-        // Single condition
-        conditions = Array.isArray(vbspConditions.Conditions.Condition) 
-            ? vbspConditions.Conditions.Condition 
-            : [vbspConditions.Conditions.Condition]
-    } else {
-        // Multiple conditions or different structure
-        const allKeys = Object.keys(vbspConditions.Conditions)
-        const conditionKeys = allKeys.filter(key => 
-            key.startsWith("Switch_") || 
-            key.startsWith("MapInstVar_") ||
-            key === "Switch" ||
-            key === "MapInstVar"
-        )
-        
-        if (conditionKeys.length > 0) {
-            conditions = conditionKeys.map(key => vbspConditions.Conditions[key])
-        } else {
-            conditions = [vbspConditions.Conditions]
-        }
-    }
-    
-    // Convert each condition to block format
-    conditions.forEach((condition, index) => {
-        if (condition.Switch) {
-            // Switch case condition
-            const switchBlock = {
-                id: `switch_${index}`,
-                type: "switchCase",
-                variable: condition.Switch.Variable || condition.Switch,
-                method: "first",
-                cases: []
-            }
-            
-            // Add cases
-            if (condition.Switch.Case) {
-                const cases = Array.isArray(condition.Switch.Case) 
-                    ? condition.Switch.Case 
-                    : [condition.Switch.Case]
-                
-                cases.forEach((caseItem, caseIndex) => {
-                    const caseBlock = {
-                        id: `case_${index}_${caseIndex}`,
-                        type: "case",
-                        value: caseItem.Value || caseItem.value || caseIndex.toString(),
-                        thenBlocks: []
-                    }
-                    
-                    // Add changeInstance if present
-                    if (caseItem.Result && caseItem.Result.Instance) {
-                        caseBlock.thenBlocks.push({
-                            id: `changeInstance_${index}_${caseIndex}`,
-                            type: "changeInstance",
-                            instanceName: caseItem.Result.Instance
-                        })
-                    }
-                    
-                    switchBlock.cases.push(caseBlock)
-                })
-            }
-            
-            blocks.push(switchBlock)
-        } else if (condition.MapInstVar) {
-            // IF condition
-            const ifBlock = {
-                id: `if_${index}`,
-                type: "if",
-                condition: condition.MapInstVar.Variable || condition.MapInstVar,
-                thenBlocks: []
-            }
-            
-            // Add changeInstance if present
-            if (condition.MapInstVar.Result && condition.MapInstVar.Result.Instance) {
-                ifBlock.thenBlocks.push({
-                    id: `changeInstance_${index}`,
-                    type: "changeInstance",
-                    instanceName: condition.MapInstVar.Result.Instance
-                })
-            }
-            
-            blocks.push(ifBlock)
-        }
-    })
-    
-    return blocks
-}
+/** How many values a variable has (its SubTypes are one per value, in order) */
+const VALUE_COUNTS = { CubeType: 5, ButtonType: 3, TimerDelay: 31 }
 
 /**
- * Parses VBSP blocks to extract a mapping from variable values to instance paths.
- * @param {Array|Object} blocksOrVbsp - Either blocks array or VBSP conditions object.
- * @param {string} targetVariable - The variable to search for (e.g., "TIMER DELAY").
- * @param {Object} item - The item object to access registered instances.
- * @returns {Map<string, string>} A map where keys are variable values (e.g., "3", "4") and values are instance paths.
+ * The instance BEE2 places for each value of one of the item's variables
+ * ("Cube Type", or its property, CubeType): the item's VBSP conditions run on
+ * its first instance, with the variable's fixup set to the value and the
+ * others to their defaults (see vbspEvaluator.js)
+ * @returns {{property: string, defaultValue: string, values: Array<{value: string, file: string|null, overlay: boolean, uncertain: boolean}>}}
+ *   file: the item's instance, or when its conditions remove it, the first
+ *   one they add on top (overlay: true; some items' own instance is a dummy
+ *   their conditions swap for others). null: none. uncertain: tests BeePEE
+ *   can't tell decide it.
  */
-function mapVariableValuesToInstances(blocksOrVbsp, targetVariable, item = null) {
-    const valueInstanceMap = new Map()
-
-    console.log(`Mapping variable "${targetVariable}" to instances...`)
-
-    let blocks = blocksOrVbsp
-
-    // Handle VBSP format conditions
-    if (!Array.isArray(blocksOrVbsp) && blocksOrVbsp && typeof blocksOrVbsp === 'object') {
-        if (blocksOrVbsp.blocks && Array.isArray(blocksOrVbsp.blocks)) {
-            blocks = blocksOrVbsp.blocks
-        } else {
-            blocks = convertVbspToBlocks(blocksOrVbsp)
-        }
-    }
-
-    if (!Array.isArray(blocks)) {
-        console.warn("Blocks is not an array")
-        return valueInstanceMap
-    }
-
-    // Handle "DEFAULT" or "First Instance" specially
-    const normalizedVariable = targetVariable.toUpperCase()
-    if (normalizedVariable === "DEFAULT" || normalizedVariable === "FIRST INSTANCE") {
-        return valueInstanceMap // Empty map for First Instance
-    }
-
-    // Convert target variable to fixup format (e.g., "Timer Delay" -> "$timer_delay")
-    const fixupVariable = `$${targetVariable.replace(/ /g, "_").toLowerCase()}`
-
-    // Helper function to get the first registered instance
-    const getFirstRegisteredInstance = () => {
-        if (!item || !item.instances) {
-            return null
-        }
-        const instanceKeys = Object.keys(item.instances).sort(
-            (a, b) => parseInt(a, 10) - parseInt(b, 10),
-        )
-        const firstKey = instanceKeys[0]
-        return firstKey ? item.instances[firstKey]?.Name : null
-    }
-
-    // Helper function to recursively search for changeInstance blocks
-    const findChangeInstancesInBlock = (block) => {
-        if (block.type === "changeInstance" && block.instanceName) {
-            return [{ instanceName: block.instanceName, value: null }]
-        }
-
-        const results = []
-
-        // Check children array (for nested blocks)
-        if (Array.isArray(block.children)) {
-            for (const child of block.children) {
-                results.push(...findChangeInstancesInBlock(child))
-            }
-        }
-
-        // Check thenBlocks array (for IF blocks)
-        if (Array.isArray(block.thenBlocks)) {
-            for (const child of block.thenBlocks) {
-                results.push(...findChangeInstancesInBlock(child))
-            }
-        }
-
-        // Check elseBlocks array (for IF-ELSE blocks)
-        if (Array.isArray(block.elseBlocks)) {
-            for (const child of block.elseBlocks) {
-                results.push(...findChangeInstancesInBlock(child))
-            }
-        }
-
-        return results
-    }
-
-    // 1. First, try to find a SWITCH block for the target variable
-    const switchBlock = blocks.find(
-        (block) =>
-            block.type === "switchCase" && block.variable === fixupVariable,
+function variableValueInstances(item, variableName) {
+    const normalize = (name) => String(name).replace(/[\s_]/g, "").toLowerCase()
+    const editorItems = item.getEditorItems()
+    const properties = editorItems.Item?.Properties ?? {}
+    const property = Object.keys(properties).find(
+        (key) =>
+            normalize(key) === normalize(variableName) ||
+            normalize(item.getDisplayNameForVariable(key)) ===
+                normalize(variableName),
     )
-
-    if (switchBlock && Array.isArray(switchBlock.cases)) {
-        // Extract the value-to-instance mapping from each case
-        for (const caseBlock of switchBlock.cases) {
-            // Cases use 'thenBlocks' not 'children'!
-            const blocks = caseBlock.thenBlocks || caseBlock.children || []
-            if (caseBlock.value && Array.isArray(blocks)) {
-                const changeInstanceBlock = blocks.find(
-                    (child) => child.type === "changeInstance",
-                )
-                if (changeInstanceBlock && changeInstanceBlock.instanceName) {
-                    valueInstanceMap.set(
-                        caseBlock.value,
-                        changeInstanceBlock.instanceName,
-                    )
-                }
-            }
-        }
-    } else {
-        // 2. If no switch block, look for IF/ELSE blocks that check this variable
-        for (const block of blocks) {
-            if (block.type === "if" || block.type === "ifElse") {
-                // Check if this IF block uses our target variable
-                const condition = block.condition || block.variable
-                if (
-                    condition &&
-                    condition.includes(fixupVariable)
-                ) {
-                    // Extract the value being checked
-                    let value = null
-
-                    // Check for comparison pattern (e.g., "$timer_delay == 5")
-                    const comparisonMatch = condition.match(/==\s*["']?(\w+)["']?/)
-                    if (comparisonMatch) {
-                        value = comparisonMatch[1]
-                    } else if (condition === fixupVariable || condition === `"${fixupVariable}"`) {
-                        // Handle boolean conditions (e.g., "$start_enabled" or "\"$start_enabled\"")
-                        value = "true"
-                    }
-
-                    if (value) {
-                        // Find changeInstance in this block's children
-                        const instances = findChangeInstancesInBlock(block)
-                        if (instances.length > 0) {
-                            valueInstanceMap.set(
-                                value,
-                                instances[0].instanceName,
-                            )
-                        }
-
-                        // For IF statements without ELSE, also add a default case
-                        if (block.type === "if" && !block.elseBlocks) {
-                            const firstInstance = getFirstRegisteredInstance()
-                            if (firstInstance) {
-                                valueInstanceMap.set("false", firstInstance)
-                            }
-                        }
-                    }
-                }
-            }
-        }
+    if (!property) {
+        throw new Error(`"${item.name}" has no ${variableName} property`)
+    }
+    const count =
+        VALUE_COUNTS[property] ??
+        (item.getVariableType(property) === "boolean" ? 2 : 0)
+    if (!count) {
+        throw new Error(`BeePEE doesn't know the values of ${variableName}`)
     }
 
-    console.log(`   Mapped "${targetVariable}": ${valueInstanceMap.size} entries`)
+    // The fixups the editor gives the instance: each property's default
+    const fixups = { connectioncount: "0" }
+    for (const [key, value] of Object.entries(properties)) {
+        fixups[item.getFixupNameForVariable(key)] = String(
+            value?.DefaultValue ?? "",
+        )
+    }
+    const fixup = item.getFixupNameForVariable(property)
+    // AutoDrop's and AutoRespawn's fixups ($disable_...) are the other way
+    // round on droppers
+    const itemClass = String(editorItems.Item?.ItemClass ?? "").toLowerCase()
+    const inverted =
+        ["AutoDrop", "AutoRespawn"].includes(property) &&
+        itemClass === "itemcubedropper"
 
-    return valueInstanceMap
+    const instances = Object.fromEntries(
+        Object.entries(item.instances ?? {})
+            .filter(([, instance]) => instance?.Name && !instance._toRemove)
+            .map(([key, instance]) => [key, instance.Name]),
+    )
+    // Files as the item names them
+    const sameFile = (a, b) =>
+        a.replace(/\\/g, "/").toLowerCase() === b.replace(/\\/g, "/").toLowerCase()
+    const named = (file) =>
+        file === null
+            ? null
+            : (Object.values(instances).find((name) => sameFile(name, file)) ??
+              file)
+
+    const first =
+        instances["0"] ??
+        instances[
+            Object.keys(instances)
+                .filter((key) => /^\d+$/.test(key))
+                .sort((a, b) => a - b)[0]
+        ] ??
+        null
+    if (!first) throw new Error(`"${item.name}" has no instances`)
+    const text = item.readVbspText()?.text ?? ""
+
+    const values = []
+    for (let n = 0; n < count; n++) {
+        const { file, overlays, uncertain } = runConditions({
+            text,
+            itemId: item.id,
+            instances,
+            file: first,
+            fixups: { ...fixups, [fixup]: String(inverted ? 1 - n : n) },
+        })
+        const overlay = file === null && overlays.length > 0
+        values.push({
+            value: String(n),
+            file: named(overlay ? overlays[0] : file),
+            overlay,
+            uncertain,
+        })
+    }
+    return {
+        property,
+        defaultValue: String(properties[property]?.DefaultValue ?? "0"),
+        values,
+    }
 }
 
 /**
- * Convert OBJ file to 3DS format using Trimesh
+ * Convert OBJ file to 3DS format (see objTo3ds.js)
  * @param {string} objPath - Path to the source OBJ file
  * @param {string} outputPath - Path where 3DS should be saved
  * @param {number} scale - Scale factor for collision model (default: 0.9 for smaller collision)
@@ -1094,48 +909,18 @@ async function convertObjTo3DS(
         throw new Error(`OBJ file not found: ${objPath}`)
     }
 
-    const converterExe = isDev
-        ? path.join(
-              __dirname,
-              "..",
-              "libs",
-              "areng_obj23ds",
-              "convert_obj_to_3ds.exe",
-          )
-        : path.join(
-              process.resourcesPath,
-              "extraResources",
-              "areng_obj23ds",
-              "convert_obj_to_3ds.exe",
-          )
-
-    if (!fs.existsSync(converterExe)) {
-        throw new Error(`Trimesh converter not found at: ${converterExe}`)
-    }
-
     // Ensure output directory exists (with retry for EPERM errors)
-    const outputDir = path.dirname(outputPath)
-    await mkdirWithRetry(outputDir)
-
-    // Run the converter executable with scale and rotation parameters
-    const cmd = `"${converterExe}" "${objPath}" "${outputPath}" ${scale} ${roll} ${pitch} ${yaw}`
+    await mkdirWithRetry(path.dirname(outputPath))
 
     try {
-        const { stdout, stderr } = await execAsync(cmd, {
-            maxBuffer: 1024 * 1024 * 10, // 10MB buffer
-            timeout: 60000, // 1 minute timeout
+        await convertObjFileTo3ds(objPath, outputPath, {
+            scale,
+            roll,
+            pitch,
+            yaw,
         })
-
-        if (stderr) console.warn("3DS converter stderr:", stderr)
-
-        // Verify the file was created
-        if (!fs.existsSync(outputPath)) {
-            throw new Error(`3DS file was not created at: ${outputPath}`)
-        }
-
         return outputPath
     } catch (error) {
-        console.error("3DS conversion failed:", error)
         throw new Error(`3DS conversion failed: ${error.message}`)
     }
 }
@@ -1196,9 +981,10 @@ module.exports = {
     generateQCFile,
     convertObjToMDL,
     convertMaterialsToPackage,
+    editorVmt,
     copyMDLToPackage,
     convertAndInstallMDL,
-    mapVariableValuesToInstances,
+    variableValueInstances,
     convertObjTo3DS,
     copy3DSToPackage,
 }

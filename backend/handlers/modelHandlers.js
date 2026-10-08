@@ -9,6 +9,42 @@ const { packages } = require("../packageManager")
 const { sendItemUpdateToEditor } = require("../items/itemEditor")
 const { handleItemSave } = require("./shared")
 
+/**
+ * The item's editoritems as they are now, with what Make Model made: its
+ * SubTypes (their models) and the property that picks one. Make Model staged
+ * the whole file as it was then, so writing that would undo what was saved
+ * since, the same save's variables, instances, inputs and outputs and name
+ * too. The first SubType's name and palette are the Info tab's, as now.
+ * @param {Object} current - item.getEditorItems()
+ * @param {Object} staged - Make Model's stagedEditorItems
+ */
+function withMadeModels(current, staged) {
+    const editor = current.Item?.Editor ?? {}
+    const made = staged.Item?.Editor ?? {}
+    const nowFirst = [editor.SubType].flat()[0]
+    const madeSubTypes = [made.SubType].flat().filter(Boolean)
+    const madeName = madeSubTypes[0]?.Name
+    const subTypes = madeSubTypes.map((subType, index) => {
+        if (!nowFirst) return subType
+        return {
+            ...subType,
+            // Every SubType of a variable's models has the item's name
+            ...((index === 0 || subType.Name === madeName) &&
+                nowFirst.Name !== undefined && { Name: nowFirst.Name }),
+            ...(index === 0 && nowFirst.Palette && { Palette: nowFirst.Palette }),
+        }
+    })
+    const { SubType: _subType, SubTypeProperty: _property, ...rest } = editor
+    current.Item.Editor = {
+        ...(made.SubTypeProperty !== undefined && {
+            SubTypeProperty: made.SubTypeProperty,
+        }),
+        SubType: Array.isArray(made.SubType) ? subTypes : subTypes[0],
+        ...rest,
+    }
+    return current
+}
+
 function register(ipcMain, mainWindow) {
     // Save item handler
     // Note: Frontend passes itemData directly (not wrapped in object)
@@ -56,6 +92,10 @@ function register(ipcMain, mainWindow) {
 
             return { success: true }
         } catch (error) {
+            console.error(
+                `Failed to save the model name of item ${itemId}:`,
+                error,
+            )
             dialog.showErrorBox("Failed to Save Model Name", error.message)
             return { success: false, error: error.message }
         }
@@ -93,6 +133,10 @@ function register(ipcMain, mainWindow) {
 
                 return { success }
             } catch (error) {
+                console.error(
+                    `Failed to update the metadata of item ${itemId}:`,
+                    error,
+                )
                 dialog.showErrorBox("Failed to Update Metadata", error.message)
                 return { success: false, error: error.message }
             }
@@ -129,7 +173,9 @@ function register(ipcMain, mainWindow) {
                 throw new Error("No staged editoritems provided")
             }
 
-            item.saveEditorItems(stagedEditorItems)
+            item.saveEditorItems(
+                withMadeModels(item.getEditorItems(), stagedEditorItems),
+            )
 
             // Check if a custom model was added
             const subType = stagedEditorItems?.Item?.Editor?.SubType
@@ -158,10 +204,13 @@ function register(ipcMain, mainWindow) {
             mainWindow.webContents.send("item-updated", updatedItem)
             sendItemUpdateToEditor(itemId, updatedItem)
 
-            console.log(`✅ Saved staged editoritems for: ${item.name}`)
+            console.log(`Saved the staged editoritems of "${item.name}"`)
             return { success: true }
         } catch (error) {
-            console.error("Failed to save staged editoritems:", error)
+            console.error(
+                `Failed to save the staged editoritems of item ${itemId}:`,
+                error,
+            )
             return { success: false, error: error.message }
         }
     })
@@ -220,7 +269,10 @@ function register(ipcMain, mainWindow) {
 
             return { success: true, copied: true, hasObjFiles }
         } catch (error) {
-            console.error("Failed to copy staged files:", error)
+            console.error(
+                `Failed to copy the staged model files of item ${itemId}:`,
+                error,
+            )
             return { success: false, error: error.message }
         }
     })
@@ -244,4 +296,4 @@ function copyRecursive(src, dest, packagePath) {
     }
 }
 
-module.exports = { register }
+module.exports = { register, withMadeModels }

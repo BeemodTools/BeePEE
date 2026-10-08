@@ -769,6 +769,8 @@ function SettingsPage() {
             <Box sx={{ p: 2, borderTop: 1, borderColor: "divider" }}>
                 <Stack direction="row" spacing={1}>
                     <Tooltip title={hasChanges ? "Save changes" : "No unsaved changes"}>
+                        {/* span: the tooltip still works while it's disabled */}
+                        <span style={{ flex: 1, display: "flex" }}>
                         <Button
                             variant="contained"
                             startIcon={
@@ -786,6 +788,7 @@ function SettingsPage() {
                             sx={{ flex: 1 }}>
                             {saving ? "Saving..." : showSaveSuccess ? "Saved!" : "Save"}
                         </Button>
+                        </span>
                     </Tooltip>
                     <Tooltip title={hasChanges ? "Discard changes and close" : "Close"}>
                         <Button

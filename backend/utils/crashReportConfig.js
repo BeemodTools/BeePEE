@@ -1,22 +1,27 @@
 /**
  * Crash report endpoint configuration
  *
- * The placeholders below are replaced at build time by scripts/inject-config.js
- * Set CRASH_REPORT_ENDPOINT (stable) and CRASH_REPORT_ENDPOINT_BETA (beta)
- * environment variables (or .env entries) before running npm run build/publish
+ * Endpoints are injected at BUILD time by scripts/inject-config.js, which
+ * writes them into crashEndpoints.generated.json - a gitignored file next
+ * to this one. Real URLs never live in tracked source, so they can't be
+ * committed by accident. Set CRASH_REPORT_ENDPOINT (stable),
+ * CRASH_REPORT_ENDPOINT_BETA (beta) and SALT (machineId.js's) in .env
+ * before building.
  */
 
+const fs = require("fs")
+const path = require("path")
 const { isBeta } = require("./betaInfo")
 
-// These placeholders get replaced at build time
-// DO NOT commit actual endpoints here - use the inject script
-const CRASH_REPORT_ENDPOINT = "__CRASH_REPORT_ENDPOINT__"
-const CRASH_REPORT_ENDPOINT_BETA = "__CRASH_REPORT_ENDPOINT_BETA__"
+const GENERATED_FILE = path.join(__dirname, "crashEndpoints.generated.json")
 
-// Un-injected placeholders (or empty strings) mean "not configured"
-function resolveEndpoint(value) {
-    if (!value || value.startsWith("__")) return null
-    return value
+function loadEndpoints() {
+    try {
+        return JSON.parse(fs.readFileSync(GENERATED_FILE, "utf-8"))
+    } catch {
+        // Missing file = endpoints not configured (e.g. dev builds)
+        return {}
+    }
 }
 
 /**
@@ -26,13 +31,18 @@ function resolveEndpoint(value) {
  * @returns {string|null} The endpoint URL or null if not configured
  */
 function getCrashReportEndpoint() {
-    if (isBeta()) {
-        return (
-            resolveEndpoint(CRASH_REPORT_ENDPOINT_BETA) ||
-            resolveEndpoint(CRASH_REPORT_ENDPOINT)
-        )
-    }
-    return resolveEndpoint(CRASH_REPORT_ENDPOINT)
+    const g = loadEndpoints()
+    if (isBeta()) return g.endpointBeta || g.endpoint || null
+    return g.endpoint || null
 }
 
-module.exports = { getCrashReportEndpoint }
+/**
+ * SALT, which BeePEE's ID for the PC is hashed with (machineId.js), as the
+ * build put it in
+ * @returns {string|null} null in a dev run (machineId.js reads .env then)
+ */
+function getSalt() {
+    return loadEndpoints().salt || null
+}
+
+module.exports = { getCrashReportEndpoint, getSalt }

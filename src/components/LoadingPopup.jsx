@@ -8,6 +8,7 @@ import {
     Button,
 } from "@mui/material"
 import CloseIcon from "@mui/icons-material/Close"
+import BugReportIcon from "@mui/icons-material/BugReport"
 import { useState, useEffect } from "react"
 
 function LoadingPopup({
@@ -16,6 +17,7 @@ function LoadingPopup({
     message = "Loading...",
     error = null,
     onClose,
+    onReport,
 }) {
     const [showSpinner, setShowSpinner] = useState(false)
 
@@ -190,20 +192,39 @@ function LoadingPopup({
                                 }}>
                                 {error}
                             </Typography>
-                            <Button
-                                variant="outlined"
-                                onClick={onClose}
-                                sx={{
-                                    color: "#ff6666",
-                                    borderColor: "#ff6666",
-                                    "&:hover": {
-                                        borderColor: "#ff8888",
-                                        backgroundColor:
-                                            "rgba(255,102,102,0.1)",
-                                    },
-                                }}>
-                                Close
-                            </Button>
+                            <Box sx={{ display: "flex", gap: 1.5 }}>
+                                {onReport && (
+                                    <Button
+                                        variant="outlined"
+                                        startIcon={<BugReportIcon />}
+                                        onClick={onReport}
+                                        sx={{
+                                            color: "white",
+                                            borderColor: "rgba(255,255,255,0.5)",
+                                            "&:hover": {
+                                                borderColor: "white",
+                                                backgroundColor:
+                                                    "rgba(255,255,255,0.08)",
+                                            },
+                                        }}>
+                                        Report
+                                    </Button>
+                                )}
+                                <Button
+                                    variant="outlined"
+                                    onClick={onClose}
+                                    sx={{
+                                        color: "#ff6666",
+                                        borderColor: "#ff6666",
+                                        "&:hover": {
+                                            borderColor: "#ff8888",
+                                            backgroundColor:
+                                                "rgba(255,102,102,0.1)",
+                                        },
+                                    }}>
+                                    Close
+                                </Button>
+                            </Box>
                         </Box>
                     ) : (
                         <Typography

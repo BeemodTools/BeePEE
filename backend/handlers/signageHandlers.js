@@ -16,6 +16,16 @@ const {
 } = require("../items/itemEditor")
 const { generateSignageMaterial } = require("../utils/signageMaterial")
 const { getSetting, setSetting } = require("../utils/settings")
+const { logger } = require("../utils/logger")
+
+/**
+ * Where a signage style's editable design (.bpsign) is: Clean's is
+ * "<ID>.bpsign", other styles' "<ID>__<STYLE>.bpsign"
+ */
+function designPath(packageDir, signageId, styleId) {
+    const suffix = styleId && styleId !== "BEE2_CLEAN" ? `__${styleId}` : ""
+    return path.join(packageDir, ".bpee", "signs", `${signageId}${suffix}.bpsign`)
+}
 
 // The SVG import folder defaults to a dedicated spot in the app's user-data
 // directory (e.g. %APPDATA%/beepee/signage-svgs) so users have somewhere to
@@ -50,7 +60,10 @@ function register(ipcMain, mainWindow) {
             createSignageEditor(actualSignage, mainWindow)
             return { success: true }
         } catch (error) {
-            console.error("Failed to open signage editor:", error)
+            console.error(
+                `Failed to open the editor of signage ${signage?.id}:`,
+                error,
+            )
             throw error
         }
     })
@@ -74,21 +87,17 @@ function register(ipcMain, mainWindow) {
             const packageDir = getCurrentPackageDir()
             if (!packageDir) return { success: true, design: null }
             // Non-Clean styles keep their own design file next to the base one
-            const suffix =
-                styleId && styleId !== "BEE2_CLEAN" ? `__${styleId}` : ""
-            const designPath = path.join(
-                packageDir,
-                ".bpee",
-                "signs",
-                `${signageId}${suffix}.bpsign`,
-            )
-            if (!fs.existsSync(designPath)) {
+            const file = designPath(packageDir, signageId, styleId)
+            if (!fs.existsSync(file)) {
                 return { success: true, design: null }
             }
-            const design = JSON.parse(fs.readFileSync(designPath, "utf-8"))
+            const design = JSON.parse(fs.readFileSync(file, "utf-8"))
             return { success: true, design }
         } catch (error) {
-            console.error("Failed to read signage design:", error)
+            console.error(
+                `Failed to read the design of signage ${signageId}:`,
+                error,
+            )
             return { success: false, error: error.message }
         }
     })
@@ -149,7 +158,7 @@ function register(ipcMain, mainWindow) {
                 }
                 return { success: true, filePath }
             } catch (error) {
-                console.error("Failed to save file:", error)
+                console.error(`Failed to save ${defaultName}:`, error)
                 return { success: false, error: error.message }
             }
         },
@@ -186,7 +195,10 @@ function register(ipcMain, mainWindow) {
             }
             return { success: true }
         } catch (error) {
-            console.error("Failed to stage signage design:", error)
+            console.error(
+                `Failed to stage the design of signage ${payload?.editId}:`,
+                error,
+            )
             return { success: false, error: error.message }
         }
     })
@@ -194,237 +206,240 @@ function register(ipcMain, mainWindow) {
     // Create a new signage, or update an existing designed one when editId
     // is provided (re-opening a .bpsign in the designer and saving).
     ipcMain.handle("create-signage", async (event, { name, iconPath, iconData, design, editId, materialData, maskData, materialOptions, styleId }) => {
-        try {
-            const packageDir = getCurrentPackageDir()
-            if (!packageDir) {
-                throw new Error("No package is currently loaded")
-            }
-            if (!name || !name.trim()) {
-                throw new Error("Signage name is required")
-            }
+        const title = `${editId ? "Updating" : "Creating"} signage "${name}"`
+        return logger.section(title, async () => {
+            try {
+                const packageDir = getCurrentPackageDir()
+                if (!packageDir) {
+                    throw new Error("No package is currently loaded")
+                }
+                if (!name || !name.trim()) {
+                    throw new Error("Signage name is required")
+                }
 
-            const infoPath = path.join(packageDir, "info.json")
-            const packageInfo = JSON.parse(fs.readFileSync(infoPath, "utf-8"))
+                const infoPath = path.join(packageDir, "info.json")
+                const packageInfo = JSON.parse(fs.readFileSync(infoPath, "utf-8"))
 
-            // Ensure Signage array exists
-            if (!packageInfo.Signage) {
-                packageInfo.Signage = []
-            } else if (!Array.isArray(packageInfo.Signage)) {
-                packageInfo.Signage = [packageInfo.Signage]
-            }
+                // Ensure Signage array exists
+                if (!packageInfo.Signage) {
+                    packageInfo.Signage = []
+                } else if (!Array.isArray(packageInfo.Signage)) {
+                    packageInfo.Signage = [packageInfo.Signage]
+                }
 
-            const isEdit = !!editId
-            const existingIndex = isEdit
-                ? packageInfo.Signage.findIndex((s) => s.ID === editId)
-                : -1
-            if (isEdit && existingIndex === -1) {
-                throw new Error(`Signage not found for editing: ${editId}`)
-            }
+                const isEdit = !!editId
+                const existingIndex = isEdit
+                    ? packageInfo.Signage.findIndex((s) => s.ID === editId)
+                    : -1
+                if (isEdit && existingIndex === -1) {
+                    throw new Error(`Signage not found for editing: ${editId}`)
+                }
 
-            let signageId
-            if (isEdit) {
-                signageId = editId
-            } else {
-                // Generate a unique ID: <PREFIX>_<NAME>_<4-hex chars>.
-                // The prefix is configurable (signageIdPrefix setting).
-                const rawPrefix = getSetting("signageIdPrefix", "SIGN_BPEE")
-                const prefix =
-                    String(rawPrefix)
-                        .replace(/[^a-zA-Z0-9_]/g, "")
-                        .replace(/_+$/, "")
-                        .toUpperCase() || "SIGN_BPEE"
-                const sanitizedName = name
-                    .replace(/[^a-zA-Z0-9]/g, "")
-                    .toUpperCase()
-                const existingIds = new Set([
-                    ...packageInfo.Signage.map((s) => s.ID),
-                    ...packages
-                        .flatMap((p) => p.signages || [])
-                        .map((s) => s.id),
-                ])
-                do {
-                    const uuid = crypto
-                        .randomBytes(2)
-                        .toString("hex")
+                let signageId
+                if (isEdit) {
+                    signageId = editId
+                } else {
+                    // Generate a unique ID: <PREFIX>_<NAME>_<4-hex chars>.
+                    // The prefix is configurable (signageIdPrefix setting).
+                    const rawPrefix = getSetting("signageIdPrefix", "SIGN_BPEE")
+                    const prefix =
+                        String(rawPrefix)
+                            .replace(/[^a-zA-Z0-9_]/g, "")
+                            .replace(/_+$/, "")
+                            .toUpperCase() || "SIGN_BPEE"
+                    const sanitizedName = name
+                        .replace(/[^a-zA-Z0-9]/g, "")
                         .toUpperCase()
-                    signageId = `${prefix}_${sanitizedName}_${uuid}`
-                } while (existingIds.has(signageId))
-            }
-
-            // Which style this save targets. Designer edits carry the style
-            // whose icon was edited; everything else lands on Clean. Icon,
-            // material, and .bpsign filenames get a per-style suffix so a
-            // 1950s edit can never overwrite the Clean assets.
-            const styleKey =
-                isEdit && styleId && /^[A-Za-z0-9_]+$/.test(styleId)
-                    ? styleId
-                    : "BEE2_CLEAN"
-            const bpsignSuffix =
-                styleKey === "BEE2_CLEAN" ? "" : `__${styleKey}`
-            const texName =
-                signageId.toLowerCase() +
-                (styleKey === "BEE2_CLEAN"
-                    ? ""
-                    : `__${styleKey.toLowerCase()}`)
-
-            // Start from the existing entry when editing so other styles,
-            // Hidden, Secondary, etc. are preserved
-            const newSignage = isEdit
-                ? { ...packageInfo.Signage[existingIndex], Name: name.trim() }
-                : { ID: signageId, Name: name.trim() }
-            const resolvedStyles = {}
-
-            // Optional starting icon - stored on the Clean style, written
-            // into resources/BEE2 the same way save-signage stages icons.
-            // Either a picked file (iconPath) or a designer-rasterized PNG
-            // (iconData, a data URL).
-            let iconFilename = null
-            const bee2Dir = path.join(packageDir, "resources", "BEE2")
-            if (iconPath && fs.existsSync(iconPath)) {
-                if (!fs.existsSync(bee2Dir)) {
-                    fs.mkdirSync(bee2Dir, { recursive: true })
+                    const existingIds = new Set([
+                        ...packageInfo.Signage.map((s) => s.ID),
+                        ...packages
+                            .flatMap((p) => p.signages || [])
+                            .map((s) => s.id),
+                    ])
+                    do {
+                        const uuid = crypto
+                            .randomBytes(2)
+                            .toString("hex")
+                            .toUpperCase()
+                        signageId = `${prefix}_${sanitizedName}_${uuid}`
+                    } while (existingIds.has(signageId))
                 }
-                iconFilename = path.basename(iconPath)
-                fs.copyFileSync(iconPath, path.join(bee2Dir, iconFilename))
-            } else if (
-                typeof iconData === "string" &&
-                iconData.startsWith("data:image/png;base64,")
-            ) {
-                if (!fs.existsSync(bee2Dir)) {
-                    fs.mkdirSync(bee2Dir, { recursive: true })
+
+                // Which style this save targets. Designer edits carry the style
+                // whose icon was edited; everything else lands on Clean. Icon,
+                // material, and .bpsign filenames get a per-style suffix so a
+                // 1950s edit can never overwrite the Clean assets.
+                const styleKey =
+                    isEdit && styleId && /^[A-Za-z0-9_]+$/.test(styleId)
+                        ? styleId
+                        : "BEE2_CLEAN"
+                const bpsignSuffix =
+                    styleKey === "BEE2_CLEAN" ? "" : `__${styleKey}`
+                const texName =
+                    signageId.toLowerCase() +
+                    (styleKey === "BEE2_CLEAN"
+                        ? ""
+                        : `__${styleKey.toLowerCase()}`)
+
+                // Start from the existing entry when editing so other styles,
+                // Hidden, Secondary, etc. are preserved
+                const newSignage = isEdit
+                    ? { ...packageInfo.Signage[existingIndex], Name: name.trim() }
+                    : { ID: signageId, Name: name.trim() }
+                const resolvedStyles = {}
+
+                // Optional starting icon - stored on the Clean style, written
+                // into resources/BEE2 the same way save-signage stages icons.
+                // Either a picked file (iconPath) or a designer-rasterized PNG
+                // (iconData, a data URL).
+                let iconFilename = null
+                const bee2Dir = path.join(packageDir, "resources", "BEE2")
+                if (iconPath && fs.existsSync(iconPath)) {
+                    if (!fs.existsSync(bee2Dir)) {
+                        fs.mkdirSync(bee2Dir, { recursive: true })
+                    }
+                    iconFilename = path.basename(iconPath)
+                    fs.copyFileSync(iconPath, path.join(bee2Dir, iconFilename))
+                } else if (
+                    typeof iconData === "string" &&
+                    iconData.startsWith("data:image/png;base64,")
+                ) {
+                    if (!fs.existsSync(bee2Dir)) {
+                        fs.mkdirSync(bee2Dir, { recursive: true })
+                    }
+                    iconFilename = `${texName}.png`
+                    fs.writeFileSync(
+                        path.join(bee2Dir, iconFilename),
+                        Buffer.from(iconData.split(",")[1], "base64"),
+                    )
                 }
-                iconFilename = `${texName}.png`
-                fs.writeFileSync(
-                    path.join(bee2Dir, iconFilename),
-                    Buffer.from(iconData.split(",")[1], "base64"),
-                )
-            }
-            if (iconFilename) {
-                const overlay = `signage/${iconFilename.replace(/\.[^.]+$/, "")}`
-                // Merge so this save only replaces the style being edited
-                newSignage.Styles = {
-                    ...(newSignage.Styles || {}),
-                    [styleKey]: {
+                if (iconFilename) {
+                    const overlay = `signage/${iconFilename.replace(/\.[^.]+$/, "")}`
+                    // Merge so this save only replaces the style being edited
+                    newSignage.Styles = {
+                        ...(newSignage.Styles || {}),
+                        [styleKey]: {
+                            type: "square",
+                            overlay,
+                            icon: iconFilename,
+                        },
+                    }
+                    resolvedStyles[styleKey] = {
                         type: "square",
                         overlay,
-                        icon: iconFilename,
-                    },
+                        icon: path.join(bee2Dir, iconFilename),
+                    }
                 }
-                resolvedStyles[styleKey] = {
-                    type: "square",
-                    overlay,
-                    icon: path.join(bee2Dir, iconFilename),
+
+                if (isEdit) {
+                    packageInfo.Signage[existingIndex] = newSignage
+                } else {
+                    packageInfo.Signage.push(newSignage)
                 }
-            }
+                fs.writeFileSync(infoPath, JSON.stringify(packageInfo, null, 2))
 
-            if (isEdit) {
-                packageInfo.Signage[existingIndex] = newSignage
-            } else {
-                packageInfo.Signage.push(newSignage)
-            }
-            fs.writeFileSync(infoPath, JSON.stringify(packageInfo, null, 2))
-
-            // Store the editable design source (.bpsign) in the package's
-            // .bpee staging folder (excluded from exports) so designer-made
-            // signage can be reopened and edited later. Non-Clean styles get
-            // their own design file next to the base one.
-            if (design) {
-                try {
-                    const signsDir = path.join(packageDir, ".bpee", "signs")
-                    fs.mkdirSync(signsDir, { recursive: true })
-                    fs.writeFileSync(
-                        path.join(signsDir, `${signageId}${bpsignSuffix}.bpsign`),
-                        JSON.stringify(design, null, 2),
-                    )
-                } catch (err) {
-                    console.warn(
-                        "Failed to save signage design source:",
-                        err.message,
-                    )
+                // Store the editable design source (.bpsign) in the package's
+                // .bpee staging folder (excluded from exports) so designer-made
+                // signage can be reopened and edited later. Non-Clean styles get
+                // their own design file next to the base one.
+                if (design) {
+                    try {
+                        const signsDir = path.join(packageDir, ".bpee", "signs")
+                        fs.mkdirSync(signsDir, { recursive: true })
+                        fs.writeFileSync(
+                            path.join(signsDir, `${signageId}${bpsignSuffix}.bpsign`),
+                            JSON.stringify(design, null, 2),
+                        )
+                    } catch (err) {
+                        console.warn(
+                            `Failed to save the design source ${signageId}${bpsignSuffix}.bpsign:`,
+                            err,
+                        )
+                    }
                 }
-            }
 
-            // Generate the in-game Source material (VTF + VMT) from the
-            // designer's transparent render. Non-fatal: if MareTF fails the
-            // signage still saves (the editor thumbnail is unaffected).
-            // texName keys the files, so each style gets its own material.
-            if (materialData) {
-                try {
-                    await generateSignageMaterial({
-                        packageDir,
-                        signageId: texName,
-                        baseData: materialData,
-                        maskData: maskData || null,
-                        options: materialOptions || {},
-                    })
-                } catch (err) {
-                    console.warn(
-                        "Failed to generate signage material:",
-                        err.message,
-                    )
+                // Generate the in-game Source material (VTF + VMT) from the
+                // designer's transparent render. Non-fatal: if MareTF fails the
+                // signage still saves (the editor thumbnail is unaffected).
+                // texName keys the files, so each style gets its own material.
+                if (materialData) {
+                    try {
+                        await generateSignageMaterial({
+                            packageDir,
+                            signageId: texName,
+                            baseData: materialData,
+                            maskData: maskData || null,
+                            options: materialOptions || {},
+                        })
+                    } catch (err) {
+                        console.warn(
+                            `Failed to generate the in-game material ${texName}:`,
+                            err,
+                        )
+                    }
                 }
-            }
 
-            // Update in-memory package
-            const pkg = packages.find((p) => p.packageDir === packageDir)
-            let memSignage
-            if (isEdit && pkg && pkg.signages) {
-                const memIdx = pkg.signages.findIndex((s) => s.id === signageId)
-                const prev = memIdx !== -1 ? pkg.signages[memIdx] : {}
-                memSignage = {
-                    ...prev,
-                    id: signageId,
-                    name: name.trim(),
-                    // keep other resolved styles, update Clean
-                    styles: { ...(prev.styles || {}), ...resolvedStyles },
+                // Update in-memory package
+                const pkg = packages.find((p) => p.packageDir === packageDir)
+                let memSignage
+                if (isEdit && pkg && pkg.signages) {
+                    const memIdx = pkg.signages.findIndex((s) => s.id === signageId)
+                    const prev = memIdx !== -1 ? pkg.signages[memIdx] : {}
+                    memSignage = {
+                        ...prev,
+                        id: signageId,
+                        name: name.trim(),
+                        // keep other resolved styles, update Clean
+                        styles: { ...(prev.styles || {}), ...resolvedStyles },
+                    }
+                    if (memIdx !== -1) pkg.signages[memIdx] = memSignage
+                    else pkg.signages.push(memSignage)
+                } else {
+                    memSignage = {
+                        id: signageId,
+                        name: name.trim(),
+                        hidden: false,
+                        secondary: null,
+                        styles: resolvedStyles,
+                    }
+                    if (pkg) {
+                        if (!pkg.signages) pkg.signages = []
+                        pkg.signages.push(memSignage)
+                    }
                 }
-                if (memIdx !== -1) pkg.signages[memIdx] = memSignage
-                else pkg.signages.push(memSignage)
-            } else {
-                memSignage = {
-                    id: signageId,
-                    name: name.trim(),
-                    hidden: false,
-                    secondary: null,
-                    styles: resolvedStyles,
+
+                // Package changed on disk (working dir) but not the .bpee
+                global.titleManager?.setUnsavedChanges(true)
+
+                // Refresh browser UI
+                mainWindow.webContents.send("package:loaded", {
+                    items: packages
+                        .flatMap((p) => p.items)
+                        .map((i) => i.toJSONWithExistence()),
+                    signages: packages.flatMap((p) => p.signages || []),
+                })
+
+                // Close the designer window if the save came from it
+                const designerWindow = getSignageDesignerWindow()
+                if (designerWindow && !designerWindow.isDestroyed()) {
+                    designerWindow.close()
                 }
-                if (pkg) {
-                    if (!pkg.signages) pkg.signages = []
-                    pkg.signages.push(memSignage)
+
+                if (isEdit) {
+                    // Refresh an already-open editor for this signage, or open one
+                    sendSignageUpdateToEditor(signageId, memSignage)
+                    createSignageEditor(memSignage, mainWindow)
+                } else {
+                    // Open the editor so the user can configure styles right away
+                    createSignageEditor(memSignage, mainWindow)
                 }
+
+                return { success: true, signageId }
+            } catch (error) {
+                console.error(`Failed to save signage "${name}":`, error)
+                return { success: false, error: error.message }
             }
-
-            // Package changed on disk (working dir) but not the .bpee
-            global.titleManager?.setUnsavedChanges(true)
-
-            // Refresh browser UI
-            mainWindow.webContents.send("package:loaded", {
-                items: packages
-                    .flatMap((p) => p.items)
-                    .map((i) => i.toJSONWithExistence()),
-                signages: packages.flatMap((p) => p.signages || []),
-            })
-
-            // Close the designer window if the save came from it
-            const designerWindow = getSignageDesignerWindow()
-            if (designerWindow && !designerWindow.isDestroyed()) {
-                designerWindow.close()
-            }
-
-            if (isEdit) {
-                // Refresh an already-open editor for this signage, or open one
-                sendSignageUpdateToEditor(signageId, memSignage)
-                createSignageEditor(memSignage, mainWindow)
-            } else {
-                // Open the editor so the user can configure styles right away
-                createSignageEditor(memSignage, mainWindow)
-            }
-
-            return { success: true, signageId }
-        } catch (error) {
-            console.error("Failed to create signage:", error)
-            return { success: false, error: error.message }
-        }
+        })
     })
 
     // Delete a signage: remove its info.json entry, clean up the assets we
@@ -432,128 +447,130 @@ function register(ipcMain, mainWindow) {
     // browser, and close its editor window. User-uploaded icons with arbitrary
     // names are left alone to avoid removing assets shared with other signage.
     ipcMain.handle("delete-signage", async (event, { signageId }) => {
-        try {
-            const packageDir = getCurrentPackageDir()
-            if (!packageDir) throw new Error("No package is currently loaded")
+        return logger.section(`Deleting signage ${signageId}`, async () => {
+            try {
+                const packageDir = getCurrentPackageDir()
+                if (!packageDir) throw new Error("No package is currently loaded")
 
-            const infoPath = path.join(packageDir, "info.json")
-            const packageInfo = JSON.parse(fs.readFileSync(infoPath, "utf-8"))
-            if (!Array.isArray(packageInfo.Signage)) {
-                packageInfo.Signage = packageInfo.Signage
-                    ? [packageInfo.Signage]
-                    : []
-            }
-            const idx = packageInfo.Signage.findIndex((s) => s.ID === signageId)
-            if (idx === -1) throw new Error(`Signage not found: ${signageId}`)
-            const removedEntry = packageInfo.Signage[idx]
-            packageInfo.Signage.splice(idx, 1)
-            fs.writeFileSync(infoPath, JSON.stringify(packageInfo, null, 2))
-
-            const rm = (p) => {
-                try {
-                    if (fs.existsSync(p)) fs.unlinkSync(p)
-                } catch (err) {
-                    console.warn("Failed to remove", p, err.message)
+                const infoPath = path.join(packageDir, "info.json")
+                const packageInfo = JSON.parse(fs.readFileSync(infoPath, "utf-8"))
+                if (!Array.isArray(packageInfo.Signage)) {
+                    packageInfo.Signage = packageInfo.Signage
+                        ? [packageInfo.Signage]
+                        : []
                 }
-            }
+                const idx = packageInfo.Signage.findIndex((s) => s.ID === signageId)
+                if (idx === -1) throw new Error(`Signage not found: ${signageId}`)
+                const removedEntry = packageInfo.Signage[idx]
+                packageInfo.Signage.splice(idx, 1)
+                fs.writeFileSync(infoPath, JSON.stringify(packageInfo, null, 2))
 
-            // Delete the assets the entry's Styles actually declare (icons
-            // live under resources/BEE2/, overlays under resources/materials/
-            // as .vmt + .vtf) - imported packages keep these at arbitrary
-            // nested paths, not our id-named convention. Assets still
-            // referenced by another signage (shared art, Secondary pairs)
-            // are kept.
-            const styleAssets = (sig) => {
-                const icons = []
-                const overlays = []
-                for (const cfg of Object.values(sig?.Styles || {})) {
-                    if (cfg && typeof cfg === "object") {
-                        if (cfg.icon) icons.push(String(cfg.icon))
-                        if (cfg.overlay) overlays.push(String(cfg.overlay))
+                const rm = (p) => {
+                    try {
+                        if (fs.existsSync(p)) fs.unlinkSync(p)
+                    } catch (err) {
+                        console.warn(`Failed to delete ${p}:`, err)
                     }
                 }
-                return { icons, overlays }
-            }
-            const norm = (p) => String(p).replace(/\\/g, "/").toLowerCase()
-            const stillUsed = { icons: new Set(), overlays: new Set() }
-            for (const s of packageInfo.Signage) {
-                const a = styleAssets(s)
-                a.icons.forEach((i) => stillUsed.icons.add(norm(i)))
-                a.overlays.forEach((o) => stillUsed.overlays.add(norm(o)))
-            }
-            // Only ever delete inside the package directory
-            const inPkg = (rel) => {
-                const full = path.resolve(packageDir, rel)
-                return full.startsWith(path.resolve(packageDir) + path.sep)
-                    ? full
-                    : null
-            }
-            const mine = styleAssets(removedEntry)
-            for (const icon of mine.icons) {
-                if (stillUsed.icons.has(norm(icon))) continue
-                const full = inPkg(path.join("resources", "BEE2", icon))
-                if (full) rm(full)
-            }
-            for (const overlay of mine.overlays) {
-                if (stillUsed.overlays.has(norm(overlay))) continue
-                for (const suffix of [".vmt", ".vtf", "_selfillummask.vtf"]) {
-                    const full = inPkg(
-                        path.join("resources", "materials", overlay + suffix),
-                    )
+
+                // Delete the assets the entry's Styles actually declare (icons
+                // live under resources/BEE2/, overlays under resources/materials/
+                // as .vmt + .vtf) - imported packages keep these at arbitrary
+                // nested paths, not our id-named convention. Assets still
+                // referenced by another signage (shared art, Secondary pairs)
+                // are kept.
+                const styleAssets = (sig) => {
+                    const icons = []
+                    const overlays = []
+                    for (const cfg of Object.values(sig?.Styles || {})) {
+                        if (cfg && typeof cfg === "object") {
+                            if (cfg.icon) icons.push(String(cfg.icon))
+                            if (cfg.overlay) overlays.push(String(cfg.overlay))
+                        }
+                    }
+                    return { icons, overlays }
+                }
+                const norm = (p) => String(p).replace(/\\/g, "/").toLowerCase()
+                const stillUsed = { icons: new Set(), overlays: new Set() }
+                for (const s of packageInfo.Signage) {
+                    const a = styleAssets(s)
+                    a.icons.forEach((i) => stillUsed.icons.add(norm(i)))
+                    a.overlays.forEach((o) => stillUsed.overlays.add(norm(o)))
+                }
+                // Only ever delete inside the package directory
+                const inPkg = (rel) => {
+                    const full = path.resolve(packageDir, rel)
+                    return full.startsWith(path.resolve(packageDir) + path.sep)
+                        ? full
+                        : null
+                }
+                const mine = styleAssets(removedEntry)
+                for (const icon of mine.icons) {
+                    if (stillUsed.icons.has(norm(icon))) continue
+                    const full = inPkg(path.join("resources", "BEE2", icon))
                     if (full) rm(full)
                 }
-            }
-            // Remove id-named assets, including per-style variants
-            // (<id>__<style>.*) generated by designer edits of other styles
-            const idl = signageId.toLowerCase()
-            const rmMatching = (dir, prefix, prefixLower) => {
-                if (!fs.existsSync(dir)) return
-                for (const f of fs.readdirSync(dir)) {
-                    const fl = f.toLowerCase()
-                    if (
-                        fl === prefixLower ||
-                        fl.startsWith(`${prefixLower}.`) ||
-                        fl.startsWith(`${prefixLower}__`) ||
-                        fl.startsWith(`${prefixLower}_selfillummask`)
-                    ) {
-                        rm(path.join(dir, f))
+                for (const overlay of mine.overlays) {
+                    if (stillUsed.overlays.has(norm(overlay))) continue
+                    for (const suffix of [".vmt", ".vtf", "_selfillummask.vtf"]) {
+                        const full = inPkg(
+                            path.join("resources", "materials", overlay + suffix),
+                        )
+                        if (full) rm(full)
                     }
                 }
+                // Remove id-named assets, including per-style variants
+                // (<id>__<style>.*) generated by designer edits of other styles
+                const idl = signageId.toLowerCase()
+                const rmMatching = (dir, prefix, prefixLower) => {
+                    if (!fs.existsSync(dir)) return
+                    for (const f of fs.readdirSync(dir)) {
+                        const fl = f.toLowerCase()
+                        if (
+                            fl === prefixLower ||
+                            fl.startsWith(`${prefixLower}.`) ||
+                            fl.startsWith(`${prefixLower}__`) ||
+                            fl.startsWith(`${prefixLower}_selfillummask`)
+                        ) {
+                            rm(path.join(dir, f))
+                        }
+                    }
+                }
+                rmMatching(path.join(packageDir, "resources", "BEE2"), signageId, idl)
+                rmMatching(
+                    path.join(packageDir, "resources", "materials", "signage"),
+                    signageId,
+                    idl,
+                )
+                rmMatching(
+                    path.join(packageDir, ".bpee", "signs"),
+                    signageId,
+                    signageId.toLowerCase(),
+                )
+
+                // Update in-memory package
+                const pkg = packages.find((p) => p.packageDir === packageDir)
+                if (pkg && pkg.signages) {
+                    pkg.signages = pkg.signages.filter((s) => s.id !== signageId)
+                }
+
+                // Package changed on disk (working dir) but not the .bpee
+                global.titleManager?.setUnsavedChanges(true)
+
+                // Refresh browser UI
+                mainWindow.webContents.send("package:loaded", {
+                    items: packages
+                        .flatMap((p) => p.items)
+                        .map((i) => i.toJSONWithExistence()),
+                    signages: packages.flatMap((p) => p.signages || []),
+                })
+
+                return { success: true }
+            } catch (error) {
+                console.error(`Failed to delete signage ${signageId}:`, error)
+                return { success: false, error: error.message }
             }
-            rmMatching(path.join(packageDir, "resources", "BEE2"), signageId, idl)
-            rmMatching(
-                path.join(packageDir, "resources", "materials", "signage"),
-                signageId,
-                idl,
-            )
-            rmMatching(
-                path.join(packageDir, ".bpee", "signs"),
-                signageId,
-                signageId.toLowerCase(),
-            )
-
-            // Update in-memory package
-            const pkg = packages.find((p) => p.packageDir === packageDir)
-            if (pkg && pkg.signages) {
-                pkg.signages = pkg.signages.filter((s) => s.id !== signageId)
-            }
-
-            // Package changed on disk (working dir) but not the .bpee
-            global.titleManager?.setUnsavedChanges(true)
-
-            // Refresh browser UI
-            mainWindow.webContents.send("package:loaded", {
-                items: packages
-                    .flatMap((p) => p.items)
-                    .map((i) => i.toJSONWithExistence()),
-                signages: packages.flatMap((p) => p.signages || []),
-            })
-
-            return { success: true }
-        } catch (error) {
-            console.error("Failed to delete signage:", error)
-            return { success: false, error: error.message }
-        }
+        })
     })
 
     // List SVGs from the user's configured import folder (signageSvgFolder
@@ -586,7 +603,7 @@ function register(ipcMain, mainWindow) {
                 .filter(Boolean)
             return { success: true, files }
         } catch (error) {
-            console.error("Failed to list SVG folder:", error)
+            console.error("Failed to list the signage SVG folder:", error)
             return { success: false, error: error.message, files: [] }
         }
     })
@@ -635,172 +652,212 @@ function register(ipcMain, mainWindow) {
 
     // Save signage
     ipcMain.handle("save-signage", async (event, signageData) => {
-        try {
-            const packageDir = getCurrentPackageDir()
-            if (!packageDir) {
-                throw new Error("No package is currently loaded")
-            }
-
-            const infoPath = path.join(packageDir, "info.json")
-            const packageInfo = JSON.parse(fs.readFileSync(infoPath, "utf-8"))
-
-            // Ensure Signage array exists
-            if (!packageInfo.Signage) {
-                packageInfo.Signage = []
-            } else if (!Array.isArray(packageInfo.Signage)) {
-                packageInfo.Signage = [packageInfo.Signage]
-            }
-
-            // Find and update signage in Signage array
-            const signageIndex = packageInfo.Signage.findIndex(
-                (s) => s.ID === signageData.originalId
-            )
-
-            if (signageIndex !== -1) {
-                // Convert formData back to BEE2 format
-                // Need to process styles to remove resolved icon paths
-                const processedStyles = {}
-                const bee2Dir = path.join(packageDir, "resources", "BEE2")
-
-                // Ensure resources/BEE2 directory exists
-                if (!fs.existsSync(bee2Dir)) {
-                    fs.mkdirSync(bee2Dir, { recursive: true })
+        const title = `Saving signage "${signageData?.name}"`
+        return logger.section(title, async () => {
+            try {
+                const packageDir = getCurrentPackageDir()
+                if (!packageDir) {
+                    throw new Error("No package is currently loaded")
                 }
 
-                for (const [styleId, styleConfig] of Object.entries(
-                    signageData.styles || {}
-                )) {
-                    if (typeof styleConfig === "string") {
-                        // Style inheritance reference
-                        processedStyles[styleId] = styleConfig
-                    } else {
-                        let iconFilename = ""
+                const infoPath = path.join(packageDir, "info.json")
+                const packageInfo = JSON.parse(fs.readFileSync(infoPath, "utf-8"))
 
-                        // Handle staged icon - copy to resources/BEE2
-                        if (styleConfig._stagedIconPath) {
-                            const stagedPath = styleConfig._stagedIconPath
-                            iconFilename = path.basename(stagedPath)
-                            const destPath = path.join(bee2Dir, iconFilename)
+                // Ensure Signage array exists
+                if (!packageInfo.Signage) {
+                    packageInfo.Signage = []
+                } else if (!Array.isArray(packageInfo.Signage)) {
+                    packageInfo.Signage = [packageInfo.Signage]
+                }
 
-                            // Copy the file
-                            fs.copyFileSync(stagedPath, destPath)
-                            console.log(`Copied signage icon: ${stagedPath} -> ${destPath}`)
-                        } else if (styleConfig.icon) {
-                            // Extract filename from existing icon path
-                            const iconPath = styleConfig.icon
-                            if (
-                                iconPath.includes("resources/BEE2") ||
-                                iconPath.includes("resources\\BEE2")
-                            ) {
-                                const match = iconPath.match(
-                                    /resources[/\\]BEE2[/\\](.+)/
-                                )
-                                iconFilename = match ? match[1].replace(/\\/g, "/") : path.basename(iconPath)
-                            } else {
-                                iconFilename = path.basename(iconPath)
-                            }
-                        }
+                // Find and update signage in Signage array
+                const signageIndex = packageInfo.Signage.findIndex(
+                    (s) => s.ID === signageData.originalId
+                )
 
-                        // Auto-generate overlay from icon filename (without extension)
-                        const iconBaseName = iconFilename.replace(/\.[^.]+$/, "")
-                        const overlay = iconBaseName ? `signage/${iconBaseName}` : ""
+                if (signageIndex !== -1) {
+                    // Convert formData back to BEE2 format
+                    // Need to process styles to remove resolved icon paths
+                    const processedStyles = {}
+                    const bee2Dir = path.join(packageDir, "resources", "BEE2")
 
-                        processedStyles[styleId] = {
-                            type: "square",
-                            overlay: overlay,
-                            icon: iconFilename,
-                        }
+                    // Ensure resources/BEE2 directory exists
+                    if (!fs.existsSync(bee2Dir)) {
+                        fs.mkdirSync(bee2Dir, { recursive: true })
                     }
-                }
 
-                const updatedSignage = {
-                    ID: signageData.id,
-                    Name: signageData.name,
-                }
+                    for (const [styleId, styleConfig] of Object.entries(
+                        signageData.styles || {}
+                    )) {
+                        if (typeof styleConfig === "string") {
+                            // Style inheritance reference
+                            processedStyles[styleId] = styleConfig
+                        } else {
+                            let iconFilename = ""
 
-                // Only include optional fields if they have values
-                if (signageData.hidden) {
-                    updatedSignage.Hidden = "1"
-                }
-                if (signageData.secondary) {
-                    updatedSignage.Secondary = signageData.secondary
-                }
-                if (Object.keys(processedStyles).length > 0) {
-                    updatedSignage.Styles = processedStyles
-                }
+                            // Handle staged icon - copy to resources/BEE2
+                            if (styleConfig._stagedIconPath) {
+                                const stagedPath = styleConfig._stagedIconPath
+                                iconFilename = path.basename(stagedPath)
+                                const destPath = path.join(bee2Dir, iconFilename)
 
-                packageInfo.Signage[signageIndex] = updatedSignage
+                                // Copy the file
+                                fs.copyFileSync(stagedPath, destPath)
+                                logger.debug(
+                                    `Copied the ${styleId} icon from ${stagedPath}`,
+                                )
 
-                // Write to disk
-                fs.writeFileSync(infoPath, JSON.stringify(packageInfo, null, 2))
-
-                // Update in-memory signage in package
-                const pkg = packages.find((p) => p.packageDir === packageDir)
-                if (pkg && pkg.signages) {
-                    const memSignageIndex = pkg.signages.findIndex(
-                        (s) => s.id === signageData.originalId
-                    )
-                    if (memSignageIndex !== -1) {
-                        // Re-resolve icon paths for in-memory version
-                        const resolvedStyles = {}
-                        for (const [styleId, styleConfig] of Object.entries(
-                            signageData.styles || {}
-                        )) {
-                            if (typeof styleConfig === "string") {
-                                resolvedStyles[styleId] = styleConfig
-                            } else {
-                                resolvedStyles[styleId] = { ...styleConfig }
-                                // Re-resolve icon path if needed
-                                if (
-                                    styleConfig.icon &&
-                                    !styleConfig.icon.includes(packageDir)
-                                ) {
-                                    resolvedStyles[styleId].icon = path.join(
+                                // The icon is that picture now, not what the
+                                // style's design made: the design goes, so
+                                // the designer starts from the picture and
+                                // can't put the old icon back
+                                for (const id of new Set([
+                                    signageData.originalId,
+                                    signageData.id,
+                                ])) {
+                                    const design = designPath(
                                         packageDir,
-                                        "resources/BEE2",
-                                        styleConfig.icon
+                                        id,
+                                        styleId,
                                     )
+                                    if (fs.existsSync(design)) {
+                                        fs.rmSync(design)
+                                        logger.info(
+                                            `Removed the design of the ${styleId} icon of signage ${id}, replaced by a picture`,
+                                        )
+                                    }
+                                }
+                            } else if (styleConfig.icon) {
+                                // Extract filename from existing icon path
+                                const iconPath = styleConfig.icon
+                                if (
+                                    iconPath.includes("resources/BEE2") ||
+                                    iconPath.includes("resources\\BEE2")
+                                ) {
+                                    const match = iconPath.match(
+                                        /resources[/\\]BEE2[/\\](.+)/
+                                    )
+                                    iconFilename = match ? match[1].replace(/\\/g, "/") : path.basename(iconPath)
+                                } else {
+                                    iconFilename = path.basename(iconPath)
                                 }
                             }
+
+                            // Auto-generate overlay from icon filename (without extension)
+                            const iconBaseName = iconFilename.replace(/\.[^.]+$/, "")
+                            const overlay = iconBaseName ? `signage/${iconBaseName}` : ""
+
+                            processedStyles[styleId] = {
+                                type: "square",
+                                overlay: overlay,
+                                icon: iconFilename,
+                            }
                         }
-
-                        pkg.signages[memSignageIndex] = {
-                            id: signageData.id,
-                            name: signageData.name,
-                            hidden: signageData.hidden || false,
-                            secondary: signageData.secondary || null,
-                            styles: resolvedStyles,
-                        }
-
-                        // Send update to editor
-                        sendSignageUpdateToEditor(
-                            signageData.originalId,
-                            pkg.signages[memSignageIndex]
-                        )
-
-                        // Package changed but the .bpee wasn't rewritten
-                        global.titleManager?.setUnsavedChanges(true)
-
-                        // Also update browser
-                        mainWindow.webContents.send("package:loaded", {
-                            items: packages
-                                .flatMap((p) => p.items)
-                                .map((i) => i.toJSONWithExistence()),
-                            signages: packages.flatMap((p) => p.signages || []),
-                        })
                     }
-                }
 
-                return { success: true }
-            } else {
-                throw new Error(
-                    `Signage not found in info.json: ${signageData.originalId}`
+                    const updatedSignage = {
+                        ID: signageData.id,
+                        Name: signageData.name,
+                    }
+
+                    // Only include optional fields if they have values
+                    if (signageData.hidden) {
+                        updatedSignage.Hidden = "1"
+                    }
+                    if (signageData.secondary) {
+                        updatedSignage.Secondary = signageData.secondary
+                    }
+                    if (Object.keys(processedStyles).length > 0) {
+                        updatedSignage.Styles = processedStyles
+                    }
+
+                    packageInfo.Signage[signageIndex] = updatedSignage
+
+                    // Write to disk
+                    fs.writeFileSync(infoPath, JSON.stringify(packageInfo, null, 2))
+
+                    // Update in-memory signage in package
+                    const pkg = packages.find((p) => p.packageDir === packageDir)
+                    if (pkg && pkg.signages) {
+                        const memSignageIndex = pkg.signages.findIndex(
+                            (s) => s.id === signageData.originalId
+                        )
+                        if (memSignageIndex !== -1) {
+                            // Re-resolve icon paths for in-memory version
+                            const resolvedStyles = {}
+                            for (const [styleId, styleConfig] of Object.entries(
+                                signageData.styles || {}
+                            )) {
+                                if (typeof styleConfig === "string") {
+                                    resolvedStyles[styleId] = styleConfig
+                                } else if (styleConfig._stagedIconPath) {
+                                    // The picked icon was copied into
+                                    // resources/BEE2 above: point at that copy
+                                    // (not the user's file), as a reload would
+                                    resolvedStyles[styleId] = {
+                                        ...processedStyles[styleId],
+                                        icon: path.join(
+                                            bee2Dir,
+                                            processedStyles[styleId].icon,
+                                        ),
+                                    }
+                                } else {
+                                    resolvedStyles[styleId] = { ...styleConfig }
+                                    // Re-resolve icon path if needed
+                                    if (
+                                        styleConfig.icon &&
+                                        !styleConfig.icon.includes(packageDir)
+                                    ) {
+                                        resolvedStyles[styleId].icon = path.join(
+                                            packageDir,
+                                            "resources/BEE2",
+                                            styleConfig.icon
+                                        )
+                                    }
+                                }
+                            }
+
+                            pkg.signages[memSignageIndex] = {
+                                id: signageData.id,
+                                name: signageData.name,
+                                hidden: signageData.hidden || false,
+                                secondary: signageData.secondary || null,
+                                styles: resolvedStyles,
+                            }
+
+                            // Send update to editor
+                            sendSignageUpdateToEditor(
+                                signageData.originalId,
+                                pkg.signages[memSignageIndex]
+                            )
+
+                            // Package changed but the .bpee wasn't rewritten
+                            global.titleManager?.setUnsavedChanges(true)
+
+                            // Also update browser
+                            mainWindow.webContents.send("package:loaded", {
+                                items: packages
+                                    .flatMap((p) => p.items)
+                                    .map((i) => i.toJSONWithExistence()),
+                                signages: packages.flatMap((p) => p.signages || []),
+                            })
+                        }
+                    }
+
+                    return { success: true }
+                } else {
+                    throw new Error(
+                        `Signage not found in info.json: ${signageData.originalId}`
+                    )
+                }
+            } catch (error) {
+                console.error(
+                    `Failed to save signage "${signageData?.name}":`,
+                    error,
                 )
+                return { success: false, error: error.message }
             }
-        } catch (error) {
-            console.error("Failed to save signage:", error)
-            return { success: false, error: error.message }
-        }
+        })
     })
 }
 

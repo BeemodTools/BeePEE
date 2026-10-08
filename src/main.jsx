@@ -1,3 +1,5 @@
+// First, so the logs of every module below reach the log file
+import "./utils/logForwarding.js"
 import { StrictMode } from "react"
 import { createRoot } from "react-dom/client"
 import { ThemeProvider } from "@mui/material/styles"

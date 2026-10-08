@@ -5,6 +5,8 @@ const {
     getVTFPathFromImagePath,
     updateEditorItemsWithVTF,
 } = require("./utils/vtfConverter")
+const { syncPaletteName } = require("./models/items")
+const { APP_VERSION } = require("./utils/keyvalues")
 
 /**
  * Handles VTF conversion for palette images referenced in editoritems.json
@@ -53,13 +55,51 @@ async function handleVTFConversion(
         if (!subType.Palette) subType.Palette = {}
         subType.Palette.Image = `palette/bpee/${itemId}/${itemId}`
 
-        console.log(
-            `Successfully converted icon to VTF and updated reference: ${vtfPath}`,
-        )
+        console.log(`Converted the palette icon to ${vtfPath}`)
     } catch (error) {
-        console.error(`Failed to handle VTF conversion:`, error)
+        // The caller logs the error with its stack
+        console.error(`Failed to convert ${iconPath} to VTF: ${error.message}`)
         throw error
     }
+}
+
+/**
+ * A description as VDF JSON keeps it: a string, or with several lines,
+ * "desc_N" keys (properties.txt's and info.txt's repeated "" keys). A raw
+ * string containing newlines would produce invalid VDF on export, which
+ * hangs BEEmod on startup.
+ */
+function descriptionValue(description) {
+    if (typeof description !== "string" || !/\r?\n/.test(description)) {
+        return description
+    }
+    const lines = {}
+    description.split(/\r?\n/).forEach((line, index) => {
+        lines[`desc_${index}`] = line
+    })
+    return lines
+}
+
+/**
+ * Save the item's description in info.json, where info.txt's is: its "Item"
+ * block's "Description" (for all of its styles)
+ */
+function saveInfoDescription(packagePath, itemId, description) {
+    const infoPath = path.join(packagePath, "info.json")
+    const info = JSON.parse(fs.readFileSync(infoPath, "utf-8"))
+    const keyOf = (object, key) =>
+        Object.keys(object).find((k) => k.toLowerCase() === key.toLowerCase())
+    const itemsKey = keyOf(info, "Item")
+    const block = itemsKey
+        ? [info[itemsKey]]
+              .flat()
+              .find((each) => each && each[keyOf(each, "ID")] === itemId)
+        : null
+    if (!block) throw new Error(`info.json has no item ${itemId}`)
+    const value = descriptionValue(description)
+    block[keyOf(block, "Description") ?? "Description"] = value
+    fs.writeFileSync(infoPath, JSON.stringify(info, null, 4))
+    return value
 }
 
 async function saveItem(item) {
@@ -91,18 +131,19 @@ async function saveItem(item) {
 
     // Validate file structure
     if (!editorItems?.Item?.Editor?.SubType) {
-        throw new Error("Invalid editor items format")
+        throw new Error(
+            "This item has no Editor block in its editoritems (BEE2 uses it itself; it's never in the palette), so it can't be saved here",
+        )
     }
     if (!properties?.Properties) {
         throw new Error("Invalid properties format")
     }
 
-    // Update editor items
-    if (Array.isArray(editorItems.Item.Editor.SubType)) {
-        editorItems.Item.Editor.SubType[0].Name = item.name
-    } else {
-        editorItems.Item.Editor.SubType.Name = item.name
-    }
+    // Update editor items: the name, and the palette name with it
+    const subType = [editorItems.Item.Editor.SubType].flat()[0]
+    const oldName = subType.Name
+    subType.Name = item.name
+    syncPaletteName(subType, oldName)
 
     // Update MovementHandle if provided
     if (item.movementHandle) {
@@ -115,17 +156,12 @@ async function saveItem(item) {
         ...item.details,
     }
 
-    // The editor sends Description as a plain (possibly multiline) string,
-    // but properties.txt stores multiline descriptions as repeated ""-keyed
-    // lines (loaded as desc_N keys). A raw string containing newlines would
-    // produce invalid VDF on export, which hangs BEEmod on startup.
-    const description = properties.Properties.Description
-    if (typeof description === "string" && /\r?\n/.test(description)) {
-        const descriptionLines = {}
-        description.split(/\r?\n/).forEach((line, index) => {
-            descriptionLines[`desc_${index}`] = line
-        })
-        properties.Properties.Description = descriptionLines
+    // The editor sends Description as a plain (possibly multiline) string
+    properties.Properties.Description = descriptionValue(
+        properties.Properties.Description,
+    )
+    if (properties.Properties.Description === undefined) {
+        delete properties.Properties.Description
     }
 
     // Handle staged icon if provided
@@ -214,7 +250,7 @@ async function saveItem(item) {
                 )
 
                 console.log(
-                    `Icon updated: ${stagedIconPath} -> ${targetIconPath}`,
+                    `Updated the icon of "${item.name}": ${targetIconPath}`,
                 )
 
                 // Also convert to VTF and update editoritems.json if the item uses palette images
@@ -227,49 +263,59 @@ async function saveItem(item) {
                         item.id,
                     )
                 } catch (error) {
-                    console.error("Failed to convert icon to VTF:", error)
+                    console.error(
+                        `Failed to make the palette icon of "${item.name}", saving without it:`,
+                        error,
+                    )
                     // Don't throw here - let the save continue even if VTF conversion fails
                 }
             } else {
-                console.warn(`Staged icon file not found: ${stagedIconPath}`)
+                console.warn(
+                    `Skipped the new icon of "${item.name}", its file is missing: ${stagedIconPath}`,
+                )
             }
         } catch (error) {
-            console.error("Failed to process staged icon:", error)
+            console.error(`Failed to update the icon of "${item.name}":`, error)
             // Don't throw here - let the save continue even if icon fails
         }
     }
 
     // Save the files
+    let infoDescription
     try {
         fs.writeFileSync(editorItemsPath, JSON.stringify(editorItems, null, 4))
         fs.writeFileSync(propertiesPath, JSON.stringify(properties, null, 4))
+        // The description the editor showed from info.txt
+        if (typeof item.infoDescription === "string") {
+            infoDescription = saveInfoDescription(
+                item.packagePath ||
+                    path.dirname(path.dirname(item.fullItemPath)),
+                item.id,
+                item.infoDescription,
+            )
+        }
 
-        // Update metadata lastModified timestamp if item has metadata
-        if (item.metadata) {
-            const metaPath = path.join(item.fullItemPath, "meta.json")
-            if (fs.existsSync(metaPath)) {
-                try {
-                    const metadata = JSON.parse(
-                        fs.readFileSync(metaPath, "utf-8"),
-                    )
-                    metadata.lastModified = new Date().toISOString()
-                    fs.writeFileSync(
-                        metaPath,
-                        JSON.stringify(metadata, null, 4),
-                    )
-                } catch (error) {
-                    console.warn(
-                        "Failed to update metadata timestamp:",
-                        error.message,
-                    )
-                }
+        // The item's meta.json: when it was saved, and with which BeePEE
+        // (the Meta tab says)
+        const metaPath = path.join(item.fullItemPath, "meta.json")
+        if (fs.existsSync(metaPath)) {
+            try {
+                const metadata = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
+                metadata.lastModified = new Date().toISOString()
+                metadata.lastSavedVersion = APP_VERSION
+                fs.writeFileSync(metaPath, JSON.stringify(metadata, null, 4))
+            } catch (error) {
+                console.warn(
+                    `Failed to update the meta.json of "${item.name}":`,
+                    error,
+                )
             }
         }
     } catch (error) {
         throw new Error(`Failed to write files: ${error.message}`)
     }
 
-    return { editorItems, properties }
+    return { editorItems, properties, infoDescription }
 }
 
-module.exports = { saveItem }
+module.exports = { saveItem, descriptionValue }

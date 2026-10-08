@@ -1,15 +1,148 @@
 {
     "versions": [
         {
+            "version": "1.2.0-beta.5",
+            "date": "2026-10-8",
+            "notes": [
+                "This is a BETA build - it is bug prone. If you encounter any bugs go to Help > Report Bug. Please stress test as much as you can!"
+            ],
+            "changes": {
+                "fixed": [
+                    "Else conditions applying to all instances except for the item"
+                ]
+            }
+        },
+        {
+            "version": "1.2.0-beta.4",
+            "date": "2026-10-8",
+            "notes": [
+                "This is a BETA build - it is bug prone. If you encounter any bugs go to Help > Report Bug. Please stress test as much as you can!",
+                "Autopacking now follows scripts and particles. Please try Autopack again on items that use them."
+            ],
+            "changes": {
+                "added": [
+                    "BeePM name, version, BEE2 version and needed packages when making a package",
+                    "Export to BeePM (File menu)",
+                    "Package authors, set when the package is made"
+                ],
+                "fixed": [
+                    "Security fix for bug reports",
+                    "Autopacking missing scripts that other scripts include, and particles with their models and materials",
+                    "Launch BEEMod after export not working while BeePM is hooked (packages go in BeePM's dev folder now)",
+                    "Signage designer shapes being slightly off center, and white corners when zoomed out"
+                ],
+                "changed": [
+                    "BeePM Package Info is now part of Package Information",
+                    "Package version goes past the one on BeePM automatically"
+                ]
+            }
+        },
+        {
+            "version": "1.2.0-beta.3",
+            "date": "2026-10-6",
+            "notes": [
+                "This is a BETA build - it is bug prone. If you encounter any bugs go to Help > Report Bug. Please stress test as much as you can!",
+                "This beta adds the Leak Finder. Please note that the leak finder is in its basic stage."
+            ],
+            "changes": {
+                "added": [
+                    "Leak Finder: instances with stuff behind their surface get a warning in the Instances tab, click it to see it in 3D",
+                    "Meta tab says if BeePEE made the item and which version last saved it"
+                ],
+                "fixed": [
+                    "Instance names going back after saving",
+                    "Removed instances coming back",
+                    "Make Model failing on instances that weren't saved yet",
+                    "New items getting ITEM_CUBE as their type instead of their id",
+                    "Items with inputs missing ConnectionCount, and blank names in Portal 2's palette",
+                    "Signage pngs not opening in the designer",
+                    "Being asked to name entities that can't have inputs or outputs"
+                ],
+                "changed": [
+                    "Model page opens the Model Generator for generated models, also from a .bpee",
+                    "Preview only shows when the package has the generated model's preview"
+                ]
+            }
+        },
+        {
+            "version": "1.2.0-beta.2",
+            "date": "2026-10-5",
+            "notes": [
+                "This is a BETA build - it is bug prone. If you encounter any bugs go to Help > Report Bug. Please stress test as much as you can!",
+                "This fix primarly focuses on package compatibility. Please try to import packages to see if BeePEE will crash out."
+            ],
+            "changes": {
+                "added": [
+                    "Report button when a package fails to open",
+                    "Autopack again button in the Instances tab"
+                ],
+                "fixed": [
+                    "Conditions getting deleted or broken when opening, saving or exporting items (ones BeePEE can't edit show as Raw VBSP blocks now)",
+                    "Make Model picking the wrong model for some cube types, timers, etc.",
+                    "Some packages failing to open",
+                    "Missing descriptions and icons on some items",
+                    "Gel blobs and cubes showing the wrong model in generated models",
+                    "Icon preview sometimes not opening (it's resizable now too)",
+                    "Some autopacking logic"
+                ],
+                "changed": [
+                    "Icon maker reuses the models from Make Model",
+                    "Bug reports leave out personal details like your username and PC name client side"
+                ]
+            }
+        },
+        {
             "version": "1.2.0-beta.1",
+            "date": "2026-10-2",
+            "notes": [
+                "This is a BETA build - it is bug prone. If you encounter any bugs go to Help > Report Bug. Please stress test as much as you can!",
+                "Model generation was rewritten for this beta. Please try Make Model on as many items as you can, especially items with props and items with multiple models (timers, cube types, etc.)"
+            ],
+            "changes": {
+                "added": [
+                    "Model generation without Java or Python (way faster)",
+                    "Skins, tints, overlays, decals and entities to generated models",
+                    "Icon maker (Info tab > Make Icon)",
+                    "Icon maker models to the Model Chooser",
+                    "Warning for missing or unmounted files in instances",
+                    "Autopacker can now pack from VPKs"
+                ],
+                "fixed": [
+                    "Props and brushes in generated models being rotated, mirrored or missing",
+                    "Glass, invisible and hidden stuff showing up wrong in generated models",
+                    "Make Model failing on big models",
+                    "Item editor saying it saved when it didnt",
+                    "Autopacking missing custom files",
+                    "Signage designer export size, text shifting and double click to edit",
+                    "Uploading PNGs for signage doing nothing",
+                    "Input delay resetting to 0",
+                    "Empty tiles not filling the last row"
+                ],
+                "changed": [
+                    "New cartoon style for generated models",
+                    "Autopacking skips base game, DLC and BEE2 files",
+                    "Cleaner logs",
+                    "Model preview opens after Make Model and keeps its camera",
+                    "Icon buttons reordered (Preview, Make Icon, Change Icon)"
+                ]
+            }
+        },
+        {
+            "version": "1.1.1-beta.1",
             "date": "2026-7-10",
             "notes": [
                 "This is a BETA build - it is bug prone. If you encounter any bugs go to Help > Report Bug. Please stress test as much as you can!"
             ],
             "changes": {
-                "added": [],
+                "added": [
+                    "Flip horizontal / vertical to the signage editor",
+                    "Layers to the signage editor",
+                    "Text to the signage editor",
+                    "📼 JAX📼 — 7/9/2026 4:23 AM - more people and the bots tho pleasseee"
+                ],
                 "fixed": [
-                    "Output delay value resets to 0 when edited in item outputs - removed the Delay and Max Fires fields from outputs, since the editoritems output format can't store them (they only apply to inputs)"
+                    "Output delay value resets to 0 when edited in item outputs (i removed it LOL it wasnt supposed to be there)",
+                    "Package load times from a .bee_pack doubling"
                 ]
             }
         }

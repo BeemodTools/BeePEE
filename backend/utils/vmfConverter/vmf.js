@@ -60,6 +60,8 @@ function parseDisplacement(block) {
         startPosition: [start[0], start[1], start[2]],
         normals,
         distances,
+        // Per-vertex blend between $basetexture (0) and $basetexture2 (255)
+        alphas: readRows(getBlocks(children, "alphas")[0]),
     }
 }
 
@@ -107,28 +109,30 @@ function parseEntity(block) {
 /**
  * Parse VMF text
  * @param {string} text
- * @returns {{solids: Array, entities: Array}}
+ * @returns {{solids: Array, entities: Array}} Solids of brush entities carry
+ *   their entity as `owner` (world brushes have none)
  */
 function parseVmf(text) {
     const solids = []
     const entities = []
 
-    const walk = (nodes) => {
+    const walk = (nodes, owner) => {
         for (const node of nodes) {
             if (node.children === undefined) continue
             const key = node.key.toLowerCase()
             if (key === "solid") {
-                solids.push(parseSolid(node))
+                solids.push({ ...parseSolid(node), owner })
             } else if (key === "entity") {
-                entities.push(parseEntity(node))
-                walk(node.children)
+                const entity = parseEntity(node)
+                entities.push(entity)
+                walk(node.children, entity)
             } else {
-                walk(node.children)
+                walk(node.children, owner)
             }
         }
     }
 
-    walk(parseKeyValues(text))
+    walk(parseKeyValues(text), null)
     return { solids, entities }
 }
 

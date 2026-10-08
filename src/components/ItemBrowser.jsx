@@ -3,29 +3,29 @@ import { Box, Grid } from "@mui/material"
 import { useNavigate } from "react-router-dom"
 import ItemIcon from "./ItemIcon"
 import AddButton from "./AddItem"
+import { useGridColumns } from "../utils/useGridColumns"
 
 function ItemBrowser() {
     const [items, setItems] = useState([])
-    const [gridSize, setGridSize] = useState({ cols: 12, rows: 8 })
+    // The empty cells fill the last row (and one more)
+    const [gridRef, columns] = useGridColumns()
     const navigate = useNavigate()
 
     useEffect(() => {
-        console.log("Component mounted, setting up package listener")
-
         // Fetch current items on mount (in case package was already loaded)
         const fetchCurrentItems = async () => {
             try {
                 const currentItems = await window.package.getCurrentItems?.()
                 if (currentItems && currentItems.length > 0) {
                     console.log(
-                        "ItemBrowser: Fetched current items on mount:",
-                        currentItems.length,
+                        `Loaded item list from the open package (${currentItems.length} items)`,
                     )
                     setItems(currentItems)
                 }
             } catch (error) {
                 console.log(
-                    "ItemBrowser: No current items available (this is normal for new packages)",
+                    "Could not fetch the current items, waiting for a package to load:",
+                    error,
                 )
             }
         }
@@ -33,32 +33,23 @@ function ItemBrowser() {
 
         // Handle initial package load and updates (includes create/delete)
         const handlePackageLoaded = (data) => {
-            console.log("Package loaded callback fired")
             // Handle both old format (items array) and new format ({ items, signages })
             const loadedItems = Array.isArray(data) ? data : data?.items || []
-            console.log("loadedItems:", loadedItems)
-            console.log("loadedItems length:", loadedItems?.length)
+            console.log(`Loaded item list (${loadedItems.length} items)`)
 
             setItems(loadedItems)
-            console.log("setItems called")
         }
 
         // Handle package close
         const handlePackageClosed = () => {
-            console.log("ItemBrowser: Package closed, clearing items")
+            console.log("Cleared the item list because the package was closed")
             setItems([])
         }
 
         // Handle individual item updates
         const handleItemUpdated = (event, updatedItem) => {
-            console.log(
-                "ItemBrowser received item update:",
-                updatedItem?.id,
-                updatedItem?.icon,
-            )
-
             if (!updatedItem || !updatedItem.id) {
-                console.warn("Received invalid item update:", updatedItem)
+                console.warn("Skipped an item update that has no item id")
                 return
             }
 
@@ -67,13 +58,8 @@ function ItemBrowser() {
                     (item) => item.id === updatedItem.id,
                 )
                 if (itemIndex === -1) {
-                    console.log(
-                        "Item not found in current list, adding:",
-                        updatedItem.id,
-                    )
                     return [...currentItems, updatedItem]
                 } else {
-                    console.log("Updating existing item:", updatedItem.id)
                     return currentItems.map((item) =>
                         item.id === updatedItem.id ? updatedItem : item,
                     )
@@ -88,7 +74,7 @@ function ItemBrowser() {
 
         // Add a manual refresh function to window for debugging
         window.refreshItemBrowser = () => {
-            console.log("Manual refresh triggered")
+            console.log("Triggered a manual refresh of the item browser")
             // Try to reload the current package
             if (window.package && window.package.reloadPackage) {
                 window.package.reloadPackage()
@@ -97,38 +83,17 @@ function ItemBrowser() {
 
         // Cleanup function - important for preventing duplicate listeners!
         return () => {
-            console.log("Cleaning up ItemBrowser listeners")
             // Note: The current preload doesn't support unregistering, but this prevents memory leaks
         }
     }, [])
 
-    useEffect(() => {
-        const updateGridSize = () => {
-            const itemSize = 96
-            const spacing = 8
-            const totalItemSize = itemSize + spacing
-
-            const cols = Math.floor((window.innerWidth - 40) / totalItemSize)
-            const rows = Math.floor((window.innerHeight - 40) / totalItemSize)
-            setGridSize({ cols, rows })
-        }
-
-        updateGridSize()
-        window.addEventListener("resize", updateGridSize)
-        return () => window.removeEventListener("resize", updateGridSize)
-    }, [])
-
     const handleEditItem = (itemId) => {
-        console.log("Attempting to open editor for item:", itemId)
-        console.log(
-            "Current items in state:",
-            items.map((i) => i.id),
-        )
-
         // Always use the current state to find the item
         const currentItem = items.find((i) => i.id === itemId)
         if (!currentItem) {
-            console.warn("Item no longer exists, skipping editor open:", itemId)
+            console.warn(
+                `Skipped opening the editor for item ${itemId}, it no longer exists`,
+            )
             return
         }
 
@@ -143,14 +108,14 @@ function ItemBrowser() {
         }
     }
 
-    const itemsInLastRow = items.length % gridSize.cols
+    const itemsInLastRow = items.length % columns
     const placeholdersToCompleteRow =
-        itemsInLastRow === 0 ? 0 : gridSize.cols - itemsInLastRow
-    const totalPlaceholders = placeholdersToCompleteRow + gridSize.cols
+        itemsInLastRow === 0 ? 0 : columns - itemsInLastRow
+    const totalPlaceholders = placeholdersToCompleteRow + columns
 
     return (
         <Box sx={{ width: "100%", height: "100vh" }}>
-            <Grid container spacing={1} sx={{ py: 2, px: 2 }}>
+            <Grid container ref={gridRef} spacing={1} sx={{ py: 2, px: 2 }}>
                 {/* Actual items */}
                 {items.map((item) => (
                     <Grid key={item.id} size="auto">

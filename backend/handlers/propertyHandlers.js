@@ -4,7 +4,12 @@
 
 const { dialog } = require("electron")
 const { packages } = require("../packageManager")
-const { sendItemUpdateToEditor } = require("../items/itemEditor")
+const { findPortal2Resources } = require("../data")
+const {
+    sendItemUpdateToEditor,
+    createTimerColorsWindow,
+    sendTimerColorsToEditor,
+} = require("../items/itemEditor")
 
 function register(ipcMain, mainWindow) {
     // Input management handlers
@@ -150,6 +155,11 @@ function register(ipcMain, mainWindow) {
                 unnamedEntities: [],
                 invalidNames: [],
             }
+            // Which unnamed entities could have inputs or outputs
+            let fgdEntities = null
+            try {
+                fgdEntities = (await findPortal2Resources())?.entities ?? null
+            } catch {}
 
             // Get entities from all valid instances only
             for (const [instanceIndex, instanceData] of Object.entries(
@@ -166,7 +176,8 @@ function register(ipcMain, mainWindow) {
                     Object.assign(allEntities, entities)
 
                     // Get validation issues for this instance
-                    const issues = instance.getEntityValidationIssues()
+                    const issues =
+                        instance.getEntityValidationIssues(fgdEntities)
                     // Add instance index to each issue for context
                     issues.unnamedEntities.forEach((e) => {
                         e.instanceIndex = instanceIndex
@@ -263,6 +274,36 @@ function register(ipcMain, mainWindow) {
         }
     })
 
+    // The Default Colors window of an item's Color variable, with the
+    // colors its editor has
+    ipcMain.handle("open-timer-colors", async (event, { itemId, colors }) => {
+        try {
+            const item = packages
+                .flatMap((p) => p.items)
+                .find((i) => i.id === itemId)
+            if (!item) throw new Error("Item not found")
+            createTimerColorsWindow(item, colors)
+            return { success: true }
+        } catch (error) {
+            console.error(
+                `Failed to open the Default Colors of ${itemId}:`,
+                error,
+            )
+            return { success: false, error: error.message }
+        }
+    })
+
+    // Its colors, to the item's editor (which saves them with the item)
+    ipcMain.handle(
+        "timer-colors-send-to-editor",
+        async (event, { itemId, colors }) => {
+            if (sendTimerColorsToEditor(itemId, colors)) {
+                return { success: true }
+            }
+            return { success: false, error: "The item's editor isn't open" }
+        },
+    )
+
     // Instance names handlers
     ipcMain.handle("get-instance-names", async (event, { itemId }) => {
         try {
@@ -277,7 +318,10 @@ function register(ipcMain, mainWindow) {
             const names = item.getInstanceNames()
             return { success: true, names }
         } catch (error) {
-            console.error("Error getting instance names:", error)
+            console.error(
+                `Failed to get the instance names of item ${itemId}:`,
+                error,
+            )
             return { success: false, error: error.message }
         }
     })

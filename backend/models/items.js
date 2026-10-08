@@ -2,6 +2,237 @@ const fs = require("fs")
 const path = require("path")
 const { Instance } = require("../items/Instance")
 const { vmfStatsCache } = require("../utils/vmfParser")
+const { itemFrame, instanceBehindSurface } = require("../utils/behindSurface")
+const {
+    GENERATED_HEADER,
+    sameEntries,
+    stringify,
+    toObject,
+} = require("../utils/keyvalues")
+const {
+    RAW_BLOCK,
+    readText,
+    lineEnd,
+    conditionEntries,
+    rawBlocks,
+    withConditions,
+    isEmpty,
+    withHeader,
+    rawBlockObject,
+} = require("../utils/vbspConditions")
+const {
+    COLOR_WIDGET,
+    FIRST_TIMER,
+    LAST_TIMER,
+    EMPTY_COLOR,
+    hasColors,
+    colorDefaults,
+    colorGroupId,
+    withColors,
+} = require("../utils/itemColors")
+
+/** "1 case", "3 cases" */
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
+
+/** `object`'s value for `key` in any case (VDF keys aren't case-sensitive) */
+function getKey(object, key) {
+    if (!object || typeof object !== "object") return undefined
+    if (key in object) return object[key]
+    const lower = key.toLowerCase()
+    const found = Object.keys(object).find((k) => k.toLowerCase() === lower)
+    return found === undefined ? undefined : object[found]
+}
+
+/**
+ * editoritems with its first "Item" block as Item. A file can have several:
+ * BEE2 exports the others along with the item (see saveEditorItems).
+ */
+function mainItemBlock(editoritems) {
+    const key = Object.keys(editoritems ?? {}).find(
+        (k) => k.toLowerCase() === "item",
+    )
+    if (key === undefined) return editoritems
+    const { [key]: block, ...rest } = editoritems
+    return { ...rest, Item: Array.isArray(block) ? block[0] : block }
+}
+
+/**
+ * An editoritems instance's VMF path: from its block's "Name", or BEE2's
+ * short form, the path itself ("0" "instances/...vmf")
+ */
+function instanceName(instance) {
+    return typeof instance === "string" ? instance : getKey(instance, "Name")
+}
+
+/**
+ * Blocks that are results (BEE2 runs them), rather than tests. Not debug:
+ * BEE2 has it as a test too (it prints and passes)
+ */
+const RESULT_BLOCKS = new Set([
+    "changeInstance",
+    "addOverlay",
+    "addGlobalEnt",
+    "offsetInstance",
+    "mapInstVar",
+    "setInstVar",
+    "randomSelection",
+    "setColor",
+])
+
+/** Whether a condition (as a JS object) has an Else */
+const hasElse = (condition) =>
+    Object.keys(condition ?? {}).some((key) => key.toLowerCase() === "else")
+
+/** A block BeePEE can't write, as it writes it */
+function unknownBlock(block) {
+    return { unknown: { type: block.type, data: block } }
+}
+
+/** Whether there's a file at the path */
+function isFile(file) {
+    try {
+        return fs.statSync(file).isFile()
+    } catch {
+        return false
+    }
+}
+
+/**
+ * An item's icon: properties' "Icon" (in resources/BEE2/items), or else
+ * editoritems' palette image. That's an icon BeePEE saved (in
+ * resources/BEE2/items, without its first folder, "palette/"), or the
+ * texture Portal 2's editor shows: a VTF in materials/models/props_map_editor.
+ */
+function iconPathOf(packagePath, properties, subType) {
+    const icon = properties?.Icon?.["0"]
+    if (icon) return path.join(packagePath, "resources/BEE2/items", icon)
+
+    const image = getKey(getKey(subType, "Palette"), "Image")
+    if (typeof image !== "string" || !image.trim()) return null
+    const imagePath = image.trim().replace(/\\/g, "/")
+    const saved = path.join(
+        packagePath,
+        "resources/BEE2/items",
+        imagePath.split("/").slice(1).join("/"),
+    )
+    const texture = path.join(
+        packagePath,
+        "resources/materials/models/props_map_editor",
+        `${imagePath.replace(/\.[^./]*$/, "")}.vtf`,
+    )
+    return !isFile(saved) && isFile(texture) ? texture : saved
+}
+
+/** "ITEM_PLACEMENT_HELPER" -> "Placement Helper" */
+function nameFromId(id) {
+    return String(id ?? "")
+        .replace(/^ITEM_/i, "")
+        .split("_")
+        .filter(Boolean)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(" ")
+}
+
+/** BEE2's antline indicators, which take inputs without ConnectionCount */
+const ANTLINE_ITEMS = new Set([
+    "ITEM_INDICATOR_PANEL",
+    "ITEM_INDICATOR_PANEL_TIMER",
+    "ITEM_INDICATOR_TOGGLE",
+])
+
+/**
+ * Give an editoritems Item block with inputs the ConnectionCount property
+ * ($connectioncount). BEE2's docs have it "Required for all items accepting
+ * an input", and BEE2 warns "Items with inputs must have ConnectionCount to
+ * work!" without it. Index 1, as the game's items have it (variables start
+ * at 2, see saveVariables).
+ * @returns {boolean} Whether it was added
+ */
+function addConnectionCount(item) {
+    const inputs = getKey(getKey(item, "Exporting"), "Inputs")
+    if (!inputs || typeof inputs !== "object" || !Object.keys(inputs).length) {
+        return false
+    }
+    if (ANTLINE_ITEMS.has(String(getKey(item, "Type") ?? "").toUpperCase())) {
+        return false
+    }
+    const key =
+        Object.keys(item).find((k) => k.toLowerCase() === "properties") ??
+        "Properties"
+    const properties = item[key] ?? {}
+    if (typeof properties !== "object" || Array.isArray(properties)) return false
+    if (getKey(properties, "ConnectionCount") !== undefined) return false
+    item[key] = { ConnectionCount: { DefaultValue: 0, Index: 1 }, ...properties }
+    return true
+}
+
+/**
+ * Keep an editoritems SubType's palette name (the Tooltip Portal 2's palette
+ * shows) as its name in capitals, as BEE2's items have it: a blank one gets
+ * the name, and one that was the old name follows a rename. Any other is the
+ * package's own (like a localized name) and stays.
+ * @param {object} subType - Its Name is the new name
+ * @param {string} [oldName] - Its name before, when it was renamed
+ * @returns {boolean} Whether it changed
+ */
+function syncPaletteName(subType, oldName = getKey(subType, "Name")) {
+    const palette = getKey(subType, "Palette")
+    const name = String(getKey(subType, "Name") ?? "").trim().toUpperCase()
+    if (!palette || typeof palette !== "object" || Array.isArray(palette)) {
+        return false
+    }
+    if (!name) return false
+    const key =
+        Object.keys(palette).find((k) => k.toLowerCase() === "tooltip") ??
+        "Tooltip"
+    const tooltip = String(palette[key] ?? "").trim().toUpperCase()
+    const before = String(oldName ?? "").trim().toUpperCase()
+    if (tooltip && (tooltip !== before || before === name)) return false
+    palette[key] = name
+    return true
+}
+
+/** The styles an item's folder is taken from first */
+const PREFERRED_STYLES = ["BEE2_CLEAN", "ANY_STYLE"]
+
+/**
+ * The folder (items/<folder>) of an item in info.json: from its first
+ * version that names one (several "Version" blocks are an array), in
+ * BEE2_CLEAN, ANY_STYLE or else the first style. A style's value is a
+ * folder, another style's ("<BEE2_CLEAN>"), or a block with a "Folder" or
+ * the "Base" style it builds on.
+ * @returns {string|null}
+ */
+function itemFolderOf(itemJSON) {
+    const versions = [getKey(itemJSON, "Version")].flat().filter(Boolean)
+    for (const version of versions) {
+        const styles = getKey(version, "Styles")
+        if (!styles || typeof styles !== "object") continue
+        const folderOf = (style, seen) => {
+            const key = Object.keys(styles).find(
+                (k) => k.toLowerCase() === String(style).toLowerCase(),
+            )
+            if (key === undefined || seen.has(key)) return null
+            seen.add(key)
+            const value = styles[key]
+            if (typeof value === "string") {
+                const same = value.trim().match(/^<(.+)>$/)
+                return same ? folderOf(same[1], seen) : value.trim() || null
+            }
+            const folder = getKey(value, "Folder")
+            if (typeof folder === "string" && folder.trim()) return folder.trim()
+            const base = getKey(value, "Base")
+            return typeof base === "string"
+                ? folderOf(base.trim().replace(/^<(.+)>$/, "$1"), seen)
+                : null
+        }
+        for (const style of [...PREFERRED_STYLES, ...Object.keys(styles)]) {
+            const folder = folderOf(style, new Set())
+            if (folder) return folder
+        }
+    }
+    return null
+}
 
 class Item {
     constructor({ packagePath, itemJSON }) {
@@ -9,23 +240,11 @@ class Item {
         this.id = itemJSON.ID
 
         //get item folder from styles
-        const styles = itemJSON.Version?.Styles || {}
-        let folder =
-            styles.BEE2_CLEAN || styles.ANY_STYLE || Object.values(styles)[0]
-
-        //handle both string and object folder formats
-        if (typeof folder === "object") {
-            // Find any property that looks like "folder" (case insensitive)
-            const folderKey = Object.keys(folder).find(
-                (key) => key.toLowerCase() === "folder",
-            )
-            if (folderKey) {
-                folder = folder[folderKey]
-            }
-        }
-
+        const folder = itemFolderOf(itemJSON)
         if (!folder) {
-            throw new Error(`No item folder found for item ${this.id}`)
+            throw new Error(
+                `Item ${this.id}: info.json names no folder for it (Version > Styles)`,
+            )
         }
 
         const fullItemPath = path.join(
@@ -41,64 +260,56 @@ class Item {
             meta: path.join(fullItemPath, "meta.json"),
         }
 
-        // Always set vbsp_config path (now using .json instead of .cfg). Creation happens on save.
+        // The VBSP config: vbsp_config.cfg, as the package has it. Items
+        // imported before BeePEE kept it have vbsp_config.json instead (read,
+        // and replaced by the .cfg when their conditions are saved)
+        this.paths.vbsp_cfg = path.join(fullItemPath, "vbsp_config.cfg")
         this.paths.vbsp_config = path.join(fullItemPath, "vbsp_config.json")
 
         //parse editoritems file
+        const where = `items/${folder.toLowerCase()}`
         if (!fs.existsSync(this.paths.editorItems)) {
-            throw new Error("Missing editoritems.json!")
+            throw new Error(`Item ${this.id}: ${where} has no editoritems`)
         }
 
-        const parsedEditoritems = JSON.parse(
-            fs.readFileSync(this.paths.editorItems, "utf-8"),
-        )
+        const parsedEditoritems = this.getEditorItems()
 
-        //handle both single SubType and array of SubTypes
-        const editor = parsedEditoritems.Item.Editor
-        const subType = Array.isArray(editor.SubType)
-            ? editor.SubType[0]
-            : editor.SubType
-
-        if (!subType?.Name) {
-            throw new Error("Invalid editoritems - missing SubType Name")
+        //handle both single SubType and array of SubTypes. Items BEE2
+        //uses itself (like ITEM_PLACEMENT_HELPER) have no Editor block: they
+        //never show in the palette, and are named after their ID.
+        const editor = getKey(parsedEditoritems.Item, "Editor")
+        this.hasEditor = Boolean(editor)
+        const subType = editor ? [getKey(editor, "SubType")].flat()[0] : undefined
+        const name = editor ? getKey(subType, "Name") : nameFromId(this.id)
+        if (!name) {
+            throw new Error(
+                `Item ${this.id}: ${where}/editoritems has no Editor > SubType > Name`,
+            )
         }
 
-        this.name = subType.Name
+        this.name = name
 
         // Get MovementHandle from editor properties
-        this.movementHandle = editor.MovementHandle || "HANDLE_4_DIRECTIONS"
+        this.movementHandle =
+            getKey(editor, "MovementHandle") || "HANDLE_4_DIRECTIONS"
 
-        //Get details
-        if (!fs.existsSync(this.paths.properties)) {
-            throw new Error("Missing properties.json!")
+        //Get details. Items BEE2 uses itself (no Editor block) can do
+        //without a properties file: they have no palette entry to describe.
+        let parsedProperties = { Properties: {} }
+        if (fs.existsSync(this.paths.properties)) {
+            parsedProperties = JSON.parse(
+                fs.readFileSync(this.paths.properties, "utf-8"),
+            )
+        } else if (this.hasEditor) {
+            throw new Error(`Item ${this.id}: ${where} has no properties`)
         }
-
-        const parsedProperties = JSON.parse(
-            fs.readFileSync(this.paths.properties, "utf-8"),
-        )
 
         this.details = parsedProperties["Properties"]
+        // BEE2 shows two descriptions one after the other: info.txt's, for
+        // all of the item's styles, and properties.txt's (details)
+        this.infoDescription = getKey(itemJSON, "Description") ?? null
 
-        //Get icon
-        //Since the icon is only half :( we need to merge with full path
-        const iconPath = parsedProperties.Properties?.Icon?.["0"]
-        this.icon = iconPath
-            ? path.join(packagePath, "resources/BEE2/items", iconPath)
-            : null
-
-        if (!this.icon) {
-            //Icon isnt defined in properties, get it from editoritems
-            const rawIconPath = subType.Palette?.Image
-            if (rawIconPath) {
-                // Remove "palette/" prefix and build full path
-                const cleanIconPath = rawIconPath.split("/").slice(1).join("/")
-                this.icon = path.join(
-                    packagePath,
-                    "resources/BEE2/items",
-                    cleanIconPath,
-                )
-            }
-        }
+        this.icon = iconPathOf(packagePath, parsedProperties.Properties, subType)
 
         this.itemFolder = folder.toLowerCase()
         this.fullItemPath = fullItemPath
@@ -118,31 +329,32 @@ class Item {
             // propagate back into editoritems.json or the exported package
             if (key === "NaN" || key.startsWith("pending_")) {
                 console.warn(
-                    `Skipping invalid instance key "${key}" in editoritems for item ${this.id}`,
+                    `Skipped invalid instance key "${key}" in the editoritems of item ${this.id}`,
                 )
                 return
             }
             this.instances[key] = {
-                Name: instance.Name,
+                Name: instanceName(instance),
                 source: "editor",
             }
         })
 
         // VBSP instances are now imported on-demand via autoImportVBSPInstances()
         // This is called during package import/load, not every time the item is created
-
-        console.log(`Added item: ${this.name} (id: ${this.id})`)
     }
 
     extractChangeInstances(obj, result) {
-        // Recursively search for "Changeinstance" keys in the JSON structure
+        // Recursively search for "Changeinstance" keys in the JSON
+        // structure, in any case (as BEE2 reads them: "changeInstance" too)
         if (typeof obj === "object" && obj !== null) {
             for (const [key, value] of Object.entries(obj)) {
-                if (key === "Changeinstance") {
-                    if (Array.isArray(value)) {
-                        result.push(...value)
-                    } else {
-                        result.push(value)
+                if (key.toLowerCase() === "changeinstance") {
+                    // Not "" (which removes the instance) or "<ITEM_ID:name>"
+                    // (an item's own instance, listed with it): not files
+                    for (const instance of [value].flat()) {
+                        const vmf =
+                            typeof instance === "string" ? instance.trim() : ""
+                        if (vmf && !/^<.*>$/.test(vmf)) result.push(vmf)
                     }
                 } else if (typeof value === "object") {
                     this.extractChangeInstances(value, result)
@@ -160,58 +372,16 @@ class Item {
         // Check if already imported
         const meta = this.getMetadata()
         if (meta._vbsp_imported) {
-            console.log(`⏭️ VBSP instances already imported for ${this.name}`)
-            return false
-        }
-
-        // Check if VBSP config exists
-        if (!this.paths.vbsp_config || !fs.existsSync(this.paths.vbsp_config)) {
-            console.log(`⏭️ No VBSP config found for ${this.name}`)
             return false
         }
 
         try {
-            const vbspData = JSON.parse(
-                fs.readFileSync(this.paths.vbsp_config, "utf-8"),
-            )
-
-            // Extract Changeinstance entries from the JSON structure
-            const changeInstances = []
-            this.extractChangeInstances(vbspData, changeInstances)
-
-            if (changeInstances.length === 0) {
-                console.log(
-                    `⏭️ No changeinstance blocks found in VBSP config for ${this.name}`,
-                )
+            if (this.conditionInstances().length === 0) {
                 return false
             }
 
-            console.log(
-                `🔄 Auto-importing ${changeInstances.length} VBSP instances for ${this.name}...`,
-            )
-
-            // Start index after the last editor instance
-            let nextIndex = Object.keys(this.instances).length
-
-            for (const instancePath of changeInstances) {
-                // Only add if not already present (case-insensitive comparison)
-                if (
-                    !Object.values(this.instances).some(
-                        (inst) =>
-                            inst.Name.toLowerCase() ===
-                            instancePath.toLowerCase(),
-                    )
-                ) {
-                    this.instances[nextIndex.toString()] = {
-                        Name: instancePath,
-                        source: "vbsp",
-                    }
-                    nextIndex++
-                }
-            }
-
-            // Auto-register VBSP instances in editoritems.json
-            this.autoRegisterVbspInstances(changeInstances)
+            // Registered in editoritems.json, and read back from there
+            this.reloadInstances()
 
             // Mark as imported in meta.json
             // Frontend will check this flag and skip auto-conversion
@@ -219,17 +389,55 @@ class Item {
             meta.isImported = true
             this.saveMetadata(meta)
 
-            console.log(
-                `✅ Auto-imported and saved ${changeInstances.length} VBSP instances for ${this.name}`,
-            )
             return true
         } catch (error) {
             console.error(
-                `❌ Failed to auto-import VBSP instances for ${this.name}:`,
-                error.message,
+                `Failed to import the VBSP instances of "${this.name}":`,
+                error,
             )
             return false
         }
+    }
+
+    /** An instance's file, to compare instances by (any case, BEE2/ or not) */
+    instanceFileKey(instanceName) {
+        return this.fixInstancePath(instanceName ?? "").toLowerCase()
+    }
+
+    /**
+     * The instance files the item's VBSP conditions switch to
+     * (changeInstance), as they're written there
+     */
+    conditionInstances() {
+        if (!this.hasVbspConfig()) return []
+        try {
+            const targets = []
+            this.extractChangeInstances(this.readVbspObject(), targets)
+            return targets
+        } catch (error) {
+            console.error(
+                `Failed to read the VBSP config of "${this.name}":`,
+                error,
+            )
+            return []
+        }
+    }
+
+    /**
+     * Register the instances the item's conditions switch to in its
+     * editoritems.json, so they show in the Instances tab, but not the ones
+     * the user removed (metadata.removedInstances)
+     */
+    registerConditionInstances() {
+        const removed = new Set(
+            (this.getMetadata().removedInstances ?? []).map((name) =>
+                this.instanceFileKey(name),
+            ),
+        )
+        const targets = this.conditionInstances().filter(
+            (target) => !removed.has(this.instanceFileKey(target)),
+        )
+        if (targets.length > 0) this.autoRegisterVbspInstances(targets)
     }
 
     autoRegisterVbspInstances(changeInstances) {
@@ -254,7 +462,6 @@ class Item {
             )
 
             let addedCount = 0
-            let skippedCount = 0
 
             // Process each VBSP instance
             for (const instancePath of changeInstances) {
@@ -264,7 +471,6 @@ class Item {
                         instancePath.toLowerCase(),
                     )
                 ) {
-                    skippedCount++
                     continue
                 }
 
@@ -296,7 +502,7 @@ class Item {
                     vmfStats = vmfStatsCache.getStats(fullInstancePath)
                 } catch (error) {
                     console.warn(
-                        `Could not get VMF stats for VBSP instance ${instancePath}: ${error.message}`,
+                        `Failed to get the VMF stats of VBSP instance ${instancePath} of "${this.name}": ${error.message}`,
                     )
                     const meta = this.getMetadata()
                     if (!meta.instanceErrors) {
@@ -319,31 +525,29 @@ class Item {
             if (addedCount > 0) {
                 this.saveEditorItems(editoritems)
                 console.log(
-                    `Auto-registered ${addedCount} VBSP instances in editoritems.json for ${this.name}`,
+                    `Registered ${plural(addedCount, "VBSP instance")} in the editoritems of "${this.name}"`,
                 )
-                if (skippedCount > 0) {
-                    console.log(
-                        `Skipped ${skippedCount} already registered VBSP instances`,
-                    )
-                }
             }
         } catch (error) {
             console.error(
-                `Failed to auto-register VBSP instances for ${this.name}:`,
-                error.message,
+                `Failed to register the VBSP instances of "${this.name}" in its editoritems:`,
+                error,
             )
         }
     }
 
     reloadInstances() {
+        // The instances the conditions switch to go into editoritems.json
+        // first: the instances are what the file has, under its indices (an
+        // index of its own here could be another instance's there)
+        this.registerConditionInstances()
+
         // Clear current instances
         this.instances = {}
         this._loadedInstances.clear()
 
         // Re-read editoritems file
-        const parsedEditoritems = JSON.parse(
-            fs.readFileSync(this.paths.editorItems, "utf-8"),
-        )
+        const parsedEditoritems = this.getEditorItems()
 
         // Re-add editor instances
         const editorInstances =
@@ -352,12 +556,12 @@ class Item {
             // Skip keys written by the old NaN-index bug
             if (key === "NaN" || key.startsWith("pending_")) {
                 console.warn(
-                    `Skipping invalid instance key "${key}" in editoritems for item ${this.id}`,
+                    `Skipped invalid instance key "${key}" in the editoritems of item ${this.id}`,
                 )
                 return
             }
             this.instances[key] = {
-                Name: instance.Name,
+                Name: instanceName(instance),
                 // Preserve VMF stats if they exist in the saved data
                 ...(instance.EntityCount !== undefined && {
                     EntityCount: instance.EntityCount,
@@ -370,47 +574,6 @@ class Item {
                 }),
             }
         })
-
-        // Re-add VBSP instances if they exist
-        if (this.paths.vbsp_config && fs.existsSync(this.paths.vbsp_config)) {
-            try {
-                const vbspData = JSON.parse(
-                    fs.readFileSync(this.paths.vbsp_config, "utf-8"),
-                )
-
-                // Extract Changeinstance entries from the JSON structure
-                const changeInstances = []
-                this.extractChangeInstances(vbspData, changeInstances)
-
-                // Start index after the last editor instance
-                let nextIndex = Object.keys(this.instances).length
-
-                for (const instancePath of changeInstances) {
-                    // Only add if not already present (case-insensitive comparison)
-                    if (
-                        !Object.values(this.instances).some(
-                            (inst) =>
-                                inst.Name.toLowerCase() ===
-                                instancePath.toLowerCase(),
-                        )
-                    ) {
-                        this.instances[nextIndex.toString()] = {
-                            Name: instancePath,
-                            source: "vbsp",
-                        }
-                        nextIndex++
-                    }
-                }
-
-                // Auto-register VBSP instances in editoritems.json
-                this.autoRegisterVbspInstances(changeInstances)
-            } catch (error) {
-                console.error(
-                    `Failed to parse VBSP config for ${this.name}:`,
-                    error.message,
-                )
-            }
-        }
     }
 
     /**
@@ -420,22 +583,19 @@ class Item {
     reloadItemData() {
         try {
             // Re-read editoritems file
-            const parsedEditoritems = JSON.parse(
-                fs.readFileSync(this.paths.editorItems, "utf-8"),
-            )
+            const parsedEditoritems = this.getEditorItems()
 
             // Update name from editoritems
-            const editor = parsedEditoritems.Item.Editor
-            const subType = Array.isArray(editor.SubType)
-                ? editor.SubType[0]
-                : editor.SubType
-
-            if (subType?.Name) {
-                this.name = subType.Name
+            const editor = getKey(parsedEditoritems.Item, "Editor") ?? {}
+            const subType = [getKey(editor, "SubType")].flat()[0]
+            const name = getKey(subType, "Name")
+            if (name) {
+                this.name = name
             }
 
             // Update MovementHandle
-            this.movementHandle = editor.MovementHandle || "HANDLE_4_DIRECTIONS"
+            this.movementHandle =
+                getKey(editor, "MovementHandle") || "HANDLE_4_DIRECTIONS"
 
             // Re-read properties file
             if (fs.existsSync(this.paths.properties)) {
@@ -445,59 +605,65 @@ class Item {
                 this.details = parsedProperties["Properties"]
 
                 // Update icon path
-                const iconPath = parsedProperties.Properties?.Icon?.["0"]
-                this.icon = iconPath
-                    ? path.join(
-                          this.packagePath,
-                          "resources/BEE2/items",
-                          iconPath,
-                      )
-                    : null
-
-                if (!this.icon) {
-                    // Icon isn't defined in properties, get it from editoritems
-                    const rawIconPath = subType.Palette?.Image
-                    if (rawIconPath) {
-                        // Remove "palette/" prefix and build full path
-                        const cleanIconPath = rawIconPath
-                            .split("/")
-                            .slice(1)
-                            .join("/")
-                        this.icon = path.join(
-                            this.packagePath,
-                            "resources/BEE2/items",
-                            cleanIconPath,
-                        )
-                    }
-                }
+                this.icon = iconPathOf(
+                    this.packagePath,
+                    parsedProperties.Properties,
+                    subType,
+                )
             }
 
-            // Also reload instances
+            // Also reload instances, and meta.json (a save writes it)
             this.reloadInstances()
-
-            console.log(`Reloaded item data: ${this.name} (id: ${this.id})`)
+            this.metadata = this.loadMetadata()
         } catch (error) {
             console.error(
-                `Failed to reload item data for ${this.id}:`,
-                error.message,
+                `Failed to reload item "${this.name}" from disk:`,
+                error,
             )
         }
     }
 
+    /**
+     * The item's editoritems. In a file with several "Item" blocks, Item is
+     * the first (the item itself); saveEditorItems keeps the others.
+     * @param {boolean} [raw] - The file's text instead
+     */
     getEditorItems(raw = false) {
-        //Returns a JSON that is editoritems.
         const rawEditoritems = fs.readFileSync(this.paths.editorItems, "utf-8")
         if (raw) {
             return rawEditoritems
         } else {
-            return JSON.parse(rawEditoritems)
+            return mainItemBlock(JSON.parse(rawEditoritems))
         }
     }
 
+    /**
+     * Write the item's editoritems (from getEditorItems). The file's other
+     * "Item" blocks, after the first, are kept.
+     */
     saveEditorItems(editedJSON) {
+        let data = editedJSON
+        try {
+            const current = JSON.parse(
+                fs.readFileSync(this.paths.editorItems, "utf-8"),
+            )
+            const key = Object.keys(current).find(
+                (k) => k.toLowerCase() === "item",
+            )
+            const blocks = key === undefined ? null : current[key]
+            if (
+                Array.isArray(blocks) &&
+                blocks.length > 1 &&
+                !Array.isArray(editedJSON.Item)
+            ) {
+                data = { ...editedJSON, Item: [editedJSON.Item, ...blocks.slice(1)] }
+            }
+        } catch {
+            // No file yet (or one that can't be read): written as it is
+        }
         fs.writeFileSync(
             this.paths.editorItems,
-            JSON.stringify(editedJSON, null, 4),
+            JSON.stringify(data, null, 4),
             "utf8",
         )
     }
@@ -614,8 +780,7 @@ class Item {
                     }
                 } catch (error) {
                     console.error(
-                        `Error getting VMF stats for instance ${index}:`,
-                        error.message,
+                        `Failed to get the VMF stats of instance ${index} of "${this.name}": ${error.message}`,
                     )
                     const meta = this.getMetadata()
                     if (!meta.instanceErrors) {
@@ -637,6 +802,86 @@ class Item {
         }
 
         return instancesWithStatus
+    }
+
+    /**
+     * Fix what BeePEE got wrong in editoritems before, which BEE2 warns about
+     * or Portal 2 shows:
+     * - The Type is the item's ID. BeePEE gave items "ITEM_CUBE" (the game's
+     *   cube) or "BPEE_<NAME>", and BEE2 warns ("Item ID ... does not match
+     *   ... update editoritems!", comparing them in any case) before using
+     *   the ID.
+     * - An item with inputs has ConnectionCount (addConnectionCount)
+     * - A blank palette name is the subtype's name (syncPaletteName)
+     * @returns {string[]} What was changed
+     */
+    repairEditorItems() {
+        let editoritems
+        try {
+            editoritems = this.getEditorItems()
+        } catch {
+            return []
+        }
+        const item = editoritems?.Item
+        if (!item || typeof item !== "object") return []
+
+        const changes = []
+        const typeKey =
+            Object.keys(item).find((k) => k.toLowerCase() === "type") ?? "Type"
+        const type = String(item[typeKey] ?? "").trim()
+        if (this.id && type.toLowerCase() !== String(this.id).toLowerCase()) {
+            item[typeKey] = this.id
+            changes.push(`its type is its ID (it was ${type || "missing"})`)
+        }
+        if (addConnectionCount(item)) {
+            changes.push("added ConnectionCount (it has inputs)")
+        }
+        const subTypes = [getKey(getKey(item, "Editor"), "SubType")].flat()
+        if (subTypes.filter((subType) => syncPaletteName(subType)).length) {
+            changes.push("its palette name is its name (it was blank)")
+        }
+        if (changes.length) {
+            this.saveEditorItems(editoritems)
+            console.log(
+                `Fixed the editoritems of "${this.name}": ${changes.join(", ")}`,
+            )
+        }
+        return changes
+    }
+
+    /**
+     * Where the item's instances are measured from for what they have behind
+     * its surface (behindSurface.js), or null for items whose instances are
+     * meant to be outside the map, or without editoritems
+     */
+    instanceFrame() {
+        try {
+            return itemFrame(this.getEditorItems().Item)
+        } catch {
+            return null
+        }
+    }
+
+    /**
+     * What each instance has behind the surface the item is placed on (the
+     * Instances tab's leak warning): by index, null when nothing (or when its
+     * file isn't there). Only the item editor asks: it reads every VMF.
+     */
+    getInstancesBehindSurface() {
+        const frame = this.instanceFrame()
+        const result = {}
+        for (const [index, instanceData] of Object.entries(this.instances)) {
+            result[index] = frame
+                ? instanceBehindSurface(
+                      Instance.getCleanPath(
+                          this.packagePath,
+                          this.fixInstancePath(instanceData.Name),
+                      ),
+                      frame,
+                  )
+                : null
+        }
+        return result
     }
 
     // Helper method to determine if an instance is a VBSP instance
@@ -724,8 +969,8 @@ class Item {
             vmfStats = vmfStatsCache.getStats(fullInstancePath)
         } catch (error) {
             console.error(
-                `Error getting VMF stats for new instance ${instanceName}:`,
-                error.message,
+                `Failed to get the VMF stats of new instance ${instanceName} of "${this.name}":`,
+                error,
             )
             const meta = this.getMetadata()
             if (!meta.instanceErrors) {
@@ -743,67 +988,126 @@ class Item {
         }
         this.saveEditorItems(editoritems)
 
+        // Added again after it was removed: its conditions can register it
+        // again too
+        const meta = this.getMetadata()
+        const key = this.instanceFileKey(instanceName)
+        const removed = meta.removedInstances ?? []
+        const stillRemoved = removed.filter(
+            (name) => this.instanceFileKey(name) !== key,
+        )
+        if (stillRemoved.length !== removed.length) {
+            meta.removedInstances = stillRemoved
+            this.saveMetadata(meta)
+        }
+
         // Reload instances from file to ensure consistency
         this.reloadInstances()
 
         return nextIndex.toString()
     }
 
-    removeInstance(index) {
+    /** Delete an instance's VMF (and its folder, when that's left empty) */
+    deleteInstanceFile(index, instanceName) {
+        try {
+            // Apply path fixing to remove BEE2/ prefix for actual file structure
+            const instanceFilePath = path.join(
+                this.packagePath,
+                "resources",
+                this.fixInstancePath(instanceName),
+            )
+
+            if (fs.existsSync(instanceFilePath)) {
+                fs.unlinkSync(instanceFilePath)
+                console.log(`Deleted instance file ${instanceFilePath}`)
+
+                // Also try to remove the directory if it's empty
+                const instanceDir = path.dirname(instanceFilePath)
+                try {
+                    if (fs.readdirSync(instanceDir).length === 0) {
+                        fs.rmdirSync(instanceDir)
+                        console.log(`Removed empty directory ${instanceDir}`)
+                    }
+                } catch {
+                    // Directory not empty or other error, ignore
+                }
+            } else {
+                console.log(
+                    `Instance file ${instanceFilePath} doesn't exist, nothing to delete`,
+                )
+            }
+        } catch (fileError) {
+            // Not a reason to keep the instance: it's removed anyway
+            console.error(
+                `Failed to delete the file of instance ${index} of "${this.name}":`,
+                fileError,
+            )
+        }
+    }
+
+    /**
+     * Remove an instance from the item. Its VMF is deleted unless something
+     * still uses it: another of the item's instances, the item's conditions
+     * (changeInstance), or another item (keepFile). One the conditions
+     * switch to isn't registered again (metadata.removedInstances).
+     * @param {string} index
+     * @param {{keepFile?: boolean}} [options] - keepFile: another item uses
+     *   the VMF
+     */
+    removeInstance(index, { keepFile = false } = {}) {
         const instance = this.instances[index]
         if (!instance) {
             throw new Error(`Instance ${index} not found`)
         }
 
-        // Only allow removing editor instances
-        if (instance.source === "vbsp") {
+        // BEE2's dev instances stay (the Instances tab doesn't offer it)
+        if (this.isVbspInstance(instance)) {
             throw new Error("Cannot remove VBSP instances")
         }
 
-        // Delete the instance file from filesystem if it exists
-        try {
-            const fs = require("fs")
-            const path = require("path")
+        const file = this.instanceFileKey(instance.Name)
+        const sharedWith = Object.entries(this.instances).find(
+            ([other, data]) =>
+                other !== String(index) &&
+                this.instanceFileKey(data.Name) === file,
+        )?.[0]
+        const conditionsUseIt = this.conditionInstances().some(
+            (target) => this.instanceFileKey(target) === file,
+        )
+        const usedBy =
+            sharedWith !== undefined
+                ? `instance ${sharedWith} uses it too`
+                : conditionsUseIt
+                  ? "the item's conditions use it"
+                  : keepFile
+                    ? "another item uses it"
+                    : null
 
-            // Apply path fixing to remove BEE2/ prefix for actual file structure
-            const actualFilePath = this.fixInstancePath(instance.Name)
-            const instanceFilePath = path.join(
-                this.packagePath,
-                "resources",
-                actualFilePath,
+        if (usedBy) {
+            console.log(
+                `Kept the file of instance ${index} (${instance.Name}) of "${this.name}": ${usedBy}`,
             )
-
-            if (fs.existsSync(instanceFilePath)) {
-                fs.unlinkSync(instanceFilePath)
-                console.log(`Deleted instance file: ${instanceFilePath}`)
-
-                // Also try to remove the directory if it's empty
-                const instanceDir = path.dirname(instanceFilePath)
-                try {
-                    const files = fs.readdirSync(instanceDir)
-                    if (files.length === 0) {
-                        fs.rmdirSync(instanceDir)
-                        console.log(`Removed empty directory: ${instanceDir}`)
-                    }
-                } catch (dirError) {
-                    // Directory not empty or other error, ignore
-                    console.log(
-                        `Could not remove directory ${instanceDir}: ${dirError.message}`,
-                    )
-                }
-            } else {
-                console.log(
-                    `Instance file not found, skipping deletion: ${instanceFilePath}`,
-                )
-            }
-        } catch (fileError) {
-            console.error(`Error deleting instance file: ${fileError.message}`)
-            // Don't throw error, continue with removal from editoritems
+        } else {
+            this.deleteInstanceFile(index, instance.Name)
         }
 
         // Remove from memory
         delete this.instances[index]
         this._loadedInstances.delete(index)
+
+        // Its name and error don't go to an instance added at its index later
+        const meta = this.getMetadata()
+        for (const key of ["instanceNames", "instanceErrors"]) {
+            if (meta[key] && index in meta[key]) delete meta[key][index]
+        }
+        // The conditions still switch to it: registering it again would
+        // bring it back
+        if (conditionsUseIt && sharedWith === undefined) {
+            meta.removedInstances = [
+                ...new Set([...(meta.removedInstances ?? []), instance.Name]),
+            ]
+        }
+        this.saveMetadata(meta)
 
         // Update editoritems file
         const editoritems = this.getEditorItems()
@@ -843,7 +1147,7 @@ class Item {
                     this.generateDefaultConnectionPoints()
                 this.saveEditorItems(editoritems)
                 console.log(
-                    `Auto-generated ConnectionPoints for ${this.name} (has I/O but none defined)`,
+                    `Added default ConnectionPoints to "${this.name}" (it has inputs or outputs but no ConnectionPoints)`,
                 )
             }
         } catch (error) {
@@ -894,6 +1198,7 @@ class Item {
 
         // Add the new input
         editoritems.Item.Exporting.Inputs[inputName] = inputConfig
+        addConnectionCount(editoritems.Item)
 
         // Auto-generate ConnectionPoints if this item has I/O but none defined
         if (!editoritems.Item.Exporting.ConnectionPoints) {
@@ -1091,14 +1396,9 @@ class Item {
                 return []
             }
 
-            const editorItems = JSON.parse(
-                fs.readFileSync(this.paths.editorItems, "utf-8"),
-            )
+            const editorItems = this.getEditorItems()
 
-            const properties = editorItems?.Item?.Properties
-            if (!properties) {
-                return []
-            }
+            const properties = editorItems?.Item?.Properties ?? {}
 
             // Convert Properties object to array format expected by frontend
             const variables = []
@@ -1125,9 +1425,30 @@ class Item {
 
             // Sort by index to maintain order
             variables.sort((a, b) => a.index - b.index)
+
+            // Its colors: not a property, the item's config group in info.json
+            if (this.hasColors()) {
+                variables.push({
+                    id: "var_color",
+                    presetKey: "Color",
+                    displayName: "Color",
+                    fixupName: "",
+                    description:
+                        "A color for each timer value that players pick in BEE2's ItemVar menu, for Set Color blocks",
+                    defaultValue: "1",
+                    type: "colors",
+                    customValue: "1",
+                    // Each timer value's default color
+                    colors: this.getColorDefaults(),
+                    index: variables.length,
+                })
+            }
             return variables
         } catch (error) {
-            console.error("Failed to get variables:", error)
+            console.error(
+                `Failed to read the variables of "${this.name}":`,
+                error,
+            )
             return []
         }
     }
@@ -1139,9 +1460,7 @@ class Item {
                 throw new Error("editoritems.json not found")
             }
 
-            const editorItems = JSON.parse(
-                fs.readFileSync(this.paths.editorItems, "utf-8"),
-            )
+            const editorItems = this.getEditorItems()
 
             // Initialize Properties section if it doesn't exist
             if (!editorItems.Item.Properties) {
@@ -1162,6 +1481,9 @@ class Item {
             }
 
             // Add new variables (starting from index 2 since index 1 is ConnectionCount)
+            // Color isn't a property: it's the item's config group (saveColors)
+            const colorVariable = variables.find((v) => v.presetKey === "Color")
+            variables = variables.filter((v) => v.presetKey !== "Color")
             variables.forEach((variable, index) => {
                 if (variable.presetKey) {
                     editorItems.Item.Properties[variable.presetKey] = {
@@ -1209,9 +1531,6 @@ class Item {
                     SubType: subTypeArray,
                     ...otherEditorProps,
                 }
-                console.log(
-                    "ButtonType exists: Ensured 3 SubTypes with SubTypeProperty first",
-                )
             } else {
                 // No ButtonType - ensure we have single SubType
                 if (
@@ -1233,16 +1552,14 @@ class Item {
                         ...otherEditorProps,
                     }
                     console.log(
-                        "ButtonType removed: Reverted to single SubType",
+                        `Reduced "${this.name}" to a single SubType (it has no ButtonType variable)`,
                     )
                 }
             }
 
             // Write back to file
-            fs.writeFileSync(
-                this.paths.editorItems,
-                JSON.stringify(editorItems, null, 4),
-            )
+            this.saveEditorItems(editorItems)
+            this.saveColors(Boolean(colorVariable), colorVariable?.colors)
 
             // Auto-generate VBSP conditions for ButtonType if needed
             if (hasButtonType) {
@@ -1251,9 +1568,60 @@ class Item {
 
             return true
         } catch (error) {
-            console.error("Failed to save variables:", error)
+            console.error(
+                `Failed to save the variables of "${this.name}":`,
+                error,
+            )
             return false
         }
+    }
+
+    /** The package's info.json, where the item's colors are */
+    get infoPath() {
+        return path.join(this.packagePath, "info.json")
+    }
+
+    /** Whether the item has colors (its Color variable) */
+    hasColors() {
+        try {
+            const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
+            return hasColors(info, this.id)
+        } catch {
+            return false
+        }
+    }
+
+    /** Its default colors: each timer value's, as players get them in BEE2 */
+    getColorDefaults() {
+        try {
+            const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
+            return colorDefaults(info, this.id)
+        } catch {
+            return colorDefaults({}, this.id)
+        }
+    }
+
+    /** The ID of its colors' group as info.json has it (see colorGroupId) */
+    getColorGroupId() {
+        try {
+            const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
+            return colorGroupId(info, this.id)
+        } catch {
+            return this.id
+        }
+    }
+
+    /**
+     * Give the item its colors, or take them out: a timer color widget in
+     * its config group in info.json, which BEE2 shows in its ItemVar menu.
+     * `defaults`: each timer value's default color (kept when not given).
+     */
+    saveColors(on, defaults) {
+        const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
+        const before = JSON.stringify(info)
+        withColors(info, { itemId: this.id, itemName: this.name, on, defaults })
+        if (JSON.stringify(info) === before) return
+        fs.writeFileSync(this.infoPath, JSON.stringify(info, null, 2))
     }
 
     // Auto-generate VBSP conditions for ButtonType
@@ -1263,7 +1631,7 @@ class Item {
             const instances = editorItems.Item.Exporting.Instances
             if (!instances || Object.keys(instances).length === 0) {
                 console.log(
-                    "No instances found, skipping ButtonType condition generation",
+                    `Skipped generating ButtonType conditions for "${this.name}", it has no instances`,
                 )
                 return
             }
@@ -1281,6 +1649,7 @@ class Item {
                             id: `changeInstance_${instanceIndex}`,
                             type: "changeInstance",
                             instanceIndex: instanceIndex,
+                            instanceName: instanceName(instanceData),
                         },
                     ],
                 })
@@ -1315,42 +1684,17 @@ class Item {
             )
 
             if (!hasButtonTypeSwitch) {
-                // Add the new switch block
+                // Add the new switch block, and save it with the others
                 existingBlocks.push(switchBlock)
-
-                // Save the blocks to meta.json
-                const metaData = fs.existsSync(this.paths.meta)
-                    ? JSON.parse(fs.readFileSync(this.paths.meta, "utf-8"))
-                    : {}
-
-                metaData.vbsp_blocks = existingBlocks
-                fs.writeFileSync(
-                    this.paths.meta,
-                    JSON.stringify(metaData, null, 4),
-                    "utf-8",
-                )
-
-                // Convert and save to vbsp_config.json
-                const vbspData = this.convertBlocksToVbsp(existingBlocks)
-                fs.writeFileSync(
-                    this.paths.vbsp_config,
-                    JSON.stringify(vbspData, null, 4),
-                    "utf-8",
-                )
+                this.saveConditions({ blocks: existingBlocks })
 
                 console.log(
-                    "Auto-generated ButtonType VBSP conditions with",
-                    cases.length,
-                    "cases",
-                )
-            } else {
-                console.log(
-                    "ButtonType switch already exists, skipping auto-generation",
+                    `Generated ButtonType conditions for "${this.name}" with ${plural(cases.length, "case")}`,
                 )
             }
         } catch (error) {
             console.error(
-                "Failed to auto-generate ButtonType conditions:",
+                `Failed to generate ButtonType conditions for "${this.name}":`,
                 error,
             )
         }
@@ -1473,8 +1817,8 @@ class Item {
                 block.type === "case" &&
                 (block.value === undefined || block.value === "")
             ) {
-                console.log(
-                    `⚠️  Normalizing case block ${block.id}: setting missing/empty value to "0" (you should change this to the correct value)`,
+                console.warn(
+                    `Case block ${block.id} of "${this.name}" has no value, using "0" (change it to the right value)`,
                 )
                 block.value = "0"
             }
@@ -1496,165 +1840,195 @@ class Item {
         return blocks.map(normalizeBlock)
     }
 
-    // Conditions management functions
+    /** Whether the item has a VBSP config */
+    hasVbspConfig() {
+        return (
+            fs.existsSync(this.paths.vbsp_cfg) ||
+            fs.existsSync(this.paths.vbsp_config)
+        )
+    }
+
+    /**
+     * The VBSP config's text and its encoding: vbsp_config.cfg, or one
+     * written from the vbsp_config.json of an older import. Null when the
+     * item has none.
+     */
+    readVbspText() {
+        if (fs.existsSync(this.paths.vbsp_cfg)) {
+            return readText(this.paths.vbsp_cfg)
+        }
+        if (fs.existsSync(this.paths.vbsp_config)) {
+            // Required here: packageManager requires this file
+            const {
+                convertJsonToVdf,
+                removeUuidsFromVbspConditions,
+            } = require("../packageManager")
+            const json = JSON.parse(
+                fs.readFileSync(this.paths.vbsp_config, "utf-8"),
+            )
+            return {
+                text: convertJsonToVdf(removeUuidsFromVbspConditions(json)),
+                encoding: "utf8",
+            }
+        }
+        return null
+    }
+
+    /** The VBSP config as a JS object (a repeated key's values in an array) */
+    readVbspObject() {
+        if (fs.existsSync(this.paths.vbsp_cfg)) {
+            return toObject(readText(this.paths.vbsp_cfg).text)
+        }
+        if (fs.existsSync(this.paths.vbsp_config)) {
+            return JSON.parse(fs.readFileSync(this.paths.vbsp_config, "utf-8"))
+        }
+        return null
+    }
+
+    /**
+     * The condition blocks: the ones the editor saved (meta.json), while
+     * saving them would write the conditions the VBSP config has. Otherwise
+     * (the file changed since, or was never saved by the editor) the file's
+     * conditions, each a raw block: its text, as it is in the file. With
+     * error when the VBSP config can't be read.
+     */
     getConditions() {
+        let saved = null
+        if (fs.existsSync(this.paths.meta)) {
+            try {
+                const metaData = JSON.parse(
+                    fs.readFileSync(this.paths.meta, "utf-8"),
+                )
+                if (Array.isArray(metaData.vbsp_blocks)) {
+                    // Normalize blocks to ensure all case blocks have a value property
+                    saved = this.normalizeBlocks(metaData.vbsp_blocks)
+                }
+            } catch (metaError) {
+                console.warn(
+                    `Failed to read the condition blocks in meta.json of "${this.name}", using its VBSP config:`,
+                    metaError,
+                )
+            }
+        }
+
         try {
-            // First try to load blocks from meta.json (preferred - preserves original structure)
-            if (fs.existsSync(this.paths.meta)) {
-                try {
-                    const metaData = JSON.parse(
-                        fs.readFileSync(this.paths.meta, "utf-8"),
-                    )
-                    if (
-                        metaData.vbsp_blocks &&
-                        Array.isArray(metaData.vbsp_blocks)
-                    ) {
-                        console.log(
-                            `Loading blocks from meta.json for ${this.name}`,
-                        )
-                        // Normalize blocks to ensure all case blocks have a value property
-                        const normalizedBlocks = this.normalizeBlocks(
-                            metaData.vbsp_blocks,
-                        )
-                        return { blocks: normalizedBlocks }
-                    }
-                } catch (metaError) {
-                    console.warn(
-                        `Failed to read meta.json for ${this.name}, falling back to VBSP:`,
-                        metaError.message,
-                    )
-                }
+            const vbsp = this.readVbspText()
+            if (!vbsp) return { blocks: saved ?? [] }
+            if (saved && this.writesConditionsOf(vbsp.text, saved)) {
+                return { blocks: saved }
             }
-
-            // Fallback to VBSP format if no blocks in meta.json
-            // This will be auto-converted by the frontend and saved back with blocks
-            if (
-                this.paths.vbsp_config &&
-                fs.existsSync(this.paths.vbsp_config)
-            ) {
-                console.log(
-                    `Loading VBSP format for ${this.name} (will be converted to blocks by frontend)`,
+            if (saved) {
+                console.warn(
+                    `The VBSP config of "${this.name}" has other conditions than its saved blocks write (it changed since they were saved), so they're shown as the file has them`,
                 )
-                const vbspData = JSON.parse(
-                    fs.readFileSync(this.paths.vbsp_config, "utf-8"),
-                )
-
-                // Check if conditions have already been imported (flag is set in meta.json)
-                let vbspImported = false
-                if (fs.existsSync(this.paths.meta)) {
-                    try {
-                        const metaData = JSON.parse(
-                            fs.readFileSync(this.paths.meta, "utf-8"),
-                        )
-                        vbspImported =
-                            metaData._vbsp_conditions_imported === true
-                    } catch (error) {
-                        console.warn(
-                            `Failed to check _vbsp_conditions_imported flag: ${error.message}`,
-                        )
-                    }
-                }
-
-                // Return VBSP data with flag - frontend will convert and save it back with blocks (only if not already imported)
-                return { ...vbspData, _vbsp_conditions_imported: vbspImported }
             }
-
-            console.log(`No conditions found for ${this.name}`)
-            return {}
+            return { blocks: rawBlocks(vbsp.text) }
         } catch (error) {
             console.error(
-                `Failed to read VBSP config for ${this.name}:`,
-                error.message,
+                `Failed to read the VBSP config of "${this.name}":`,
+                error,
             )
-            return {}
+            return {
+                blocks: [],
+                error: `Its VBSP config can't be read (${error.message}), so BeePEE leaves it as it is`,
+            }
         }
     }
 
+    /**
+     * Whether saving `blocks` would write the conditions `text` has, or did
+     * before some blocks were fixed (those stay the editor's blocks, and are
+     * written right when saved)
+     */
+    writesConditionsOf(text, blocks) {
+        return [{}, { elseWithInstance: true }, { legacy: true }].some((options) => {
+            try {
+                const written = this.vbspTextWith(text, blocks, options)
+                return sameEntries(
+                    conditionEntries(written),
+                    conditionEntries(text),
+                )
+            } catch {
+                return false
+            }
+        })
+    }
+
+    /**
+     * The VBSP config's text with its conditions replaced by `blocks`': raw
+     * blocks as their text was, the others written from their blocks
+     */
+    vbspTextWith(text, blocks, options = {}) {
+        const eol = lineEnd(text)
+        const written = this.blockConditions(blocks, options)
+        const objects = new Map(blocks.map((block, i) => [block, written[i]]))
+        return withConditions(text, blocks, (block) => {
+            const condition = { Condition: objects.get(block) }
+            return eol + stringify(condition, 1, eol).slice(0, -eol.length)
+        })
+    }
+
+    /**
+     * Save the condition blocks: in meta.json, and in the VBSP config, where
+     * they replace what's in "Conditions". A raw block is written as its text
+     * was; the rest of the file stays as it is. Throws if the VBSP config
+     * can't be read (and leaves it as it is).
+     */
     saveConditions(conditions) {
-        try {
-            // Ensure the vbsp_config directory exists
-            const vbspConfigDir = path.dirname(this.paths.vbsp_config)
-            if (!fs.existsSync(vbspConfigDir)) {
-                fs.mkdirSync(vbspConfigDir, { recursive: true })
-            }
-
-            // Convert blocks to VBSP format if needed
-            let vbspData = conditions
-            if (
-                conditions &&
-                conditions.blocks &&
-                Array.isArray(conditions.blocks)
-            ) {
-                // If there are no blocks, delete both files if they exist and return success
-                if (conditions.blocks.length === 0) {
-                    if (fs.existsSync(this.paths.vbsp_config)) {
-                        fs.unlinkSync(this.paths.vbsp_config)
-                    }
-                    if (fs.existsSync(this.paths.meta)) {
-                        const metaData = JSON.parse(
-                            fs.readFileSync(this.paths.meta, "utf-8"),
-                        )
-                        delete metaData.vbsp_blocks
-                        delete metaData._vbsp_conditions_imported
-                        fs.writeFileSync(
-                            this.paths.meta,
-                            JSON.stringify(metaData, null, 4),
-                            "utf-8",
-                        )
-                        // Sync in-memory metadata to prevent stale data
-                        this.metadata = metaData
-                    }
-                    return true
-                }
-                // Normalize blocks before converting/saving
-                const normalizedBlocks = this.normalizeBlocks(conditions.blocks)
-
-                // Convert blocks to VBSP format
-                vbspData = this.convertBlocksToVbsp(normalizedBlocks)
-
-                // Save the JSON block representation to meta.json
-                let metaData = {}
-                if (fs.existsSync(this.paths.meta)) {
-                    metaData = JSON.parse(
-                        fs.readFileSync(this.paths.meta, "utf-8"),
-                    )
-                }
-                metaData.vbsp_blocks = normalizedBlocks
-                // Mark as imported so frontend won't auto-convert again
-                metaData._vbsp_conditions_imported = true
-                fs.writeFileSync(
-                    this.paths.meta,
-                    JSON.stringify(metaData, null, 4),
-                    "utf-8",
-                )
-                // Sync in-memory metadata to prevent stale data
-                // (prevents updateMetadata() from overwriting vbsp_blocks)
-                this.metadata = metaData
-            }
-
-            // Save to vbsp_config.json
-            fs.writeFileSync(
-                this.paths.vbsp_config,
-                JSON.stringify(vbspData, null, 4),
-                "utf-8",
-            )
-
-            return true
-        } catch (error) {
-            console.error(
-                `Failed to save VBSP conditions for ${this.name}:`,
-                error.message,
-            )
-            return false
+        if (!Array.isArray(conditions?.blocks)) {
+            throw new Error("The conditions to save aren't a list of blocks")
         }
+        const blocks = this.normalizeBlocks(conditions.blocks)
+
+        const current = this.readVbspText()
+        const updated = this.vbspTextWith(current?.text ?? "", blocks)
+
+        if (isEmpty(updated)) {
+            for (const file of [this.paths.vbsp_cfg, this.paths.vbsp_config]) {
+                if (fs.existsSync(file)) fs.unlinkSync(file)
+            }
+        } else {
+            fs.mkdirSync(path.dirname(this.paths.vbsp_cfg), { recursive: true })
+            fs.writeFileSync(
+                this.paths.vbsp_cfg,
+                withHeader(updated, GENERATED_HEADER),
+                current?.encoding ?? "utf8",
+            )
+            // The .cfg has the conditions now (see readVbspText)
+            if (fs.existsSync(this.paths.vbsp_config)) {
+                fs.unlinkSync(this.paths.vbsp_config)
+            }
+        }
+
+        // The blocks, for the editor
+        const metaData = fs.existsSync(this.paths.meta)
+            ? JSON.parse(fs.readFileSync(this.paths.meta, "utf-8"))
+            : {}
+        if (blocks.length > 0) metaData.vbsp_blocks = blocks
+        else delete metaData.vbsp_blocks
+        delete metaData._vbsp_conditions_imported
+        fs.writeFileSync(
+            this.paths.meta,
+            JSON.stringify(metaData, null, 4),
+            "utf-8",
+        )
+        // Sync in-memory metadata to prevent stale data
+        // (prevents updateMetadata() from overwriting vbsp_blocks)
+        this.metadata = metaData
+        return true
     }
 
-    // Convert blocks to VBSP format
-    convertBlocksToVbsp(blockList) {
-        const vbspConditions = {
-            Conditions: {},
-        }
-
+    /**
+     * Each top-level block as the VBSP condition it writes (with an Instance
+     * test for this item), and null for a raw block (its text is its
+     * condition). With legacy, as BeePEE wrote them before some blocks were
+     * fixed (see writesConditionsOf); with elseWithInstance, an If/Else's
+     * Else next to the Instance test, as BeePEE wrote it up to 1.2.0-beta.4.
+     */
+    blockConditions(
+        blockList,
+        { legacy = false, elseWithInstance = false } = {},
+    ) {
         const applyTimerLogic = (variableName, value) => {
             if (!variableName) return value
             const cleanVariableName = variableName.replace(/^\\$/, "")
@@ -1727,6 +2101,15 @@ class Item {
                 }
 
                 childBlocks.forEach((childBlock) => {
+                    if (childBlock.type === RAW_BLOCK) {
+                        const raw = rawBlockObject(childBlock)
+                        for (const [key, value] of Object.entries(raw)) {
+                            for (const each of [value].flat()) {
+                                addMulti(result, key, each)
+                            }
+                        }
+                        return
+                    }
                     const childVbsp = convertBlockToVbsp(childBlock)
 
                     // Wrap nested logical blocks under special result keys
@@ -1748,8 +2131,15 @@ class Item {
                         return
                     }
 
-                    // Merge direct result-type blocks
-                    Object.assign(result, childVbsp)
+                    // Merge direct result-type blocks. A repeated one keeps
+                    // each (before, only the last was written)
+                    if (legacy) {
+                        Object.assign(result, childVbsp)
+                        return
+                    }
+                    for (const [key, value] of Object.entries(childVbsp)) {
+                        addMulti(result, key, value)
+                    }
                 })
                 return result
             }
@@ -1877,23 +2267,9 @@ class Item {
                                 caseBlock.value !== null &&
                                 valueStr !== ""
 
-                            // Debug logging for case processing
                             if (!hasValue) {
-                                console.log(
-                                    `⚠️  Skipping case with invalid/empty value:`,
-                                    {
-                                        caseBlock: {
-                                            id: caseBlock?.id,
-                                            type: caseBlock?.type,
-                                        },
-                                        value: caseBlock?.value,
-                                        valueStr,
-                                        hasValue,
-                                        reason:
-                                            valueStr === ""
-                                                ? "empty string"
-                                                : "undefined/null",
-                                    },
+                                console.warn(
+                                    `Skipped case ${caseBlock?.id} of the ${variable} switch of "${this.name}", it has no value`,
                                 )
                             }
 
@@ -1907,16 +2283,6 @@ class Item {
                                     caseBlock?.thenBlocks || [],
                                     "thenBlocks",
                                 )
-
-                                // Debug logging for case results
-                                console.log(`✓ Adding case "${arg}":`, {
-                                    value: caseBlock.value,
-                                    thenBlocks:
-                                        caseBlock?.thenBlocks?.length || 0,
-                                    resultKeys: Object.keys(caseResults),
-                                    isEmpty:
-                                        Object.keys(caseResults).length === 0,
-                                })
 
                                 // Always add the case, even if result is empty
                                 // This makes the VBSP more explicit about all possible cases
@@ -1950,23 +2316,9 @@ class Item {
                                 caseBlock.value !== null &&
                                 valueStr !== ""
 
-                            // Debug logging for case processing
                             if (!hasValue) {
-                                console.log(
-                                    `⚠️  Skipping global case with invalid/empty value:`,
-                                    {
-                                        caseBlock: {
-                                            id: caseBlock?.id,
-                                            type: caseBlock?.type,
-                                        },
-                                        value: caseBlock?.value,
-                                        valueStr,
-                                        hasValue,
-                                        reason:
-                                            valueStr === ""
-                                                ? "empty string"
-                                                : "undefined/null",
-                                    },
+                                console.warn(
+                                    `Skipped case ${caseBlock?.id} of the ${testName} switch of "${this.name}", it has no value`,
                                 )
                             }
 
@@ -1980,16 +2332,6 @@ class Item {
                                     caseBlock?.thenBlocks || [],
                                     "thenBlocks",
                                 )
-
-                                // Debug logging for case results
-                                console.log(`✓ Adding global case "${arg}":`, {
-                                    value: caseBlock.value,
-                                    thenBlocks:
-                                        caseBlock?.thenBlocks?.length || 0,
-                                    resultKeys: Object.keys(caseResults),
-                                    isEmpty:
-                                        Object.keys(caseResults).length === 0,
-                                })
 
                                 // Always add the case, even if result is empty
                                 // This makes the VBSP more explicit about all possible cases
@@ -2014,6 +2356,9 @@ class Item {
                     return caseResult
 
                 case "changeInstance":
+                    // Without an instance picked, nothing: changeInstance ""
+                    // removes the item's instance
+                    if (!block.instanceName && !legacy) return {}
                     return {
                         changeInstance: block.instanceName || "",
                     }
@@ -2024,14 +2369,97 @@ class Item {
                     }
 
                 case "addGlobalEnt":
-                    return {
-                        addGlobalEnt: block.instanceName || "",
+                    if (legacy) {
+                        return { addGlobalEnt: block.instanceName || "" }
                     }
+                    // BEE2's addGlobal (it has no addGlobalEnt): the instance,
+                    // once, in a room of its own
+                    return block.instanceName
+                        ? { addGlobal: { file: block.instanceName } }
+                        : {}
 
                 case "offsetInstance":
-                    return {
-                        offsetInstance: `${block.instanceName || ""} ${block.offset || "0 0 0"}`,
+                    if (legacy) {
+                        return {
+                            offsetInstance: `${block.instanceName || ""} ${block.offset || "0 0 0"}`,
+                        }
                     }
+                    // The offset alone ("0 0 64")
+                    return {
+                        offsetInstance: String(block.offset || "0 0 0").trim(),
+                    }
+
+                case "setColor": {
+                    if (legacy) return unknownBlock(block)
+                    // One of the item's colors (its timer color widget),
+                    // into a fixup with BEE2's GetItemConfig: the one for a
+                    // fixup's value ("color[$timer_delay]"; BEE2 stops
+                    // compiling when the instance has no such fixup), or the
+                    // one for a set timer value ("color[7]"). The colors are
+                    // for 3 to 30: below 3 (an infinite timer) gets 3's, and
+                    // above 30 none (empty).
+                    const withDollar = (name) =>
+                        name.startsWith("$") ? name : `$${name}`
+                    const into = String(block.variable ?? "").trim()
+                    if (!into) return {}
+                    const colorFor = (timer) => ({
+                        GetItemConfig: {
+                            ID: this.getColorGroupId(),
+                            Name: `${COLOR_WIDGET}[${timer}]`,
+                            ResultVar: withDollar(into),
+                            Default: EMPTY_COLOR,
+                        },
+                    })
+                    if ((block.color ?? "match") !== "match") {
+                        const timer = Math.round(Number(block.color))
+                        return colorFor(
+                            Math.min(
+                                LAST_TIMER,
+                                Math.max(FIRST_TIMER, timer || FIRST_TIMER),
+                            ),
+                        )
+                    }
+                    const match = String(block.matchVariable ?? "").trim()
+                    if (!match) return {}
+                    return {
+                        Condition: {
+                            instVar: `${withDollar(match)} < ${FIRST_TIMER}`,
+                            Result: colorFor(FIRST_TIMER),
+                            Else: colorFor(withDollar(match)),
+                        },
+                    }
+                }
+
+                case "setInstVar": {
+                    if (legacy) return unknownBlock(block)
+                    // "$variable value" (BEE2 adds a missing "$")
+                    const variable = String(block.variable ?? "").trim()
+                    if (!variable) return {}
+                    const value = String(block.newValue ?? "").trim()
+                    return {
+                        setInstVar: value ? `${variable} ${value}` : variable,
+                    }
+                }
+
+                case "randomSelection": {
+                    if (legacy) return unknownBlock(block)
+                    // One of the instances at random: each one a result in
+                    // BEE2's random (an older import named the options it
+                    // couldn't read "Option N")
+                    const options = (block.options ?? []).filter(
+                        (option) =>
+                            typeof option === "string" &&
+                            option.trim() &&
+                            !/^Option \d+$/.test(option),
+                    )
+                    if (options.length === 0) return {}
+                    return {
+                        random: {
+                            changeInstance:
+                                options.length === 1 ? options[0] : options,
+                        },
+                    }
+                }
 
                 case "mapInstVar":
                     const mapResult = {}
@@ -2052,26 +2480,90 @@ class Item {
                     }
 
                 default:
-                    return {
-                        unknown: {
-                            type: block.type,
-                            data: block,
-                        },
-                    }
+                    return unknownBlock(block)
             }
         }
 
-        // Process each top-level block and create Condition objects
-        const conditions = []
+        // Attach instance filter to ensure condition targets this item's instances only
         const topLevelInstanceTest = { Instance: `<${this.id}>` }
-        blockList.forEach((block, index) => {
-            const vbspBlock = convertBlockToVbsp(block)
-            // Attach instance filter to ensure condition targets this item's instances only
-            const withInstanceGuard = {
-                ...topLevelInstanceTest,
-                ...vbspBlock,
+        return blockList.map((block) => {
+            if (block.type === RAW_BLOCK) return null
+            const vbsp = convertBlockToVbsp(block)
+            // An If/Else goes in a condition of its own, under the Instance
+            // test: BEE2 runs a condition's Else on every instance any of its
+            // tests fails on, the Instance test too, so next to it the Else
+            // ran on every other instance in the map (and on every instance
+            // of maps without the item)
+            if (hasElse(vbsp) && !legacy && !elseWithInstance) {
+                return { ...topLevelInstanceTest, Condition: vbsp }
             }
-            conditions.push(withInstanceGuard)
+            // A result goes in a Result block: on a condition's own level,
+            // BEE2 reads everything but Condition and Switch as a test
+            const result =
+                !legacy &&
+                RESULT_BLOCKS.has(block.type) &&
+                Object.keys(vbsp).length > 0
+            return {
+                ...topLevelInstanceTest,
+                ...(result ? { Result: vbsp } : vbsp),
+            }
+        })
+    }
+
+    /**
+     * Rewrite conditions BeePEE wrote with an If/Else's Else next to the
+     * item's Instance test (up to 1.2.0-beta.4), whose results BEE2 ran on
+     * every other instance in the map: only ones written from the editor's
+     * blocks, which are written the way they're fixed (see blockConditions)
+     * @returns {boolean} Whether they were rewritten
+     */
+    repairConditions() {
+        const { blocks, error } = this.getConditions()
+        if (error || !blocks.some((block) => block.type !== RAW_BLOCK)) {
+            return false
+        }
+        const elseNextToInstance = this.blockConditions(blocks, {
+            elseWithInstance: true,
+        }).some(hasElse)
+        if (!elseNextToInstance) return false
+        const current = this.readVbspText()
+        if (!current) return false
+        const fixed = this.vbspTextWith(current.text, blocks)
+        if (
+            sameEntries(
+                conditionEntries(fixed),
+                conditionEntries(current.text),
+            )
+        ) {
+            return false
+        }
+        this.saveConditions({ blocks })
+        console.log(
+            `Fixed the conditions of "${this.name}": its Else ran on every other instance in the map`,
+        )
+        return true
+    }
+
+    // Convert blocks to VBSP format
+    convertBlocksToVbsp(blockList) {
+        const vbspConditions = {
+            Conditions: {},
+        }
+        const objects = this.blockConditions(blockList)
+        const conditions = []
+        blockList.forEach((block, index) => {
+            if (objects[index]) {
+                conditions.push(objects[index])
+                return
+            }
+            // A raw block's condition, as a JS object
+            for (const [key, value] of Object.entries(rawBlockObject(block))) {
+                if (key.toLowerCase() === "condition") {
+                    conditions.push(...[value].flat())
+                } else {
+                    vbspConditions.Conditions[key] = value
+                }
+            }
         })
 
         // If there's only one condition, use a single object
@@ -2109,7 +2601,7 @@ class Item {
                         for (const key of Object.keys(map)) {
                             if (!/^\d+$/.test(key)) {
                                 console.warn(
-                                    `Dropping invalid ${mapKey} key "${key}" from meta.json for item ${this.id}`,
+                                    `Dropped invalid ${mapKey} key "${key}" from the meta.json of item ${this.id}`,
                                 )
                                 delete map[key]
                             }
@@ -2117,12 +2609,25 @@ class Item {
                     }
                 }
 
+                // One noted when the package was opened (whether BeePEE made
+                // the item) has no dates yet: the files' are
+                if (!metadata.created || !metadata.lastModified) {
+                    const fileDates = this.getFileDates()
+                    if (!metadata.created) {
+                        metadata.created = fileDates.created.toISOString()
+                    }
+                    if (!metadata.lastModified) {
+                        metadata.lastModified =
+                            fileDates.lastModified.toISOString()
+                    }
+                }
+
                 return metadata
             }
         } catch (error) {
             console.warn(
-                `Failed to load metadata for item ${this.id}:`,
-                error.message,
+                `Failed to read the meta.json of item ${this.id}, making a new one:`,
+                error,
             )
         }
 
@@ -2150,9 +2655,7 @@ class Item {
         const filesToCheck = [this.paths.editorItems, this.paths.properties]
 
         // Add VBSP config if it exists
-        if (this.paths.vbsp_config) {
-            filesToCheck.push(this.paths.vbsp_config)
-        }
+        filesToCheck.push(this.paths.vbsp_cfg, this.paths.vbsp_config)
 
         for (const filePath of filesToCheck) {
             if (fs.existsSync(filePath)) {
@@ -2174,8 +2677,8 @@ class Item {
                     }
                 } catch (error) {
                     console.warn(
-                        `Failed to get stats for ${filePath}:`,
-                        error.message,
+                        `Failed to read the dates of ${filePath}:`,
+                        error,
                     )
                 }
             }
@@ -2220,8 +2723,8 @@ class Item {
             return true
         } catch (error) {
             console.error(
-                `Failed to save metadata for item ${this.id}:`,
-                error.message,
+                `Failed to save the meta.json of item ${this.id}:`,
+                error,
             )
             return false
         }
@@ -2270,7 +2773,7 @@ class Item {
         const key = String(index)
         if (!/^\d+$/.test(key)) {
             console.warn(
-                `Ignoring instance name for invalid index "${key}" on item ${this.id}`,
+                `Ignored the name of invalid instance index "${key}" of item ${this.id}`,
             )
             return
         }
@@ -2303,7 +2806,9 @@ class Item {
 
             return subType?.Model?.ModelName || ""
         } catch (error) {
-            console.error(`Failed to get model name for ${this.id}:`, error.message)
+            console.error(
+                `Failed to read the model name of item ${this.id}: ${error.message}`,
+            )
             return ""
         }
     }
@@ -2354,7 +2859,7 @@ class Item {
                 }
 
                 console.log(
-                    `Preset model selected: Reduced to single SubType and removed SubTypeProperty`,
+                    `Set preset model ${modelName} on "${this.name}" (now a single SubType without SubTypeProperty)`,
                 )
             } else {
                 // For custom models or empty modelName, handle both single and array SubTypes
@@ -2397,7 +2902,7 @@ class Item {
             this.saveEditorItems(editoritems)
             return true
         } catch (error) {
-            console.error(`Failed to set model name for ${this.id}:`, error.message)
+            console.error(`Failed to set the model of "${this.name}":`, error)
             return false
         }
     }
@@ -2408,6 +2913,7 @@ class Item {
             name: this.name,
             movementHandle: this.movementHandle,
             details: this.details,
+            infoDescription: this.infoDescription,
             icon: this.icon,
             paths: this.paths,
             itemFolder: this.itemFolder,
@@ -2426,6 +2932,7 @@ class Item {
             name: this.name,
             movementHandle: this.movementHandle,
             details: this.details,
+            infoDescription: this.infoDescription,
             icon: this.icon,
             paths: this.paths,
             itemFolder: this.itemFolder,
@@ -2440,4 +2947,5 @@ class Item {
 
 module.exports = {
     Item,
+    syncPaletteName,
 }

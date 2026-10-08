@@ -2,6 +2,10 @@ const fs = require("fs")
 const path = require("path")
 const { Item } = require("./items")
 const { getPackagesDir } = require("../utils/packagesDir")
+const { logger } = require("../utils/logger")
+
+/** "1 item", "3 items" */
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
 class Package {
     constructor(packagePath) {
@@ -44,14 +48,25 @@ class Package {
                 rawitems = [rawitems]
             }
 
-            // Create items directly in this package
-            this.items = rawitems.map(
-                (element) =>
-                    new Item({
-                        packagePath: this.packageDir,
-                        itemJSON: element,
-                    }),
-            )
+            // Create items directly in this package. An item that can't be
+            // read is left out (and listed in skippedItems) rather than
+            // failing the package; its files stay as they are.
+            this.items = []
+            this.skippedItems = []
+            for (const element of rawitems) {
+                try {
+                    this.items.push(
+                        new Item({
+                            packagePath: this.packageDir,
+                            itemJSON: element,
+                        }),
+                    )
+                } catch (error) {
+                    const id = element?.ID ?? "(an item with no ID)"
+                    this.skippedItems.push({ id, reason: error.message })
+                    console.warn(`Left out item ${id}: ${error.message}`)
+                }
+            }
 
             // Signages (also optional)
             let rawSignages = parsedInfo["Signage"] || []
@@ -78,37 +93,35 @@ class Package {
                         if (typeof styleValue === "string") {
                             processedStyles[styleKey] = styleValue
                         } else if (styleValue && typeof styleValue === "object") {
-                            const iconPath = styleValue.icon
-                            let resolvedIcon = null
-                            if (iconPath) {
-                                // Resolve icon path relative to package
-                                // Icon can be:
-                                // - "items/clean/BEE/signage/cake.png" -> resources/BEE2/items/...
-                                // - "PACKAGE:path/file.png" -> resources/BEE2/path/file.png
-                                // - "filename.png" -> resources/BEE2/items/filename.png
-                                if (iconPath.includes(":")) {
+                            // Resolve icon path relative to package
+                            // Icon can be:
+                            // - "items/clean/BEE/signage/cake.png" -> resources/BEE2/items/...
+                            // - "PACKAGE:path/file.png" -> resources/BEE2/path/file.png
+                            // - "filename.png" -> resources/BEE2/filename.png
+                            const resolveIcon = (iconPath) =>
+                                path.join(
+                                    this.packageDir,
+                                    "resources/BEE2",
                                     // Package reference - just use the part after ':'
-                                    const pathPart = iconPath.split(":")[1]
-                                    resolvedIcon = path.join(
-                                        this.packageDir,
-                                        "resources/BEE2",
-                                        pathPart,
-                                    )
-                                } else if (iconPath.includes("/")) {
-                                    // Path with directories - prepend resources/BEE2
-                                    resolvedIcon = path.join(
-                                        this.packageDir,
-                                        "resources/BEE2",
-                                        iconPath,
-                                    )
-                                } else {
-                                    // Simple filename - look directly in BEE2
-                                    resolvedIcon = path.join(
-                                        this.packageDir,
-                                        "resources/BEE2",
-                                        iconPath,
-                                    )
-                                }
+                                    iconPath.includes(":")
+                                        ? iconPath.split(":")[1]
+                                        : iconPath,
+                                )
+                            const icon = styleValue.icon
+                            let resolvedIcon = null
+                            if (typeof icon === "string" && icon) {
+                                resolvedIcon = resolveIcon(icon)
+                            } else if (icon && typeof icon === "object") {
+                                // An icon made of image layers ("img" lines in
+                                // an "icon" block): the first one in this
+                                // package
+                                const layers = [icon.img ?? icon.Img]
+                                    .flat()
+                                    .filter((layer) => typeof layer === "string")
+                                resolvedIcon =
+                                    layers
+                                        .map(resolveIcon)
+                                        .find((file) => fs.existsSync(file)) ?? null
                             }
                             processedStyles[styleKey] = {
                                 ...styleValue,
@@ -128,44 +141,69 @@ class Package {
                 }
             })
 
-            // Set importedVersion for items that don't have it (for imported packages)
-            try {
-                const packageJson = require("../../package.json")
-                const appVersion = packageJson.version
-                if (appVersion) {
-                    for (const item of this.items) {
-                        const metadata = item.getMetadata()
-                        // Only set importedVersion if it doesn't exist (meaning it was imported)
-                        // and if createdVersion doesn't exist (meaning it wasn't created in this app)
-                        if (!metadata.importedVersion && !metadata.createdVersion) {
-                            item.updateMetadata({ importedVersion: appVersion })
-                        }
-                    }
+            // Fix what BeePEE got wrong in items' editoritems before (their
+            // type, ConnectionCount, palette name), not in a file other items
+            // use too (its type is theirs too)
+            const fileUsers = new Map()
+            for (const item of this.items) {
+                const file = item.paths?.editorItems
+                fileUsers.set(file, (fileUsers.get(file) ?? 0) + 1)
+            }
+            for (const item of this.items) {
+                if (fileUsers.get(item.paths?.editorItems) !== 1) continue
+                try {
+                    item.repairEditorItems()
+                } catch (error) {
+                    console.warn(
+                        `Failed to fix the editoritems of "${item.name}":`,
+                        error,
+                    )
                 }
-            } catch (error) {
-                console.warn("Failed to set importedVersion:", error.message)
+            }
+
+            // And the If/Else conditions BeePEE wrote whose Else ran on every
+            // other instance in the map, not in a VBSP config other items use
+            // too (its Instance test names one item)
+            const configUsers = new Map()
+            for (const item of this.items) {
+                const file = item.paths?.vbsp_cfg
+                configUsers.set(file, (configUsers.get(file) ?? 0) + 1)
+            }
+            for (const item of this.items) {
+                if (configUsers.get(item.paths?.vbsp_cfg) !== 1) continue
+                try {
+                    item.repairConditions()
+                } catch (error) {
+                    console.warn(
+                        `Failed to fix the conditions of "${item.name}":`,
+                        error,
+                    )
+                }
             }
 
             // Auto-import VBSP instances for all items (runs once per item)
-            console.log(`\n🔍 Checking for VBSP instances to auto-import...`)
-            let totalImported = 0
-            for (const item of this.items) {
-                if (item.autoImportVBSPInstances()) {
-                    totalImported++
+            await logger.section("Auto-importing VBSP instances", () => {
+                let totalImported = 0
+                for (const item of this.items) {
+                    if (item.autoImportVBSPInstances()) {
+                        totalImported++
+                    }
                 }
-            }
-            if (totalImported > 0) {
                 console.log(
-                    `✅ Auto-imported VBSP instances for ${totalImported} item(s) in ${this.name}\n`,
+                    totalImported > 0
+                        ? `Imported the VBSP instances of ${plural(totalImported, "item")}`
+                        : "No new VBSP instances to import",
                 )
-            } else {
-                console.log(`⏭️ No VBSP instances to import in ${this.name}\n`)
-            }
+            })
 
+            console.log(
+                `Loaded "${this.name}": ${plural(this.items.length, "item")} and ${plural(this.signages.length, "signage")}`,
+            )
             return { items: this.items, signages: this.signages }
         } catch (error) {
+            // The caller logs the error with its stack
             console.error(
-                `[package : ${this.name}]: Failed to load - ${error.message}`,
+                `Failed to load package "${this.name}": ${error.message}`,
             )
             this.items = []
             this.signages = []

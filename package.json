@@ -2,7 +2,7 @@
     "name": "beepee",
     "main": "backend/main.js",
     "private": true,
-    "version": "1.1.0",
+    "version": "1.2.0",
     "description": "BEEmod Package Editor",
     "author": "Areng",
     "repository": {
@@ -128,27 +128,6 @@
                 ]
             },
             {
-                "from": "backend/libs/areng_cartoonify",
-                "to": "extraResources/areng_cartoonify",
-                "filter": [
-                    "**/*"
-                ]
-            },
-            {
-                "from": "backend/libs/areng_obj23ds",
-                "to": "extraResources/areng_obj23ds",
-                "filter": [
-                    "**/*"
-                ]
-            },
-            {
-                "from": "backend/libs/areng_mdlDepend",
-                "to": "extraResources/areng_mdlDepend",
-                "filter": [
-                    "**/*"
-                ]
-            },
-            {
                 "from": "backend/prefabs",
                 "to": "prefabs"
             }
@@ -196,6 +175,7 @@
         "@types/react-dom": "^19.1.6",
         "@vitejs/plugin-react": "^4.7.0",
         "concurrently": "^9.2.0",
+        "dotenv": "^16.6.1",
         "electron": "^40.0.0",
         "electron-builder": "^26.0.12",
         "eslint": "^9.30.1",

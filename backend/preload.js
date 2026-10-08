@@ -1,12 +1,18 @@
-const { contextBridge, ipcRenderer } = require("electron")
+const { contextBridge, ipcRenderer, webUtils } = require("electron")
 
 // Expose general electron API
 contextBridge.exposeInMainWorld("electron", {
     invoke: (channel, data) => ipcRenderer.invoke(channel, data),
+    // Resolves Electron's { canceled, filePaths }
     showOpenDialog: (options) =>
         ipcRenderer.invoke("show-open-dialog", options),
     showMessageBox: (options) =>
         ipcRenderer.invoke("show-message-box", options),
+    // Disk path of a dropped File ("" if it has none). Replaces File.path,
+    // which Electron 32 removed.
+    getPathForFile: (file) => webUtils.getPathForFile(file),
+    // Console output for the log file (src/utils/logForwarding.js)
+    log: (level, text) => ipcRenderer.send("renderer:log", level, text),
 })
 
 // Expose general event API for progress updates, etc.
@@ -33,31 +39,14 @@ contextBridge.exposeInMainWorld("package", {
         // Note: We DON'T remove all listeners here because multiple components need to listen
         // (App.jsx for navigation, ItemBrowser for loading items, SignageBrowser for signages)
         ipcRenderer.on("package:loaded", (event, data) => {
-            // Handle both old format (items array) and new format ({ items, signages })
-            if (Array.isArray(data)) {
-                // Old format - just items array (backwards compat)
-                console.log(
-                    "preload.js: Received package:loaded event with items (old format):",
-                    data?.length,
-                )
-                callback(data)
-            } else {
-                // New format - object with items and signages
-                console.log(
-                    "preload.js: Received package:loaded event with items:",
-                    data?.items?.length,
-                    "signages:",
-                    data?.signages?.length,
-                )
-                callback(data)
-            }
+            // Old format: just the items array; new format: { items, signages }
+            callback(data)
         })
     },
     onPackageClosed: (callback) => {
         // Note: We DON'T remove all listeners here because multiple components need to listen
         // (App.jsx for navigation, ItemBrowser for clearing items)
         ipcRenderer.on("package:closed", () => {
-            console.log("preload.js: Received package:closed event")
             callback()
         })
     },
@@ -79,6 +68,41 @@ contextBridge.exposeInMainWorld("package", {
     browseForIcon: (itemId) =>
         ipcRenderer.invoke("browse-for-icon", { itemId }),
     browseForIconFile: () => ipcRenderer.invoke("browse-for-icon-file"),
+    // Icon maker (src/components/items/IconMaker.jsx)
+    generateIconModel: (itemId, instanceKey) =>
+        ipcRenderer.invoke("icon-maker-generate-model", { itemId, instanceKey }),
+    // The instances the icon maker can show: { instances, leftOut } of
+    // { instanceKey, name } (leftOut: missing or empty VMFs, with problem)
+    listIconInstances: (itemId) =>
+        ipcRenderer.invoke("icon-maker-list-instances", { itemId }),
+    // Makes the models of all the item's instances not made yet
+    generateAllIconModels: (itemId) =>
+        ipcRenderer.invoke("icon-maker-generate-all", { itemId }),
+    // The instances whose icon maker model is made: [{ instanceKey, name }]
+    listIconModels: (itemId) =>
+        ipcRenderer.invoke("icon-maker-list-models", { itemId }),
+    // Makes the item's model from an instance's icon maker model (Model Chooser)
+    makeModelFromIconModel: (itemId, instanceKey) =>
+        ipcRenderer.invoke("make-model-from-icon-model", { itemId, instanceKey }),
+    saveMadeIcon: (itemId, png) =>
+        ipcRenderer.invoke("icon-maker-save-icon", { itemId, png }),
+    // The icon maker's own window, for an item (Info tab > Make Icon)
+    openIconMaker: (itemId) =>
+        ipcRenderer.invoke("open-icon-maker", { itemId }),
+    // Hands an icon saved with saveMadeIcon to the item's editor
+    sendMadeIconToEditor: (itemId, filePath, fileName) =>
+        ipcRenderer.invoke("icon-maker-send-to-editor", {
+            itemId,
+            filePath,
+            fileName,
+        }),
+    // In the item editor: the icons the icon maker makes ({ filePath,
+    // fileName }), to stage. Returns a function that stops listening.
+    onIconMade: (callback) => {
+        const listener = (event, icon) => callback(icon)
+        ipcRenderer.on("icon-made", listener)
+        return () => ipcRenderer.removeListener("icon-made", listener)
+    },
     saveItem: (itemData) => ipcRenderer.invoke("save-item", itemData),
     onItemUpdated: (callback) => {
         // Remove existing listeners to prevent stacking
@@ -177,12 +201,35 @@ contextBridge.exposeInMainWorld("package", {
             itemId,
             instanceIndex,
         }),
+    // Packs the custom files an instance uses that aren't in the package yet:
+    // { success, error, skipped, packed, custom, missingFiles, neededBy, fileName }
+    autopackInstanceAgain: (itemId, instanceIndex) =>
+        ipcRenderer.invoke("autopack-instance-again", {
+            itemId,
+            instanceIndex,
+        }),
     removeInstance: (itemId, instanceIndex) =>
         ipcRenderer.invoke("remove-instance", { itemId, instanceIndex }),
     getInstanceMetadata: (itemId, instanceIndex) =>
         ipcRenderer.invoke("get-instance-metadata", { itemId, instanceIndex }),
     checkVmfExternalAssets: (vmfPath) =>
         ipcRenderer.invoke("check-vmf-external-assets", { vmfPath }),
+    // What a VMF has behind the item's surface: { success, behindSurface }
+    checkInstanceBehindSurface: (itemId, vmfPath) =>
+        ipcRenderer.invoke("check-instance-behind-surface", { itemId, vmfPath }),
+    // The same for each of the item's instances: { success, behindSurface }
+    // with behindSurface by instance index
+    getInstancesBehindSurface: (itemId) =>
+        ipcRenderer.invoke("get-instances-behind-surface", { itemId }),
+    // Opens a 3D view of what an instance has behind the item's surface: a
+    // saved one's (instanceKey) or a VMF not saved yet (vmfPath)
+    showBehindSurface: (itemId, { instanceKey, vmfPath, title }) =>
+        ipcRenderer.invoke("show-behind-surface", {
+            itemId,
+            instanceKey,
+            vmfPath,
+            title,
+        }),
 
     // ========================================
     // INSTANCE NAMING FUNCTIONS
@@ -234,6 +281,20 @@ contextBridge.exposeInMainWorld("package", {
     // VARIABLES MANAGEMENT FUNCTIONS
     // ========================================
     getVariables: (itemId) => ipcRenderer.invoke("get-variables", { itemId }),
+    // The Default Colors window of an item's Color variable (Variables tab),
+    // with the colors the editor has (timer value to "R G B")
+    openTimerColors: (itemId, colors) =>
+        ipcRenderer.invoke("open-timer-colors", { itemId, colors }),
+    // Hands the Default Colors window's colors to the item's editor
+    sendTimerColorsToEditor: (itemId, colors) =>
+        ipcRenderer.invoke("timer-colors-send-to-editor", { itemId, colors }),
+    // In the item editor: the colors its Default Colors window saves.
+    // Returns a function that stops listening.
+    onTimerColorsPicked: (callback) => {
+        const listener = (event, colors) => callback(colors)
+        ipcRenderer.on("timer-colors-picked", listener)
+        return () => ipcRenderer.removeListener("timer-colors-picked", listener)
+    },
     saveVariables: (itemId, variables) =>
         ipcRenderer.invoke("save-variables", { itemId, variables }),
 
@@ -250,8 +311,6 @@ contextBridge.exposeInMainWorld("package", {
     getConditions: (itemId) => ipcRenderer.invoke("get-conditions", { itemId }),
     saveConditions: (itemId, conditions) =>
         ipcRenderer.invoke("save-conditions", { itemId, conditions }),
-    convertBlocksToVbsp: (blocks) =>
-        ipcRenderer.invoke("convert-blocks-to-vbsp", { blocks }),
     getVbspPrefabs: () => ipcRenderer.invoke("get-vbsp-prefabs"),
 
     // ========================================
@@ -299,6 +358,8 @@ contextBridge.exposeInMainWorld("package", {
     // ========================================
     getItemMetadata: (itemId) =>
         ipcRenderer.invoke("get-item-metadata", { itemId }),
+    // The item as the item editor has it: { success, item }
+    getItem: (itemId) => ipcRenderer.invoke("get-item", { itemId }),
     updateItemMetadata: (itemId, metadata) =>
         ipcRenderer.invoke("update-item-metadata", { itemId, metadata }),
 
@@ -360,10 +421,12 @@ contextBridge.exposeInMainWorld("package", {
     // ========================================
     // CRASH REPORT FUNCTIONS
     // ========================================
-    submitCrashReport: (userDescription, errorDetails) =>
-        ipcRenderer.invoke("submit-crash-report", { userDescription, errorDetails }),
+    submitCrashReport: (userDescription, errorDetails, contact) =>
+        ipcRenderer.invoke("submit-crash-report", { userDescription, errorDetails, contact }),
     getCrashReportStatus: () =>
         ipcRenderer.invoke("get-crash-report-status"),
+    reportFailedPackage: (failureId) =>
+        ipcRenderer.invoke("report-failed-package", failureId),
     onCrashReportData: (callback) => {
         ipcRenderer.removeAllListeners("crash-report-data")
         ipcRenderer.on("crash-report-data", (event, data) => callback(data))
@@ -371,11 +434,15 @@ contextBridge.exposeInMainWorld("package", {
     isUpdateAvailable: () => ipcRenderer.invoke("is-update-available"),
 
     // ========================================
-    // BEE PACKAGE INFO FUNCTIONS
+    // BEEPM FUNCTIONS
     // ========================================
-    getBeePackageInfo: () => ipcRenderer.invoke("get-bee-package-info"),
-    saveBeePackageInfo: (beePackageData) =>
-        ipcRenderer.invoke("save-bee-package-info", beePackageData),
+    // { handle } of whoever's logged in to BeePM on this PC (null if nobody)
+    getBeePmHandle: () => ipcRenderer.invoke("get-beepm-handle"),
+    // { success, published: { name, version } } of the package BeePM has
+    // with a BEE2 ID (null when it has none)
+    getBeePmPublished: (beeId) => ipcRenderer.invoke("beepm-published", beeId),
+    // { success, packages: [{ name, displayName, latest, beeId }] }
+    searchBeePm: (query) => ipcRenderer.invoke("search-beepm-packages", query),
 
     // ========================================
     // SETTINGS FUNCTIONS

@@ -1,16 +1,20 @@
 const openEditors = new Map()
 const openSignageEditors = new Map() // Track signage editor windows
 const openModelPreviewWindows = new Map() // Track model preview windows
+const openIconMakers = new Map() // Track icon maker windows (one per item)
+const openTimerColors = new Map() // Track Default Colors windows (one per item)
 let createItemWindow = null // Track the create item window
 let createPackageWindow = null // Track the create package window
 let signageDesignerWindow = null // Track the signage designer window
 let packageInformationWindow = null // Track the package information window
 let changelogWindow = null // Track the changelog window
 let crashReportWindow = null // Track the crash report window
-let beePackageWindow = null // Track the bee-package.json editor window
 let setupWindow = null // Track the setup window
 let settingsWindow = null // Track the settings window
-const { BrowserWindow, app, Menu } = require("electron")
+const { BrowserWindow, app, Menu, screen } = require("electron")
+const { logger } = require("../utils/logger")
+
+const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
 
 // Native File/Edit menu for the signage designer window. Items forward an
 // action name to the window's renderer, which performs it (the designer's
@@ -56,11 +60,19 @@ function buildSignageDesignerMenu(win) {
                 item("Undo", "undo", "CmdOrCtrl+Z"),
                 item("Redo", "redo", "CmdOrCtrl+Y"),
                 { type: "separator" },
+                item("Add Text", "addText", "CmdOrCtrl+T"),
+                { type: "separator" },
                 item("Cut", "cut", "CmdOrCtrl+X"),
                 item("Copy", "copy", "CmdOrCtrl+C"),
                 item("Paste", "paste", "CmdOrCtrl+V"),
                 item("Duplicate", "duplicate", "CmdOrCtrl+D"),
                 item("Delete", "delete", "Delete"),
+                { type: "separator" },
+                item("Group", "group", "CmdOrCtrl+G"),
+                item("Ungroup", "ungroup", "CmdOrCtrl+Shift+G"),
+                { type: "separator" },
+                item("Flip Horizontal", "flipH"),
+                item("Flip Vertical", "flipV"),
                 { type: "separator" },
                 item("Select All", "selectAll", "CmdOrCtrl+A"),
             ],
@@ -106,6 +118,10 @@ function createItemEditor(item, mainWindow) {
 
     window.on("closed", () => {
         openEditors.delete(item.id)
+        // Its icon maker hands the icons it makes to this window, and its
+        // Default Colors window the colors
+        closeIconMakerWindow(item.id)
+        closeTimerColorsWindow(item.id)
     })
 
     if (isDev) {
@@ -131,11 +147,163 @@ function createItemEditor(item, mainWindow) {
 function sendItemUpdateToEditor(itemId, updatedItem) {
     const editorWindow = openEditors.get(itemId)
     if (editorWindow && !editorWindow.isDestroyed()) {
-        console.log(`Sending item-updated to editor window for item: ${itemId}`)
         editorWindow.webContents.send("item-updated", updatedItem)
-    } else {
-        console.log(`No open editor window found for item: ${itemId}`)
     }
+}
+
+/**
+ * Open an item's icon maker in its own window, or bring it up if it's open
+ * already. The page (src/pages/IconMakerPage.jsx) gets the item from its
+ * address and hands the icon it makes to the item's editor
+ * (sendMadeIconToEditor), so it closes with that editor.
+ * @param {{id: string, name: string}} item
+ */
+function createIconMakerWindow(item) {
+    const existing = openIconMakers.get(item.id)
+    if (existing && !existing.isDestroyed()) {
+        if (existing.isMinimized()) existing.restore()
+        existing.focus()
+        return existing
+    }
+
+    const window = new BrowserWindow({
+        // The 512px view with the settings beside it, and the buttons
+        width: 880,
+        height: 660,
+        useContentSize: true,
+        minWidth: 480,
+        minHeight: 360,
+        title: `Make Icon: ${item.name}`,
+        backgroundColor: "#1e1e1e",
+        webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            preload: path.join(__dirname, "..", "preload.js"),
+        },
+        skipTaskbar: false,
+        minimizable: true,
+        maximizable: true,
+        resizable: true,
+        autoHideMenuBar: true,
+    })
+
+    openIconMakers.set(item.id, window)
+
+    window.on("closed", () => {
+        if (openIconMakers.get(item.id) === window) {
+            openIconMakers.delete(item.id)
+        }
+    })
+
+    const query = { route: "icon-maker", itemId: item.id, itemName: item.name }
+    if (isDev) {
+        window.loadURL(`http://localhost:5173/?${new URLSearchParams(query)}`)
+    } else {
+        const appPath = app.getAppPath()
+        window.loadFile(path.join(appPath, "dist", "index.html"), { query })
+    }
+
+    window.setMenuBarVisibility(false)
+    return window
+}
+
+function closeIconMakerWindow(itemId) {
+    const window = openIconMakers.get(itemId)
+    if (window && !window.isDestroyed()) window.close()
+}
+
+// Hands an icon the icon maker made ({ filePath, fileName }) to the item's
+// editor window, which stages it like a picked icon file (applied on Save).
+// Returns false when that editor isn't open.
+function sendMadeIconToEditor(itemId, icon) {
+    const editorWindow = openEditors.get(itemId)
+    if (editorWindow && !editorWindow.isDestroyed()) {
+        editorWindow.webContents.send("icon-made", icon)
+        editorWindow.focus()
+        return true
+    }
+    return false
+}
+
+/**
+ * An item's Default Colors window (item editor > Variables > Color): the
+ * color players start with for each timer value in BEE2's ItemVar menu.
+ * @param {Object} item
+ * @param {Object} colors - Timer value to "R G B", as the item's editor has them
+ */
+function createTimerColorsWindow(item, colors) {
+    const existing = openTimerColors.get(item.id)
+    if (existing && !existing.isDestroyed()) {
+        if (existing.isMinimized()) existing.restore()
+        existing.focus()
+        return existing
+    }
+
+    const editorWindow = openEditors.get(item.id)
+    const window = new BrowserWindow({
+        // The 28 swatches, the color picker beside them, and the buttons
+        width: 880,
+        height: 520,
+        useContentSize: true,
+        title: `Default Colors: ${item.name}`,
+        backgroundColor: "#1e1e1e",
+        // Above the item's editor
+        parent:
+            editorWindow && !editorWindow.isDestroyed()
+                ? editorWindow
+                : undefined,
+        webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            preload: path.join(__dirname, "..", "preload.js"),
+        },
+        skipTaskbar: false,
+        minimizable: false,
+        maximizable: false,
+        resizable: false,
+        autoHideMenuBar: true,
+    })
+
+    openTimerColors.set(item.id, window)
+
+    window.on("closed", () => {
+        if (openTimerColors.get(item.id) === window) {
+            openTimerColors.delete(item.id)
+        }
+    })
+
+    const query = {
+        route: "timer-colors",
+        itemId: item.id,
+        itemName: item.name,
+        colors: JSON.stringify(colors ?? {}),
+    }
+    if (isDev) {
+        window.loadURL(`http://localhost:5173/?${new URLSearchParams(query)}`)
+    } else {
+        const appPath = app.getAppPath()
+        window.loadFile(path.join(appPath, "dist", "index.html"), { query })
+    }
+
+    window.setMenuBarVisibility(false)
+    return window
+}
+
+function closeTimerColorsWindow(itemId) {
+    const window = openTimerColors.get(itemId)
+    if (window && !window.isDestroyed()) window.close()
+}
+
+// Hands the Default Colors window's colors to the item's editor window,
+// which applies them on Save. Returns false when that editor isn't open.
+function sendTimerColorsToEditor(itemId, colors) {
+    const editorWindow = openEditors.get(itemId)
+    if (editorWindow && !editorWindow.isDestroyed()) {
+        editorWindow.webContents.send("timer-colors-picked", colors)
+        editorWindow.focus()
+        return true
+    }
+    return false
 }
 
 /**
@@ -195,10 +363,7 @@ function createSignageEditor(signage, mainWindow) {
 function sendSignageUpdateToEditor(signageId, updatedSignage) {
     const editorWindow = openSignageEditors.get(signageId)
     if (editorWindow && !editorWindow.isDestroyed()) {
-        console.log(`Sending signage-updated to editor window for signage: ${signageId}`)
         editorWindow.webContents.send("signage-updated", updatedSignage)
-    } else {
-        console.log(`No open editor window found for signage: ${signageId}`)
     }
 }
 
@@ -270,10 +435,10 @@ function createSignageDesignerWindow(mainWindow, editPayload = null) {
     }
 
     signageDesignerWindow = new BrowserWindow({
-        width: 960,
-        height: 680,
-        minWidth: 960,
-        minHeight: 640,
+        width: 1280,
+        height: 900,
+        minWidth: 1024,
+        minHeight: 720,
         title: "BeePEE - Signage Designer",
         webPreferences: {
             nodeIntegration: false,
@@ -321,6 +486,16 @@ function createSignageDesignerWindow(mainWindow, editPayload = null) {
     }
 }
 
+/** A window's content height, at most what fits on the main screen */
+function heightOnScreen(height) {
+    try {
+        // Room for the title bar
+        return Math.min(height, screen.getPrimaryDisplay().workArea.height - 40)
+    } catch {
+        return height
+    }
+}
+
 function createPackageCreationWindow(mainWindow) {
     // If window already exists, focus it
     if (createPackageWindow && !createPackageWindow.isDestroyed()) {
@@ -329,8 +504,10 @@ function createPackageCreationWindow(mainWindow) {
     }
 
     createPackageWindow = new BrowserWindow({
-        width: 500,
-        height: 650,
+        // The page's size, with its BeePM fields (bee-package.json)
+        useContentSize: true,
+        width: 484,
+        height: heightOnScreen(890),
         title: "BeePEE - Create New Package",
         webPreferences: {
             nodeIntegration: false,
@@ -373,8 +550,10 @@ function createPackageInformationWindow(mainWindow) {
     }
 
     packageInformationWindow = new BrowserWindow({
-        width: 500,
-        height: 650,
+        // The page's size, with its BeePM fields (bee-package.json)
+        useContentSize: true,
+        width: 484,
+        height: heightOnScreen(890),
         title: "BeePEE - Package Information",
         webPreferences: {
             nodeIntegration: false,
@@ -458,7 +637,8 @@ function createChangelogWindow(mainWindow) {
  */
 function createModelPreviewWindow(modelData) {
     const { objPath, title = "Model Preview" } = modelData
-    const windowKey = objPath || `preview-${Date.now()}`
+    // One window per model (or per key, like a model shown another way)
+    const windowKey = modelData.key || objPath || `preview-${Date.now()}`
 
     // If window already exists for this model, focus it
     if (openModelPreviewWindows.has(windowKey)) {
@@ -528,13 +708,35 @@ function createModelPreviewWindow(modelData) {
     return previewWindow
 }
 
+/** The crash report window's title for an error (none: a bug the user reports) */
+function crashReportTitle(errorDetails) {
+    if (!errorDetails) return "BeePEE - Report a Bug"
+    if (errorDetails.type === "packageOpenFailed") {
+        return "BeePEE - Package Failed to Open"
+    }
+    if (errorDetails.type === "itemsSkipped") {
+        return "BeePEE - Items Weren't Loaded"
+    }
+    return "BeePEE - Unexpected Error"
+}
+
 /**
  * Create a crash report window
  * @param {Object|null} errorDetails - Error info or null for manual bug report
+ * @param {Object} [options]
+ * @param {boolean} [options.replace] - When the window is open already, show
+ *   this error in it (the user asked to report it)
  */
-function createCrashReportWindow(errorDetails) {
+function createCrashReportWindow(errorDetails, { replace = false } = {}) {
     // If window already exists, focus it
     if (crashReportWindow && !crashReportWindow.isDestroyed()) {
+        if (replace) {
+            crashReportWindow.webContents.send("crash-report-data", {
+                errorDetails: errorDetails || null,
+                isManual: !errorDetails,
+            })
+            crashReportWindow.setTitle(crashReportTitle(errorDetails))
+        }
         crashReportWindow.focus()
         return
     }
@@ -544,7 +746,7 @@ function createCrashReportWindow(errorDetails) {
     crashReportWindow = new BrowserWindow({
         width: 500,
         height: 550,
-        title: isManual ? "BeePEE - Report a Bug" : "BeePEE - Unexpected Error",
+        title: crashReportTitle(errorDetails),
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
@@ -582,49 +784,6 @@ function createCrashReportWindow(errorDetails) {
             })
         }, 100)
     })
-}
-
-/**
- * Create the bee-package.json editor window
- */
-function createBeePackageWindow(mainWindow) {
-    // If window already exists, focus it
-    if (beePackageWindow && !beePackageWindow.isDestroyed()) {
-        beePackageWindow.focus()
-        return
-    }
-
-    beePackageWindow = new BrowserWindow({
-        width: 550,
-        height: 600,
-        title: "BeePEE - BeePM Package Info",
-        webPreferences: {
-            nodeIntegration: false,
-            contextIsolation: true,
-            preload: path.join(__dirname, "..", "preload.js"),
-        },
-        devTools: isDev,
-        skipTaskbar: false,
-        minimizable: true,
-        maximizable: false,
-        resizable: true,
-        autoHideMenuBar: true,
-    })
-
-    beePackageWindow.on("closed", () => {
-        beePackageWindow = null
-    })
-
-    if (isDev) {
-        beePackageWindow.loadURL(`http://localhost:5173/?route=bee-package`)
-    } else {
-        const appPath = app.getAppPath()
-        beePackageWindow.loadFile(path.join(appPath, "dist", "index.html"), {
-            query: { route: "bee-package" },
-        })
-    }
-
-    beePackageWindow.setMenuBarVisibility(false)
 }
 
 /**
@@ -699,7 +858,9 @@ async function closeAllEditorWindows() {
     }
 
     if (closePromises.length > 0) {
-        console.log(`Closing ${closePromises.length} editor window(s)...`)
+        console.log(
+            `Closing ${plural(closePromises.length, "item editor window")}`,
+        )
         await Promise.all(closePromises)
         // Give time for file handles to be released
         await new Promise((resolve) => setTimeout(resolve, 300))
@@ -731,39 +892,70 @@ async function closeAllSignageEditorWindows() {
     }
 
     if (closePromises.length > 0) {
-        console.log(`Closing ${closePromises.length} signage editor window(s)...`)
+        console.log(
+            `Closing ${plural(closePromises.length, "signage editor window")}`,
+        )
         await Promise.all(closePromises)
         await new Promise((resolve) => setTimeout(resolve, 300))
     }
 }
 
 /**
+ * Close all icon maker windows
+ */
+async function closeAllIconMakerWindows() {
+    const closing = [...openIconMakers.values()]
+        .filter((window) => !window.isDestroyed())
+        .map(
+            (window) =>
+                new Promise((resolve) => {
+                    window.once("closed", resolve)
+                    window.close()
+                }),
+        )
+    await Promise.all(closing)
+}
+
+/**
  * Close all windows (editors, model previews, etc.) to release all file handles
  */
 async function closeAllWindows() {
-    console.log('Closing all BeePEE windows to release file handles...')
-    await closeAllEditorWindows()
-    await closeAllSignageEditorWindows()
-    await closeAllModelPreviewWindows()
+    const isOpen = (window) => window && !window.isDestroyed()
+    const open = [
+        ...openEditors.values(),
+        ...openIconMakers.values(),
+        ...openSignageEditors.values(),
+        ...openModelPreviewWindows.values(),
+        createItemWindow,
+        createPackageWindow,
+    ].filter(isOpen).length
+    const closeAll = async () => {
+        await closeAllIconMakerWindows()
+        await closeAllEditorWindows()
+        await closeAllSignageEditorWindows()
+        await closeAllModelPreviewWindows()
 
-    // Also close create item and create package windows if open
-    if (createItemWindow && !createItemWindow.isDestroyed()) {
-        createItemWindow.close()
+        // Also close create item and create package windows if open
+        if (createItemWindow && !createItemWindow.isDestroyed()) {
+            createItemWindow.close()
+        }
+        if (createPackageWindow && !createPackageWindow.isDestroyed()) {
+            createPackageWindow.close()
+        }
+
+        // Give extra time for all handles to be released
+        await new Promise((resolve) => setTimeout(resolve, 500))
+
+        // Force garbage collection
+        if (global.gc) {
+            global.gc()
+            await new Promise((resolve) => setTimeout(resolve, 200))
+        }
     }
-    if (createPackageWindow && !createPackageWindow.isDestroyed()) {
-        createPackageWindow.close()
-    }
-
-    // Give extra time for all handles to be released
-    await new Promise((resolve) => setTimeout(resolve, 500))
-
-    // Force garbage collection
-    if (global.gc) {
-        global.gc()
-        await new Promise((resolve) => setTimeout(resolve, 200))
-    }
-
-    console.log('All BeePEE windows closed')
+    // Only worth logging when there were windows to close
+    if (open === 0) return closeAll()
+    const windows = open === 1 ? "1 window" : `${open} windows`
+    return logger.section(`Closing ${windows} to release files`, closeAll)
 }
 
 /**
@@ -950,6 +1142,10 @@ module.exports = {
     createItemEditor,
     sendItemUpdateToEditor,
     openEditors,
+    createIconMakerWindow,
+    sendMadeIconToEditor,
+    createTimerColorsWindow,
+    sendTimerColorsToEditor,
     createSignageEditor,
     sendSignageUpdateToEditor,
     sendStagedDesignToEditor,
@@ -966,8 +1162,6 @@ module.exports = {
     getChangelogWindow: () => changelogWindow,
     createCrashReportWindow,
     getCrashReportWindow: () => crashReportWindow,
-    createBeePackageWindow,
-    getBeePackageWindow: () => beePackageWindow,
     createModelPreviewWindow,
     closeAllModelPreviewWindows,
     closeAllEditorWindows,

@@ -3,6 +3,7 @@ import { Box, Grid, Tooltip } from "@mui/material"
 import { Image as SignageIcon } from "@mui/icons-material"
 import AddButton from "./AddItem"
 import AddSignageDialog from "./signages/AddSignageDialog"
+import { useGridColumns } from "../utils/useGridColumns"
 
 // Signage icon component with hidden signage handling
 function SignageIconCell({ signage, onEdit }) {
@@ -21,7 +22,7 @@ function SignageIconCell({ signage, onEdit }) {
                 .then(setImageSrc)
                 .catch((error) => {
                     console.warn(
-                        `Failed to load icon for signage ${signage.name}:`,
+                        `Failed to load icon for signage "${signage.name}":`,
                         error,
                     )
                     setImageSrc(null)
@@ -90,81 +91,52 @@ function SignageIconCell({ signage, onEdit }) {
 
 function SignageBrowser() {
     const [signages, setSignages] = useState([])
-    const [gridSize, setGridSize] = useState({ cols: 12, rows: 8 })
+    // The empty cells fill the last row (and one more)
+    const [gridRef, columns] = useGridColumns()
     const [addDialogOpen, setAddDialogOpen] = useState(false)
 
     useEffect(() => {
-        console.log("SignageBrowser mounted, setting up package listener")
-
         // Fetch current signages on mount (in case package was already loaded)
         const fetchCurrentSignages = async () => {
             try {
                 const currentSignages =
                     await window.package.getCurrentSignages?.()
                 if (currentSignages && currentSignages.length > 0) {
-                    console.log(
-                        "SignageBrowser: Fetched current signages on mount:",
-                        currentSignages.length,
-                    )
                     setSignages(currentSignages)
                 }
             } catch (error) {
-                console.log(
-                    "SignageBrowser: No current signages available (this is normal for packages without signages)",
-                )
+                console.warn("Failed to fetch current signages:", error)
             }
         }
         fetchCurrentSignages()
 
         // Handle package load and updates
         const handlePackageLoaded = (data) => {
-            console.log("SignageBrowser: Package loaded callback fired")
             // Handle both old format (items array) and new format ({ items, signages })
             const loadedSignages = Array.isArray(data)
                 ? []
                 : data?.signages || []
-            console.log("SignageBrowser: Loaded signages:", loadedSignages.length)
             setSignages(loadedSignages)
         }
 
         // Handle package close
         const handlePackageClosed = () => {
-            console.log("SignageBrowser: Package closed, clearing signages")
             setSignages([])
         }
 
         // Register listeners
         window.package.onPackageLoaded(handlePackageLoaded)
         window.package.onPackageClosed(handlePackageClosed)
-
-        return () => {
-            console.log("Cleaning up SignageBrowser listeners")
-        }
-    }, [])
-
-    useEffect(() => {
-        const updateGridSize = () => {
-            const itemSize = 96
-            const spacing = 8
-            const totalItemSize = itemSize + spacing
-
-            const cols = Math.floor((window.innerWidth - 40) / totalItemSize)
-            const rows = Math.floor((window.innerHeight - 40) / totalItemSize)
-            setGridSize({ cols, rows })
-        }
-
-        updateGridSize()
-        window.addEventListener("resize", updateGridSize)
-        return () => window.removeEventListener("resize", updateGridSize)
     }, [])
 
     const handleEditSignage = (signageId) => {
-        console.log("Attempting to open editor for signage:", signageId)
-
         // Find the signage in current state
         const signage = signages.find((s) => s.id === signageId)
         if (!signage) {
-            console.warn("Signage not found:", signageId)
+            console.warn(
+                "Failed to open signage editor, signage not found:",
+                signageId,
+            )
             return
         }
 
@@ -176,14 +148,14 @@ function SignageBrowser() {
         setAddDialogOpen(true)
     }
 
-    const signagesInLastRow = signages.length % gridSize.cols
+    const signagesInLastRow = signages.length % columns
     const placeholdersToCompleteRow =
-        signagesInLastRow === 0 ? 0 : gridSize.cols - signagesInLastRow
-    const totalPlaceholders = placeholdersToCompleteRow + gridSize.cols
+        signagesInLastRow === 0 ? 0 : columns - signagesInLastRow
+    const totalPlaceholders = placeholdersToCompleteRow + columns
 
     return (
         <Box sx={{ width: "100%", height: "100vh" }}>
-            <Grid container spacing={1} sx={{ py: 2, px: 2 }}>
+            <Grid container ref={gridRef} spacing={1} sx={{ py: 2, px: 2 }}>
                 {/* Actual signages */}
                 {signages.map((signage) => (
                     <Grid key={signage.id} size="auto">

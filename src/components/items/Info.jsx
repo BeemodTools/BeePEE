@@ -20,14 +20,54 @@ import {
     Image,
     Warning,
     Lock,
+    PhotoCamera,
 } from "@mui/icons-material"
 import ReactMarkdown from "react-markdown"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 
 function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }) {
     const [iconSrc, setIconSrc] = useState(null)
     const [iconError, setIconError] = useState(false)
     const [isPreview, setIsPreview] = useState(false)
+
+    // Stage an icon (applied on Save), from a file or the icon maker
+    const stageIcon = (filePath, fileName) => {
+        onUpdate("stagedIconPath", filePath)
+        onUpdate("stagedIconName", fileName)
+        onUpdate("iconChanged", true, "basicInfo")
+    }
+
+    // The icons the icon maker's window sends back (Make Icon)
+    const stageIconRef = useRef(stageIcon)
+    stageIconRef.current = stageIcon
+    useEffect(
+        () =>
+            window.package.onIconMade?.(({ filePath, fileName }) =>
+                stageIconRef.current(filePath, fileName),
+            ),
+        [],
+    )
+
+    const makeIconButton = (
+        <Button
+            variant="outlined"
+            startIcon={<PhotoCamera />}
+            onClick={async () => {
+                try {
+                    const result = await window.package.openIconMaker(item.id)
+                    if (!result?.success) throw new Error(result?.error)
+                } catch (error) {
+                    console.error(
+                        `Failed to open the icon maker for item "${item?.name}":`,
+                        error,
+                    )
+                }
+            }}
+            sx={{ py: 1.5, flex: 1 }}
+        >
+            Make Icon
+        </Button>
+    )
 
     useEffect(() => {
         // Load the icon when item changes or when staged icon changes
@@ -36,7 +76,10 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
             window.package.loadFile(iconToLoad)
                 .then(setIconSrc)
                 .catch((error) => {
-                    console.warn(`Failed to load icon for item ${item?.name}:`, error)
+                    console.warn(
+                        `Failed to load the icon of item "${item?.name}":`,
+                        error,
+                    )
                     setIconError(true)
                     setIconSrc(null)
                 })
@@ -180,12 +223,32 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                     error={!formData.author?.trim()}
                 />
 
-                {/* Icon upload */}
+                {/* Icon: Preview (the widest), Make Icon, Change Icon */}
                 {(iconSrc || formData.stagedIconPath || item?.icon) ? (
                     <Box sx={{ display: "flex", gap: 1 }}>
                         <Button
+                            variant="contained"
+                            startIcon={<Visibility />}
+                            onClick={async () => {
+                                const iconToShow = formData.stagedIconPath || item?.icon
+                                if (iconToShow) {
+                                    try {
+                                        await window.package.showIconPreview(iconToShow, item.name)
+                                    } catch (error) {
+                                        console.error(
+                                            `Failed to show the icon preview for item "${item?.name}":`,
+                                            error,
+                                        )
+                                    }
+                                }
+                            }}
+                            sx={{ py: 1.5, flex: 2 }}
+                        >
+                            Preview
+                        </Button>
+                        {makeIconButton}
+                        <Button
                             variant="outlined"
-                            fullWidth
                             startIcon={<FolderOpen />}
                             onClick={async () => {
                                 try {
@@ -195,39 +258,28 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                                         onUpdate("stagedIconName", result.fileName)
                                         onUpdate("iconChanged", true, "basicInfo")
                                     } else if (!result.canceled) {
-                                        console.error("Failed to browse for icon:", result.error)
+                                        console.error(
+                                            `Failed to select an icon file for item "${item?.name}":`,
+                                            result.error,
+                                        )
                                     }
                                 } catch (error) {
-                                    console.error("Failed to browse for icon:", error)
+                                    console.error(
+                                        `Failed to select an icon file for item "${item?.name}":`,
+                                        error,
+                                    )
                                 }
                             }}
-                            sx={{ py: 1.5 }}
+                            sx={{ py: 1.5, flex: 1 }}
                         >
                             Change Icon
                         </Button>
-                        <Button
-                            variant="contained"
-                            fullWidth
-                            startIcon={<Visibility />}
-                            onClick={async () => {
-                                const iconToShow = formData.stagedIconPath || item?.icon
-                                if (iconToShow) {
-                                    try {
-                                        await window.package.showIconPreview(iconToShow, item.name)
-                                    } catch (error) {
-                                        console.error("Failed to show icon preview:", error)
-                                    }
-                                }
-                            }}
-                            sx={{ py: 1.5 }}
-                        >
-                            Preview
-                        </Button>
                     </Box>
                 ) : (
+                    <Box sx={{ display: "flex", gap: 1 }}>
+                    {makeIconButton}
                     <Button
                         variant="contained"
-                        fullWidth
                         color="warning"
                         startIcon={<FolderOpen />}
                         onClick={async () => {
@@ -238,16 +290,23 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                                     onUpdate("stagedIconName", result.fileName)
                                     onUpdate("iconChanged", true, "basicInfo")
                                 } else if (!result.canceled) {
-                                    console.error("Failed to browse for icon:", result.error)
+                                    console.error(
+                                        `Failed to select an icon file for item "${item?.name}":`,
+                                        result.error,
+                                    )
                                 }
                             } catch (error) {
-                                console.error("Failed to browse for icon:", error)
+                                console.error(
+                                    `Failed to select an icon file for item "${item?.name}":`,
+                                    error,
+                                )
                             }
                         }}
-                        sx={{ py: 1.5 }}
+                        sx={{ py: 1.5, flex: 1 }}
                     >
                         Upload Icon
                     </Button>
+                    </Box>
                 )}
 
                 {/* Description with preview toggle */}
@@ -261,6 +320,8 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                         }}>
                         <Typography variant="body2" color="text.secondary">
                             Description
+                            {formData.descriptionSource === "info" &&
+                                " (from the package's info.txt, for all of the item's styles)"}
                         </Typography>
                         <IconButton
                             size="small"
@@ -306,6 +367,25 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
                                 },
                             }}
                         />
+                    )}
+
+                    {/* info.txt's description (BEE2 shows it too) */}
+                    {formData.sharedDescription && (
+                        <Box sx={{ mt: 1 }}>
+                            <Typography
+                                variant="caption"
+                                color="text.secondary">
+                                BEE2 also shows this description, from the
+                                package's info.txt (for all of the item's
+                                styles):
+                            </Typography>
+                            <Typography
+                                variant="body2"
+                                color="text.secondary"
+                                sx={{ whiteSpace: "pre-wrap", mt: 0.5 }}>
+                                {formData.sharedDescription}
+                            </Typography>
+                        </Box>
                     )}
                 </Box>
 

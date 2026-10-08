@@ -53,6 +53,14 @@ class ResourceIndex {
     }
 
     /**
+     * Where a file comes from: { vpk, entry } for a file in a VPK, { file }
+     * for a loose file, null when not found
+     */
+    source(contentPath) {
+        return this.files.get(normalizeContentPath(contentPath)) ?? null
+    }
+
+    /**
      * Read a file by content path
      * @returns {Promise<Buffer|null>} null when not found
      */
@@ -61,6 +69,12 @@ class ResourceIndex {
         if (!source) return null
         if (source.vpk) return readVpkEntry(source.vpk, source.entry)
         return fs.promises.readFile(source.file)
+    }
+
+    /** Every content path under a folder ("particles"), subfolders too */
+    filesUnder(folder) {
+        const prefix = `${normalizeContentPath(folder).replace(/\/+$/, "")}/`
+        return [...this.files.keys()].filter((file) => file.startsWith(prefix))
     }
 
     /**
@@ -79,16 +93,32 @@ class ResourceIndex {
     }
 }
 
-async function addFolder(index, root) {
-    const entries = await fs.promises.readdir(root, {
-        recursive: true,
-        withFileTypes: true,
-    })
-    for (const entry of entries) {
-        if (!entry.isFile()) continue
-        const parent = entry.parentPath ?? entry.path
-        const file = path.join(parent, entry.name)
-        index.add(normalizeContentPath(path.relative(root, file)), { file })
+// The content folders read by default, so others (sound, maps, ...) are
+// not walked
+const CONTENT_FOLDERS = ["materials", "models"]
+
+async function addFolder(index, root, folders) {
+    const rootEntries = await fs.promises.readdir(root, { withFileTypes: true })
+    for (const folder of rootEntries) {
+        if (
+            !folder.isDirectory() ||
+            !folders.includes(folder.name.toLowerCase())
+        ) {
+            continue
+        }
+        const entries = await fs.promises.readdir(
+            path.join(root, folder.name),
+            {
+                recursive: true,
+                withFileTypes: true,
+            },
+        )
+        for (const entry of entries) {
+            if (!entry.isFile()) continue
+            const parent = entry.parentPath ?? entry.path
+            const file = path.join(parent, entry.name)
+            index.add(normalizeContentPath(path.relative(root, file)), { file })
+        }
     }
 }
 
@@ -97,15 +127,20 @@ async function addFolder(index, root) {
  * "materials"/"models" subfolders, not those subfolders themselves).
  * @param {string[]} resourcePaths
  * @param {(message: string) => void} warn
+ * @param {string[]} [folders] - The subfolders of content folders to index
  * @returns {Promise<ResourceIndex>}
  */
-async function buildResourceIndex(resourcePaths, warn = () => {}) {
+async function buildResourceIndex(
+    resourcePaths,
+    warn = () => {},
+    folders = CONTENT_FOLDERS,
+) {
     const index = new ResourceIndex()
     for (const resourcePath of resourcePaths) {
         try {
             const stat = await fs.promises.stat(resourcePath)
             if (stat.isDirectory()) {
-                await addFolder(index, resourcePath)
+                await addFolder(index, resourcePath, folders)
             } else {
                 const vpk = loadVpk(resourcePath)
                 for (const [contentPath, entry] of vpk.entries) {

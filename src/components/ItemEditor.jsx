@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo } from "react"
+import { useEffect, useState, useMemo, useRef } from "react"
 import {
     Box,
     Tabs,
@@ -42,6 +42,8 @@ import Conditions from "./items/Conditions"
 import Other from "./items/Other"
 import Metadata from "./items/Metadata"
 import { useItemContext } from "../contexts/ItemContext"
+import { descriptionText } from "../utils/descriptionText"
+import { instancesWithUnsaved } from "../utils/instancesWithUnsaved"
 
 function ItemEditor() {
     const { item, reloadItem } = useItemContext()
@@ -79,7 +81,7 @@ function ItemEditor() {
                     setShowItemIds(showIdResult.value)
                 }
             } catch (error) {
-                console.log("Failed to load editor preferences:", error)
+                console.warn("Failed to load editor preferences:", error)
             }
         }
         loadPreferences()
@@ -94,6 +96,9 @@ function ItemEditor() {
     const [redoStack, setRedoStack] = useState([])
     const [isUndoRedoAction, setIsUndoRedoAction] = useState(false)
     const [editingNames, setEditingNames] = useState({})
+    // Counts the items the backend sent, so a slower load of an older one
+    // can't overwrite a newer one's
+    const itemLoads = useRef(0)
 
     // Create a snapshot of current form data for undo/redo
     const createSnapshot = (action, description) => {
@@ -172,6 +177,11 @@ function ItemEditor() {
         name: "",
         author: "",
         description: "",
+        // Where the description is saved: "properties" (properties.txt, for
+        // this style) or "info" (info.txt, for all the item's styles)
+        descriptionSource: "properties",
+        // info.txt's, when the item has both (shown under the description)
+        sharedDescription: "",
         movementHandle: "HANDLE_4_DIRECTIONS",
         modelName: "",
         // Icon staging
@@ -185,7 +195,9 @@ function ItemEditor() {
         instances: {},
         // Variables and Conditions data
         variables: {},
-        conditions: {},
+        blocks: [],
+        // Why the conditions can't be edited (their VBSP config can't be read)
+        conditionsError: undefined,
         // Other tab data
         other: {},
         // Track what has been modified
@@ -214,28 +226,25 @@ function ItemEditor() {
         if (item) {
             document.title = `Edit ${item.name}`
 
-            // Initialize form data with loaded item
-            const desc = item.details?.Description
-            let description = ""
+            // BEE2 shows two descriptions: info.txt's (for all the item's
+            // styles) and properties.txt's. The Description field edits the
+            // one the item has, properties.txt's when it has both (or none)
+            const styleDescription = descriptionText(item.details?.Description)
+            const infoDescription = descriptionText(item.infoDescription)
+            const descriptionSource =
+                !styleDescription && infoDescription ? "info" : "properties"
+            const description =
+                descriptionSource === "info" ? infoDescription : styleDescription
+            const sharedDescription =
+                descriptionSource === "info" ? "" : infoDescription
 
-            if (desc && typeof desc === "object") {
-                const descValues = Object.keys(desc)
-                    .filter((key) => key.startsWith("desc_"))
-                    .sort(
-                        (a, b) =>
-                            parseInt(a.slice(5), 10) - parseInt(b.slice(5), 10),
-                    )
-                    .map((key) => desc[key])
-                    .filter((value) => value && value.trim() !== "")
-                    .join("\n")
-                    .trim()
-                description = descValues
-            } else {
-                description = desc || ""
-            }
+            // The backend sends the item again whenever it changes, also
+            // while a save is writing it: only the latest one's data is used
+            const run = ++itemLoads.current
 
             // Load inputs, outputs, variables, and conditions
             const loadData = async () => {
+                let loaded
                 try {
                     const [
                         inputResult,
@@ -251,79 +260,79 @@ function ItemEditor() {
                         window.package.getModelName(item.id),
                     ])
 
-                    // Handle conditions - can be either blocks or VBSP format
+                    // The condition blocks (raw blocks for the VBSP
+                    // config's conditions), or why there are none
                     const conditionsData = conditionsResult.success
                         ? conditionsResult.conditions
-                        : {}
-                    const hasBlocks =
-                        conditionsData.blocks &&
-                        Array.isArray(conditionsData.blocks)
+                        : {
+                              error: `The conditions couldn't be loaded (${conditionsResult.error})`,
+                          }
 
-                    setFormData((prev) => ({
-                        ...prev,
-                        name: item.name || "",
-                        author: item.details?.Authors || "",
-                        description: description,
-                        movementHandle:
-                            item.movementHandle || "HANDLE_4_DIRECTIONS",
-                        modelName: modelNameResult.success ? modelNameResult.modelName : "",
+                    loaded = {
+                        modelName: modelNameResult.success
+                            ? modelNameResult.modelName
+                            : "",
                         inputs: inputResult.success ? inputResult.inputs : {},
                         outputs: outputResult.success
                             ? outputResult.outputs
                             : {},
-                        // Update instances from item data, but preserve local modifications
-                        instances: prev._modified.instances
-                            ? prev.instances
-                            : item.instances || {},
                         variables: variablesResult.success
                             ? variablesResult.variables
                             : {},
-                        // If blocks are present, use them directly, otherwise use VBSP format
-                        blocks: hasBlocks ? conditionsData.blocks : undefined,
-                        conditions: hasBlocks ? {} : conditionsData,
-                        other: item.other || {},
-                        _modified: {
-                            basicInfo: false,
-                            inputs: false,
-                            outputs: false,
-                            // Keep instances modified flag if it was already set
-                            instances: prev._modified.instances,
-                            variables: false,
-                            conditions: false,
-                            other: false,
-                        },
-                    }))
+                        blocks: Array.isArray(conditionsData.blocks)
+                            ? conditionsData.blocks
+                            : [],
+                        conditionsError: conditionsData.error,
+                    }
                 } catch (error) {
-                    console.error("Failed to load data:", error)
-                    setFormData((prev) => ({
-                        ...prev,
-                        name: item.name || "",
-                        author: item.details?.Authors || "",
-                        description: description,
-                        movementHandle:
-                            item.movementHandle || "HANDLE_4_DIRECTIONS",
+                    console.error(
+                        `Failed to load editor data for item "${item.name}":`,
+                        error,
+                    )
+                    loaded = {
                         inputs: {},
                         outputs: {},
-                        // Update instances from item data, but preserve local modifications
-                        instances: prev._modified.instances
-                            ? prev.instances
-                            : item.instances || {},
                         variables: {},
-                        blocks: undefined,
-                        conditions: {},
-                        other: item.other || {},
-                        _modified: {
-                            basicInfo: false,
-                            inputs: false,
-                            outputs: false,
-                            // Keep instances modified flag if it was already set
-                            instances: prev._modified.instances,
-                            variables: false,
-                            conditions: false,
-                            other: false,
-                        },
-                    }))
+                        blocks: [],
+                        conditionsError: "The conditions couldn't be loaded",
+                    }
                 }
+                if (run !== itemLoads.current) return
+
+                // What hasn't been saved yet stays as it is in the form
+                setFormData((prev) => {
+                    const unsaved = prev._modified
+                    return {
+                        ...prev,
+                        ...(!unsaved.basicInfo && {
+                            name: item.name || "",
+                            author: item.details?.Authors || "",
+                            description: description,
+                            descriptionSource,
+                            sharedDescription,
+                            movementHandle:
+                                item.movementHandle || "HANDLE_4_DIRECTIONS",
+                        }),
+                        ...(!unsaved.inputs && { inputs: loaded.inputs }),
+                        ...(!unsaved.outputs && { outputs: loaded.outputs }),
+                        instances: unsaved.instances
+                            ? instancesWithUnsaved(item.instances, prev.instances)
+                            : item.instances || {},
+                        ...(!unsaved.variables && {
+                            variables: loaded.variables,
+                        }),
+                        ...(!unsaved.conditions && {
+                            blocks: loaded.blocks,
+                            conditionsError: loaded.conditionsError,
+                        }),
+                        ...(!unsaved.other && {
+                            ...("modelName" in loaded && {
+                                modelName: loaded.modelName,
+                            }),
+                            other: item.other || {},
+                        }),
+                    }
+                })
             }
 
             loadData()
@@ -489,38 +498,6 @@ function ItemEditor() {
         }))
     }
 
-    const importConditionsData = (blocks) => {
-        // Import conditions and save immediately to meta.json
-        // This happens when auto-converting from VBSP format to blocks
-        setFormData((prev) => ({
-            ...prev,
-            blocks, // Store as blocks instead of conditions
-            _modified: {
-                ...prev._modified,
-                conditions: false, // Don't mark as modified - we'll save immediately
-            },
-        }))
-
-        // Auto-save the converted blocks immediately to meta.json
-        // This prevents "unsaved changes" from appearing on first open
-        if (item?.id && blocks) {
-            console.log("Auto-saving converted VBSP blocks to meta.json...")
-            window.package
-                .saveConditions(item.id, { blocks })
-                .then(() => {
-                    console.log("✅ Auto-saved converted VBSP blocks")
-                })
-                .catch((error) => {
-                    console.error(
-                        "Failed to auto-save converted blocks:",
-                        error,
-                    )
-                })
-        }
-
-        // Don't set unsaved changes or add to undo stack since this is automatic
-    }
-
     const updateOtherData = (other) => {
         // Add to undo stack before making changes
         addToUndoStack("other", "Update other data")
@@ -545,8 +522,17 @@ function ItemEditor() {
                 throw new Error("Item name cannot be empty")
             }
 
-            const savePromises = []
             let hasErrors = false
+
+            // Most save handlers report a failure as { success: false, error }
+            // instead of throwing, so every result is checked: a failed part
+            // must stop the save, not end up reported as saved
+            const assertSaved = (result) => {
+                if (result?.success === false) {
+                    throw new Error(result.error || "No reason given")
+                }
+                return result
+            }
 
             // Save basic info if modified
             if (formData._modified.basicInfo) {
@@ -558,8 +544,14 @@ function ItemEditor() {
                     details: {
                         ...item.details,
                         Authors: formData.author,
-                        Description: formData.description,
+                        ...(formData.descriptionSource !== "info" && {
+                            Description: formData.description,
+                        }),
                     },
+                    // The description, when it's info.txt's
+                    ...(formData.descriptionSource === "info" && {
+                        infoDescription: formData.description,
+                    }),
                     // Include staged icon data if changed
                     iconData: formData.iconChanged
                         ? {
@@ -569,13 +561,20 @@ function ItemEditor() {
                         : null,
                 }
 
-                savePromises.push(
-                    window.package?.saveItem?.(saveData).catch((error) => {
-                        console.error("Failed to save basic info:", error)
+                // Saved before the rest: it writes the editoritems after
+                // converting the icon, which would put back what it read
+                // over what the rest saved in the meantime
+                await window.package
+                    ?.saveItem?.(saveData)
+                    .then(assertSaved)
+                    .catch((error) => {
+                        console.error(
+                            `Failed to save basic info of item "${item.name}":`,
+                            error,
+                        )
                         hasErrors = true
                         throw new Error(`Basic info: ${error.message}`)
-                    }),
-                )
+                    })
             }
 
             // Save inputs if modified - handle add/update/remove operations
@@ -595,7 +594,12 @@ function ItemEditor() {
                     // Remove inputs that are in original but not in current
                     for (const inputName of Object.keys(originalInputs)) {
                         if (!(inputName in currentInputs)) {
-                            await window.package.removeInput(item.id, inputName)
+                            assertSaved(
+                                await window.package.removeInput(
+                                    item.id,
+                                    inputName,
+                                ),
+                            )
                         }
                     }
 
@@ -605,22 +609,29 @@ function ItemEditor() {
                     )) {
                         if (inputName in originalInputs) {
                             // Update existing input
-                            await window.package.updateInput(
-                                item.id,
-                                inputName,
-                                inputConfig,
+                            assertSaved(
+                                await window.package.updateInput(
+                                    item.id,
+                                    inputName,
+                                    inputConfig,
+                                ),
                             )
                         } else {
                             // Add new input
-                            await window.package.addInput(
-                                item.id,
-                                inputName,
-                                inputConfig,
+                            assertSaved(
+                                await window.package.addInput(
+                                    item.id,
+                                    inputName,
+                                    inputConfig,
+                                ),
                             )
                         }
                     }
                 } catch (error) {
-                    console.error("Failed to save inputs:", error)
+                    console.error(
+                        `Failed to save inputs of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Inputs: ${error.message}`)
                 }
@@ -642,9 +653,11 @@ function ItemEditor() {
                     // Remove outputs that are in original but not in current
                     for (const outputName of Object.keys(originalOutputs)) {
                         if (!(outputName in currentOutputs)) {
-                            await window.package.removeOutput(
-                                item.id,
-                                outputName,
+                            assertSaved(
+                                await window.package.removeOutput(
+                                    item.id,
+                                    outputName,
+                                ),
                             )
                         }
                     }
@@ -655,22 +668,29 @@ function ItemEditor() {
                     )) {
                         if (outputName in originalOutputs) {
                             // Update existing output
-                            await window.package.updateOutput(
-                                item.id,
-                                outputName,
-                                outputConfig,
+                            assertSaved(
+                                await window.package.updateOutput(
+                                    item.id,
+                                    outputName,
+                                    outputConfig,
+                                ),
                             )
                         } else {
                             // Add new output
-                            await window.package.addOutput(
-                                item.id,
-                                outputName,
-                                outputConfig,
+                            assertSaved(
+                                await window.package.addOutput(
+                                    item.id,
+                                    outputName,
+                                    outputConfig,
+                                ),
                             )
                         }
                     }
                 } catch (error) {
-                    console.error("Failed to save outputs:", error)
+                    console.error(
+                        `Failed to save outputs of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Outputs: ${error.message}`)
                 }
@@ -693,8 +713,15 @@ function ItemEditor() {
                             instanceData._toRemove &&
                             originalInstances[index]
                         ) {
-                            console.log(`Removing instance at index ${index}`)
-                            await window.package.removeInstance(item.id, index)
+                            console.log(
+                                `Removing instance "${instanceData.Name}" from item "${item.name}"`,
+                            )
+                            assertSaved(
+                                await window.package.removeInstance(
+                                    item.id,
+                                    index,
+                                ),
+                            )
                         }
                     }
 
@@ -704,25 +731,44 @@ function ItemEditor() {
                     )) {
                         if (instanceData._pending && instanceData._filePath) {
                             console.log(
-                                `Adding pending instance: ${instanceData.Name}`,
+                                `Adding instance "${instanceData.Name}" to item "${item.name}"`,
                             )
                             // Use a new backend function to add instance from file path
-                            const addResult =
+                            const addResult = assertSaved(
                                 await window.package.addInstanceFromFile(
                                     item.id,
                                     instanceData._filePath,
                                     instanceData.Name,
-                                )
+                                ),
+                            )
                             if (
                                 addResult?.success &&
                                 addResult.index !== undefined
                             ) {
-                                pendingIndexMap[index] = String(addResult.index)
+                                const realIndex = String(addResult.index)
+                                pendingIndexMap[index] = realIndex
+                                // The item has it now (the backend's
+                                // instance shows instead), so a save that
+                                // fails later can't add it again, and its
+                                // name is kept for its real index
+                                setFormData((prev) => {
+                                    const instances = { ...prev.instances }
+                                    delete instances[index]
+                                    return { ...prev, instances }
+                                })
+                                setEditingNames((prev) => {
+                                    if (!(index in prev)) return prev
+                                    const { [index]: name, ...rest } = prev
+                                    return { ...rest, [realIndex]: name }
+                                })
                             }
                         }
                     }
                 } catch (error) {
-                    console.error("Failed to save instances:", error)
+                    console.error(
+                        `Failed to save instances of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Instances: ${error.message}`)
                 }
@@ -745,26 +791,31 @@ function ItemEditor() {
                             numericIndex < 0
                         ) {
                             console.warn(
-                                `Skipping instance name for unresolved index: ${instanceIndex}`,
+                                `Skipped saving the name of instance ${instanceIndex}, its index could not be resolved`,
                             )
                             continue
                         }
 
                         const trimmedName = newName.trim()
-                        const defaultName = `Instance ${numericIndex + 1}`
+                        // What the backend names an instance without a name
+                        const defaultName = `Instance ${numericIndex}`
 
                         if (trimmedName === defaultName || trimmedName === "") {
                             // Remove custom name
-                            await window.package.removeInstanceName(
-                                item.id,
-                                numericIndex,
+                            assertSaved(
+                                await window.package.removeInstanceName(
+                                    item.id,
+                                    numericIndex,
+                                ),
                             )
                         } else {
                             // Set custom name
-                            await window.package.setInstanceName(
-                                item.id,
-                                numericIndex,
-                                trimmedName,
+                            assertSaved(
+                                await window.package.setInstanceName(
+                                    item.id,
+                                    numericIndex,
+                                    trimmedName,
+                                ),
                             )
                         }
                     }
@@ -772,7 +823,10 @@ function ItemEditor() {
                     // Clear editing names after saving
                     setEditingNames({})
                 } catch (error) {
-                    console.error("Failed to save instance names:", error)
+                    console.error(
+                        `Failed to save instance names of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Instance names: ${error.message}`)
                 }
@@ -781,26 +835,37 @@ function ItemEditor() {
             // Save Variables data if modified
             if (formData._modified.variables) {
                 try {
-                    await window.package.saveVariables?.(
-                        item.id,
-                        formData.variables,
+                    assertSaved(
+                        await window.package.saveVariables?.(
+                            item.id,
+                            formData.variables,
+                        ),
                     )
                 } catch (error) {
-                    console.error("Failed to save Variables data:", error)
+                    console.error(
+                        `Failed to save variables of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Variables: ${error.message}`)
                 }
             }
 
-            // Save Conditions data if modified
-            if (formData._modified.conditions) {
+            // Save Conditions data if modified (not when they couldn't be
+            // read: that would replace them)
+            if (formData._modified.conditions && !formData.conditionsError) {
                 try {
                     // Save blocks format - the backend will handle conversion and logging
-                    await window.package.saveConditions?.(item.id, {
-                        blocks: formData.blocks,
-                    })
+                    assertSaved(
+                        await window.package.saveConditions?.(item.id, {
+                            blocks: formData.blocks,
+                        }),
+                    )
                 } catch (error) {
-                    console.error("Failed to save Conditions data:", error)
+                    console.error(
+                        `Failed to save conditions of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Conditions: ${error.message}`)
                 }
@@ -811,13 +876,19 @@ function ItemEditor() {
                 try {
                     await window.package.saveOther?.(item.id, formData.other)
                     // Save model name
-                    await window.package?.saveModelName?.(item.id, formData.modelName).catch((error) => {
-                        console.error("Failed to save model name:", error)
+                    await window.package?.saveModelName?.(item.id, formData.modelName).then(assertSaved).catch((error) => {
+                        console.error(
+                            `Failed to save model name of item "${item.name}":`,
+                            error,
+                        )
                         hasErrors = true
                         throw new Error(`Model name: ${error.message}`)
                     })
                 } catch (error) {
-                    console.error("Failed to save other data:", error)
+                    console.error(
+                        `Failed to save other data of item "${item.name}":`,
+                        error,
+                    )
                     hasErrors = true
                     throw new Error(`Other: ${error.message}`)
                 }
@@ -828,38 +899,44 @@ function ItemEditor() {
             // (e.g., if MDL conversion failed but VTF conversion succeeded)
             try {
                 // Step 1: Copy staged model/material files from .bpee/ to resources/
-                console.log("Checking for staged model/material files...")
-                const copyResult = await window.electron.invoke("copy-staged-model-files", {
-                    itemId: item.id,
-                })
-
-                if (copyResult.success && copyResult.copied) {
-                    console.log("✅ Staged model/material files copied successfully")
-                }
+                const copyResult = assertSaved(
+                    await window.electron.invoke("copy-staged-model-files", {
+                        itemId: item.id,
+                    }),
+                )
 
                 // Step 2: Save staged editoritems.json changes (only if we have them)
                 if (stagedEditorItems) {
-                    console.log("Saving staged editoritems from model generation...")
-                    await window.electron.invoke("save-staged-editoritems", {
-                        itemId: item.id,
-                        stagedEditorItems: stagedEditorItems,
-                        hasObjFiles: copyResult.hasObjFiles || false,
-                    })
-                    console.log("✅ Staged editoritems saved successfully")
+                    assertSaved(
+                        await window.electron.invoke("save-staged-editoritems", {
+                            itemId: item.id,
+                            stagedEditorItems: stagedEditorItems,
+                            hasObjFiles: copyResult.hasObjFiles || false,
+                        }),
+                    )
                 }
             } catch (error) {
-                console.error("Failed to save staged model changes:", error)
+                console.error(
+                    `Failed to save staged model changes of item "${item.name}":`,
+                    error,
+                )
                 hasErrors = true
                 throw new Error(`Staged model changes: ${error.message}`)
             }
 
-            // Wait for all saves to complete
-            if (savePromises.length > 0) {
-                await Promise.all(savePromises)
-            }
-
             // Ensure ConnectionPoints exist if item has I/O
-            await window.package?.ensureConnectionPoints?.(item.id)
+            try {
+                assertSaved(
+                    await window.package?.ensureConnectionPoints?.(item.id),
+                )
+            } catch (error) {
+                console.error(
+                    `Failed to add connection points to item "${item.name}":`,
+                    error,
+                )
+                hasErrors = true
+                throw new Error(`Connection points: ${error.message}`)
+            }
 
             if (!hasErrors) {
                 // Show checkmark icon temporarily
@@ -887,16 +964,39 @@ function ItemEditor() {
 
                 // Clear staged editoritems from model generation
                 setStagedEditorItems(null)
-
-                // Trigger reload to get fresh data from backend
-                reloadItem(item.id)
             }
+            return !hasErrors
         } catch (error) {
-            console.error("Failed to save:", error)
+            console.error(`Failed to save item "${item.name}":`, error)
             setSaveError(error.message)
+            return false
         } finally {
             setIsSaving(false)
+            // Show the item as the save left it. The items sent while it
+            // saved came with the changes still unsaved, and their loads may
+            // be older than what got saved after them; what a failed save
+            // didn't save stays in the form
+            itemLoads.current++
+            reloadItem(item.id)
         }
+    }
+
+    // Make Model makes models from the item's saved instances: with
+    // instances added or removed since the item was saved, it saves the item
+    // first (asking). False: don't make the model.
+    const saveBeforeMakeModel = async () => {
+        if (!formData._modified.instances) return true
+        const answer = await window.electron.showMessageBox({
+            type: "question",
+            buttons: ["Save and Make Model", "Cancel"],
+            defaultId: 0,
+            cancelId: 1,
+            title: "Save the Item First?",
+            message: "The item's instances changed since it was saved.",
+            detail: "Make Model makes the model from the saved instances. Save the item now, and make the model from them?",
+        })
+        if (answer?.response !== 0) return false
+        return handleSave()
     }
 
     const handleCloseError = () => {
@@ -935,7 +1035,7 @@ function ItemEditor() {
                 window.close()
             }
         } catch (error) {
-            console.error("Failed to delete item:", error)
+            console.error(`Failed to delete item "${item.name}":`, error)
             setSaveError(error.message || "Failed to delete item")
             setDeleteDialogOpen(false)
         } finally {
@@ -944,8 +1044,6 @@ function ItemEditor() {
     }
 
     if (!item) return null
-
-    console.log(item)
 
     return (
         <Box
@@ -1171,7 +1269,6 @@ function ItemEditor() {
                             formData={formData}
                             onUpdate={updateFormData}
                             onUpdateConditions={updateConditionsData}
-                            onImportConditions={importConditionsData}
                             editingNames={editingNames}
                         />
                     </Box>
@@ -1183,6 +1280,7 @@ function ItemEditor() {
                             onUpdateOther={updateOtherData}
                             onModelGenerationStart={handleModelGenerationStart}
                             onModelGenerationComplete={handleModelGenerationComplete}
+                            onBeforeMakeModel={saveBeforeMakeModel}
                         />
                     </Box>
                     <Box sx={{ display: tabValue === 6 ? "block" : "none" }}>
@@ -1255,6 +1353,8 @@ function ItemEditor() {
 
                             return `Save changes to: ${modifiedSections.join(", ")}`
                         })()}>
+                        {/* span: the tooltip still works while it's disabled */}
+                        <span style={{ flex: 1, display: "flex" }}>
                         <Button
                             variant="contained"
                             startIcon={
@@ -1287,6 +1387,7 @@ function ItemEditor() {
                                   ? "Saved!"
                                   : "Save"}
                         </Button>
+                        </span>
                     </Tooltip>
                     <Tooltip
                         title={(() => {
@@ -1323,6 +1424,7 @@ function ItemEditor() {
                                 ? "Delete this item permanently (confirmation skipped)"
                                 : "Delete this item permanently"
                         }>
+                        <span>
                         <Button
                             variant="outlined"
                             startIcon={<Delete />}
@@ -1335,6 +1437,7 @@ function ItemEditor() {
                             disabled={isDeleting}>
                             Delete
                         </Button>
+                        </span>
                     </Tooltip>
                 </Stack>
                 {saveError && (
