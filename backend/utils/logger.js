@@ -76,6 +76,12 @@ const INSPECT_OPTIONS = {
 /** Longer messages are cut short */
 const MAX_MESSAGE_LENGTH = 4000
 
+/**
+ * A Windows path's drive letter in lowercase ("c:\..."): paths from some
+ * places (Steam's registry) have one. Logs give every drive a capital.
+ */
+const LOWERCASE_DRIVE = /(?<!\w)[a-z](?=:[\\/])/g
+
 /** A log file holds at most this much, then the log continues in a new file */
 const MAX_FILE_BYTES = 5 * 1024 * 1024
 
@@ -89,12 +95,14 @@ function elapsed(start) {
 
 /** Log message arguments as text, like console.log prints them */
 function formatText(args) {
-    const text = util.formatWithOptions(
-        INSPECT_OPTIONS,
-        ...args.map((arg) =>
-            arg instanceof Error ? (arg.stack ?? arg.message) : arg,
-        ),
-    )
+    const text = util
+        .formatWithOptions(
+            INSPECT_OPTIONS,
+            ...args.map((arg) =>
+                arg instanceof Error ? (arg.stack ?? arg.message) : arg,
+            ),
+        )
+        .replace(LOWERCASE_DRIVE, (drive) => drive.toUpperCase())
     if (text.length <= MAX_MESSAGE_LENGTH) return text
     const left = text.length - MAX_MESSAGE_LENGTH
     return `${text.slice(0, MAX_MESSAGE_LENGTH)}... (${left} more characters)`

@@ -4,6 +4,23 @@ const WinReg = require("winreg")
 const vdf = require("vdf-parser")
 const { logger } = require("./utils/logger")
 
+/**
+ * A path as the disk has it: Steam's registry gives its folder in lowercase
+ * ("c:/program files (x86)/steam"), so the Portal 2 folder becomes
+ * "C:\Program Files (x86)\Steam\...". Only its case changes (a library
+ * behind a junction keeps its path); the drive letter is a capital anyway.
+ */
+function withRealCase(p) {
+    const resolved = path.resolve(p)
+    try {
+        const real = fs.realpathSync.native(resolved)
+        if (real.toLowerCase() === resolved.toLowerCase()) return real
+    } catch {
+        // Not there: as it is
+    }
+    return resolved.replace(/^[a-z](?=:)/, (drive) => drive.toUpperCase())
+}
+
 async function findPortal2Dir(log = console) {
     // 1. Find main Steam path from registry
     let steamPath = null
@@ -75,7 +92,7 @@ async function findPortal2Dir(log = console) {
     for (const lib of uniqueLibs) {
         const p2dir = path.join(lib, "steamapps", "common", "Portal 2")
         if (fs.existsSync(p2dir)) {
-            return path.resolve(p2dir) // Return normalized path
+            return withRealCase(p2dir)
         }
     }
 
@@ -459,6 +476,7 @@ function getHammerAvailability() {
 }
 
 module.exports = {
+    withRealCase,
     findPortal2Dir,
     findPortal2Resources,
     getHammerPath,

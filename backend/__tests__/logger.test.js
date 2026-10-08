@@ -255,6 +255,22 @@ describe("logger sections", () => {
         ])
     })
 
+    test("gives every Windows drive letter a capital", () => {
+        // Steam's registry gives its folder in lowercase
+        expect(
+            formatLine("info", [
+                "Packed a.nut from c:\\program files (x86)\\steam\\a.nut",
+            ]),
+        ).toBe("Packed a.nut from C:\\program files (x86)\\steam\\a.nut")
+        expect(
+            formatLine("info", ["Search paths:", ["d:/games", "file:///e:/x"]]),
+        ).toBe("Search paths: [ 'D:/games', 'file:///E:/x' ]")
+        // Not letters before a colon that aren't drives
+        expect(formatLine("info", ["https://x.org a:b A:\\c"])).toBe(
+            "https://x.org a:b A:\\c",
+        )
+    })
+
     test("cuts very long messages short", () => {
         const line = formatLine("info", ["x".repeat(5000)])
         expect(line).toMatch(/^x{4000}\.\.\. \(1000 more characters\)$/)
