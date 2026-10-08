@@ -11,8 +11,8 @@ const { parse } = require("../utils/keyvalues")
 const { convertJsonToVdf } = require("../packageManager")
 const { Package } = require("../models/package")
 const {
-    MAX_COLORS,
-    colorCount,
+    DEFAULT_COLORS,
+    hasColors,
     colorGroupId,
     withColors,
 } = require("../utils/itemColors")
@@ -24,102 +24,110 @@ const keyvalues = (entries) =>
         children ? keyvalues(children) : value,
     ])
 
-const color = (n, Default) => ({
-    ID: `color${n}`,
-    Label: `Color ${n}`,
+/** BeePEE's timer color widget, as it writes it */
+const colorWidget = {
+    ID: "color",
+    Label: "Color",
     Type: "color",
-    Default,
-})
+    UseTimer: "1",
+    Default: DEFAULT_COLORS,
+}
 
 describe("an item's colors", () => {
-    test("are color widgets in the item's own config group", () => {
+    test("are a timer color widget in the item's own config group, like the Cube Coloriser's", () => {
         const info = { ID: "TEST", Item: { ID: "ITEM_BOMB" } }
-        withColors(info, { itemId: "ITEM_BOMB", itemName: "Bomb", count: 3 })
+        withColors(info, { itemId: "ITEM_BOMB", itemName: "Bomb", on: true })
         expect(info.ConfigGroup).toEqual({
             ID: "ITEM_BOMB",
-            Name: "Bomb",
-            Widget: [
-                color(1, "25 25 230"),
-                color(2, "230 25 25"),
-                color(3, "25 230 25"),
-            ],
+            Name: "Bomb - Color",
+            Widget: colorWidget,
         })
-        expect(colorCount(info, "item_bomb")).toBe(3)
-        expect(colorCount(info, "ITEM_OTHER")).toBe(0)
+        expect(hasColors(info, "item_bomb")).toBe(true)
+        expect(hasColors(info, "ITEM_OTHER")).toBe(false)
+
+        // A color for each timer value BEE2 has one for, 3 to 30: the Cube
+        // Coloriser's
+        expect(Object.keys(DEFAULT_COLORS)).toEqual(
+            Array.from({ length: 28 }, (_, i) => String(i + 3)),
+        )
+        expect(DEFAULT_COLORS[3]).toBe("25 25 230")
+        expect(DEFAULT_COLORS[11]).toBe("230 230 230")
+        expect(DEFAULT_COLORS[30]).toBe("32 192 32")
     })
 
-    test("one is just Color", () => {
-        const info = {}
-        withColors(info, { itemId: "ITEM_BOMB", itemName: "Bomb", count: 1 })
-        expect(info.ConfigGroup.Widget).toEqual({
-            ID: "color1",
-            Label: "Color",
+    test("keep the group's other widgets, other groups, and how the colors were written", () => {
+        const other = { ID: "OTHER", Name: "Other", Widget: colorWidget }
+        const picked = {
+            id: "Color",
+            Label: "Fuse",
             Type: "color",
-            Default: "25 25 230",
-        })
-    })
-
-    test("are 1 to 30, all different", () => {
-        const info = {}
-        withColors(info, { itemId: "ITEM_BOMB", itemName: "Bomb", count: 99 })
-        expect(colorCount(info, "ITEM_BOMB")).toBe(MAX_COLORS)
-        const defaults = info.ConfigGroup.Widget.map((widget) => widget.Default)
-        expect(new Set(defaults).size).toBe(MAX_COLORS)
-    })
-
-    test("keep the group's other widgets, other groups, and how a color was written", () => {
-        const other = { ID: "OTHER", Name: "Other", Widget: color(1, "1 2 3") }
+            UseTimer: "1",
+            Default: { 3: "1 2 3" },
+        }
+        const speed = { ID: "speed", Label: "Speed", Type: "slider" }
         const info = {
             ConfigGroup: [
                 other,
                 {
                     id: "ITEM_BOMB",
                     Name: "Bomb Settings",
-                    widget: [
-                        {
-                            id: "Color1",
-                            Label: "Fuse",
-                            Type: "rgb",
-                            Default: "#ff0000",
-                        },
-                        { ID: "speed", Label: "Speed", Type: "slider" },
-                    ],
+                    widget: [picked, speed],
                 },
             ],
         }
-        withColors(info, { itemId: "ITEM_BOMB", itemName: "Bomb", count: 2 })
-        expect(info.ConfigGroup[0]).toEqual(other)
-        expect(info.ConfigGroup[1]).toEqual({
-            id: "ITEM_BOMB",
-            Name: "Bomb",
-            widget: [
-                {
-                    id: "Color1",
-                    Label: "Fuse",
-                    Type: "rgb",
-                    Default: "#ff0000",
-                },
-                color(2, "230 25 25"),
-                { ID: "speed", Label: "Speed", Type: "slider" },
-            ],
-        })
+        withColors(info, { itemId: "ITEM_BOMB", itemName: "Bomb", on: true })
+        expect(info.ConfigGroup).toEqual([
+            other,
+            // With other widgets, the group keeps its name
+            { id: "ITEM_BOMB", Name: "Bomb Settings", widget: [picked, speed] },
+        ])
 
-        // None: the colors go, the group stays for its other widget
-        withColors(info, { itemId: "ITEM_BOMB", itemName: "Bomb 2", count: 0 })
+        // Taken out: the group stays for its other widget
+        withColors(info, { itemId: "ITEM_BOMB", on: false })
         expect(info.ConfigGroup[1]).toEqual({
             id: "ITEM_BOMB",
-            Name: "Bomb",
-            widget: { ID: "speed", Label: "Speed", Type: "slider" },
+            Name: "Bomb Settings",
+            widget: speed,
         })
     })
 
-    test("none take the group out when nothing else is in it", () => {
+    test("replace the color1, color2... widgets of earlier dev builds", () => {
+        const info = {
+            ConfigGroup: {
+                ID: "ITEM_BOMB",
+                Name: "Bomb",
+                Widget: [
+                    {
+                        ID: "color1",
+                        Label: "Color 1",
+                        Type: "color",
+                        Default: "25 25 230",
+                    },
+                    {
+                        ID: "color2",
+                        Label: "Color 2",
+                        Type: "color",
+                        Default: "230 25 25",
+                    },
+                ],
+            },
+        }
+        expect(hasColors(info, "ITEM_BOMB")).toBe(false)
+        withColors(info, { itemId: "ITEM_BOMB", itemName: "Bomb", on: true })
+        expect(info.ConfigGroup).toEqual({
+            ID: "ITEM_BOMB",
+            Name: "Bomb - Color",
+            Widget: colorWidget,
+        })
+    })
+
+    test("taken out, take the group out when nothing else is in it", () => {
         const info = { ID: "TEST" }
-        withColors(info, { itemId: "ITEM_BOMB", itemName: "Bomb", count: 2 })
-        withColors(info, { itemId: "ITEM_BOMB", count: 0 })
+        withColors(info, { itemId: "ITEM_BOMB", itemName: "Bomb", on: true })
+        withColors(info, { itemId: "ITEM_BOMB", on: false })
         expect(info).toEqual({ ID: "TEST" })
         expect(
-            withColors({ ID: "TEST" }, { itemId: "ITEM_BOMB", count: 0 }),
+            withColors({ ID: "TEST" }, { itemId: "ITEM_BOMB", on: false }),
         ).toEqual({ ID: "TEST" })
     })
 
@@ -180,11 +188,11 @@ describe("an item's colors", () => {
             expect(
                 item.saveVariables([
                     {
-                        presetKey: "StartEnabled",
-                        customValue: "1",
-                        type: "boolean",
+                        presetKey: "TimerDelay",
+                        customValue: "3",
+                        type: "number",
                     },
-                    { presetKey: "Color", customValue: "3", type: "colors" },
+                    { presetKey: "Color", customValue: "1", type: "colors" },
                 ]),
             ).toBe(true)
 
@@ -192,24 +200,18 @@ describe("an item's colors", () => {
                 fs.readFileSync(path.join(itemDir, "editoritems.json"), "utf8"),
             )
             expect(Object.keys(editorItems.Item.Properties)).toEqual([
-                "StartEnabled",
+                "TimerDelay",
             ])
             expect(info().ConfigGroup).toEqual({
                 ID: "ITEM_BOMB",
-                Name: "Bomb",
-                Widget: [
-                    color(1, "25 25 230"),
-                    color(2, "230 25 25"),
-                    color(3, "25 230 25"),
-                ],
+                Name: "Bomb - Color",
+                Widget: colorWidget,
             })
             expect(
-                item
-                    .getVariables()
-                    .map((v) => [v.presetKey, v.type, v.customValue]),
+                item.getVariables().map((v) => [v.presetKey, v.type]),
             ).toEqual([
-                ["StartEnabled", "boolean", "1"],
-                ["Color", "colors", "3"],
+                ["TimerDelay", "number"],
+                ["Color", "colors"],
             ])
 
             // BEE2 reads them from info.txt
@@ -218,39 +220,40 @@ describe("an item's colors", () => {
                 "ConfigGroup",
                 [
                     ["ID", "ITEM_BOMB"],
-                    ["Name", "Bomb"],
-                    ...[
-                        ["color1", "Color 1", "25 25 230"],
-                        ["color2", "Color 2", "230 25 25"],
-                        ["color3", "Color 3", "25 230 25"],
-                    ].map(([id, label, value]) => [
+                    ["Name", "Bomb - Color"],
+                    [
                         "Widget",
                         [
-                            ["ID", id],
-                            ["Label", label],
+                            ["ID", "color"],
+                            ["Label", "Color"],
                             ["Type", "color"],
-                            ["Default", value],
+                            ["UseTimer", "1"],
+                            ["Default", Object.entries(DEFAULT_COLORS)],
                         ],
-                    ]),
+                    ],
                 ],
             ])
 
             // Taking the variable out takes them out
-            expect(item.saveVariables([])).toBe(true)
+            expect(
+                item.saveVariables([
+                    {
+                        presetKey: "TimerDelay",
+                        customValue: "3",
+                        type: "number",
+                    },
+                ]),
+            ).toBe(true)
             expect(info().ConfigGroup).toBeUndefined()
-            expect(item.getVariables()).toEqual([])
+            expect(item.getVariables().map((v) => v.presetKey)).toEqual([
+                "TimerDelay",
+            ])
         })
 
         test("go in a fixup with a Set Color block", async () => {
             const item = await loadItem()
             const blocks = [
-                {
-                    id: "set",
-                    type: "setColor",
-                    variable: "$item_color",
-                    color: "3",
-                },
-                // The color of the timer's value ("color5" at 5)
+                // The timer's color (under 3, like an infinite timer: 3's)
                 {
                     id: "timer",
                     type: "setColor",
@@ -258,6 +261,7 @@ describe("an item's colors", () => {
                     color: "match",
                     matchVariable: "$timer_delay",
                 },
+                // Timer 7's color, in an If
                 {
                     id: "if",
                     type: "if",
@@ -269,9 +273,16 @@ describe("an item's colors", () => {
                             id: "inIf",
                             type: "setColor",
                             variable: "$on_color",
-                            color: "2",
+                            color: "7",
                         },
                     ],
+                },
+                // An earlier dev build's Color 1: the nearest timer, 3
+                {
+                    id: "old",
+                    type: "setColor",
+                    variable: "$old_color",
+                    color: "1",
                 },
                 // No fixup to match yet: nothing
                 {
@@ -301,16 +312,34 @@ describe("an item's colors", () => {
                     "Condition",
                     [
                         instance,
-                        ["Result", [getItemConfig("color3", "$item_color")]],
-                    ],
-                ],
-                [
-                    "Condition",
-                    [
-                        instance,
                         [
                             "Result",
-                            [getItemConfig("color$timer_delay", "$item_color")],
+                            [
+                                [
+                                    "Condition",
+                                    [
+                                        ["instVar", "$timer_delay < 3"],
+                                        [
+                                            "Result",
+                                            [
+                                                getItemConfig(
+                                                    "color[3]",
+                                                    "$item_color",
+                                                ),
+                                            ],
+                                        ],
+                                        [
+                                            "Else",
+                                            [
+                                                getItemConfig(
+                                                    "color[$timer_delay]",
+                                                    "$item_color",
+                                                ),
+                                            ],
+                                        ],
+                                    ],
+                                ],
+                            ],
                         ],
                     ],
                 ],
@@ -319,7 +348,14 @@ describe("an item's colors", () => {
                     [
                         instance,
                         ["instVar", "$start_enabled == 1"],
-                        ["Result", [getItemConfig("color2", "$on_color")]],
+                        ["Result", [getItemConfig("color[7]", "$on_color")]],
+                    ],
+                ],
+                [
+                    "Condition",
+                    [
+                        instance,
+                        ["Result", [getItemConfig("color[3]", "$old_color")]],
                     ],
                 ],
                 ["Condition", [instance]],
@@ -336,8 +372,8 @@ describe("an item's colors", () => {
                     ...info(),
                     ConfigGroup: {
                         ID: "Item_Bomb",
-                        Name: "Bomb",
-                        Widget: color(1, "1 2 3"),
+                        Name: "Bomb - Color",
+                        Widget: colorWidget,
                     },
                 }),
             )
@@ -350,7 +386,7 @@ describe("an item's colors", () => {
                         id: "set",
                         type: "setColor",
                         variable: "$item_color",
-                        color: "1",
+                        color: "5",
                     },
                 ],
             })

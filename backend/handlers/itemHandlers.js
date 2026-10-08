@@ -592,8 +592,8 @@ function register(ipcMain, mainWindow) {
                     delete packageInfo.Item
                 }
             }
-            // And its colors (its config group's color widgets)
-            withColors(packageInfo, { itemId, count: 0 })
+            // And its colors (its config group's color widget)
+            withColors(packageInfo, { itemId, on: false })
 
             fs.writeFileSync(infoPath, JSON.stringify(packageInfo, null, 2))
 

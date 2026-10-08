@@ -865,12 +865,12 @@ const itemVariables = (formData = {}) =>
         ? formData.variables
         : Object.values(formData.variables ?? {})
 
-/** How many colors the item has (its Color variable; 0 without one) */
-const itemColorCount = (formData = {}) => {
-    const color = itemVariables(formData).find((v) => v?.type === "colors")
-    if (!color) return 0
-    return Math.min(30, Math.max(1, Math.round(Number(color.customValue) || 1)))
-}
+/** Whether the item has colors (its Color variable) */
+const itemHasColors = (formData = {}) =>
+    itemVariables(formData).some((v) => v?.type === "colors")
+
+/** The timer values with a color: BEE2's 3 to 30 */
+const COLOR_TIMERS = Array.from({ length: 28 }, (_, i) => String(i + 3))
 
 /**
  * Whether the item's instance has the fixup: its own variables' are all it
@@ -891,9 +891,9 @@ const itemHasFixup = (formData, fixup) => {
 
 const validateSetColorBlock = (block, formData = {}) => {
     const errors = []
-    const count = itemColorCount(formData)
+    const color = String(block.color ?? "match")
 
-    if (count === 0) {
+    if (!itemHasColors(formData)) {
         errors.push({
             type: "error",
             message:
@@ -908,7 +908,7 @@ const validateSetColorBlock = (block, formData = {}) => {
             field: "variable",
         })
     }
-    if (block.color === "match") {
+    if (color === "match") {
         if (!block.matchVariable) {
             errors.push({
                 type: "error",
@@ -923,10 +923,10 @@ const validateSetColorBlock = (block, formData = {}) => {
                 field: "matchVariable",
             })
         }
-    } else if (count > 0 && Number(block.color || 1) > count) {
+    } else if (!COLOR_TIMERS.includes(color)) {
         errors.push({
             type: "warning",
-            message: `Set Color uses Color ${block.color}, but the item has ${count}`,
+            message: `Set Color uses timer ${color}'s color, but only timers 3 to 30 have one: it gets the nearest`,
             field: "color",
         })
     }
@@ -2053,11 +2053,13 @@ function SetColorBlock({
     availableVariables = [],
     formData,
 }) {
-    const count = itemColorCount(formData)
-    const color = block.color ?? "1"
+    const color = String(block.color ?? "match")
     const matching = color === "match"
-    // A color the item doesn't have anymore stays shown (and is warned about)
-    const shown = Math.max(count, matching ? 0 : Number(color) || 1, 1)
+    // A timer without a color (from before) stays shown, and is warned about
+    const timers =
+        matching || COLOR_TIMERS.includes(color)
+            ? COLOR_TIMERS
+            : [color, ...COLOR_TIMERS]
     // Only the item's own variables' fixups: BEE2 stops compiling on one
     // its instance doesn't have (one it doesn't have anymore stays shown, and
     // is an error)
@@ -2100,14 +2102,14 @@ function SetColorBlock({
                         onChange={(e) =>
                             onUpdateProperty("color", e.target.value)
                         }>
-                        {Array.from({ length: shown }, (_, i) => (
-                            <MenuItem key={i + 1} value={String(i + 1)}>
-                                Color {i + 1}
-                            </MenuItem>
-                        ))}
                         <MenuItem value="match">
                             Matching a Fixup's Value
                         </MenuItem>
+                        {timers.map((timer) => (
+                            <MenuItem key={timer} value={timer}>
+                                Timer {timer}'s Color
+                            </MenuItem>
+                        ))}
                     </Select>
                 </FormControl>
 
@@ -2156,8 +2158,8 @@ function SetColorBlock({
                 color="text.secondary"
                 sx={{ display: "block", mt: 2 }}>
                 {matching
-                    ? "Its value picks the color: 5 is Color 5. A value without its own color gets Color 1's default"
-                    : "Players pick the colors in BEE2's ItemVar menu"}
+                    ? "The color players picked for its value in BEE2's ItemVar menu. Values under 3, like an infinite timer, get timer 3's"
+                    : `The color players picked for timer ${color} in BEE2's ItemVar menu`}
             </Typography>
         </Box>
     )
@@ -3780,7 +3782,7 @@ const BLOCK_DEFINITIONS = {
     setColor: {
         displayName: "Set Color",
         description:
-            "Set a fixup to one of the item's colors from its Color variable (e.g., set $item_color to Color 2)",
+            "Set a fixup to one of the item's colors from its Color variable (e.g., set $item_color to the timer's color)",
         category: "Actions",
         canContainChildren: false,
         childContainers: [],
@@ -4161,7 +4163,11 @@ function Conditions({
             type: blockType,
             displayName: blockDef.displayName,
             ...(blockType === "setColor"
-                ? { variable: "$item_color", color: "1" }
+                ? {
+                      variable: "$item_color",
+                      color: "match",
+                      matchVariable: "$timer_delay",
+                  }
                 : {}),
             // Initialize child containers if the block can contain children
             ...(blockDef.canContainChildren && blockDef.childContainers

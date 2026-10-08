@@ -160,7 +160,7 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
                                     whiteSpace: "nowrap",
                                 }}>
                                 {variable.type === "colors"
-                                    ? "Color modes:"
+                                    ? "A color for each timer value, 3 to 30"
                                     : "Default value:"}
                             </Typography>
                             {variable.type === "boolean" ? (
@@ -215,12 +215,11 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
                                         ))}
                                     </Select>
                                 </FormControl>
-                            ) : (
+                            ) : variable.type === "colors" ? null : (
                                 <TextField
                                     size="small"
                                     type={
-                                        variable.type === "number" ||
-                                        variable.type === "colors"
+                                        variable.type === "number"
                                             ? "number"
                                             : "text"
                                     }
@@ -234,18 +233,11 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
                                     placeholder="Set default value"
                                     inputProps={{
                                         min:
-                                            variable.type === "colors"
-                                                ? 1
-                                                : variable.type === "number"
-                                                  ? 0
-                                                  : undefined,
-                                        max:
-                                            variable.type === "colors"
-                                                ? MAX_COLORS
+                                            variable.type === "number"
+                                                ? 0
                                                 : undefined,
                                         step:
-                                            variable.type === "number" ||
-                                            variable.type === "colors"
+                                            variable.type === "number"
                                                 ? 1
                                                 : undefined,
                                     }}
@@ -322,9 +314,6 @@ const CUBE_TYPES = {
     3: "Sphere",
     4: "Franken",
 }
-
-/** How many colors an item can have (one per timer value) */
-const MAX_COLORS = 30
 
 // Preset variable definitions
 const VARIABLE_PRESETS = {
@@ -406,13 +395,13 @@ const VARIABLE_PRESETS = {
         defaultValue: "0",
         type: "number",
     },
-    // Not an editoritems property: color widgets in the item's config group
-    // (info.txt), for Set Color blocks
+    // Not an editoritems property: a timer color widget in the item's config
+    // group (info.txt), for Set Color blocks
     Color: {
         displayName: "Color",
         fixupName: "",
         description:
-            "Colors players pick in BEE2's ItemVar menu. Put one in a fixup with a Set Color block.",
+            "Colors players pick in BEE2's ItemVar menu, like the Cube Coloriser's. Put one in a fixup with a Set Color block.",
         defaultValue: "1",
         type: "colors",
     },
@@ -484,16 +473,6 @@ function Variables({ item, formData, onUpdateVariables }) {
     const handleUpdateVariableValue = (variableId, newValue) => {
         let processedValue = newValue
         const variable = variables.find((v) => v.id === variableId)
-
-        // 1 to 30 colors
-        if (variable && variable.type === "colors" && newValue !== "") {
-            const count = Math.round(Number(newValue))
-            if (!isNaN(count)) {
-                processedValue = String(
-                    Math.min(MAX_COLORS, Math.max(1, count)),
-                )
-            }
-        }
 
         // Apply timer logic for TimerDelay
         if (variable && variable.presetKey === "TimerDelay") {
@@ -701,7 +680,7 @@ function Variables({ item, formData, onUpdateVariables }) {
                                                             color="text.secondary">
                                                             {preset.type ===
                                                             "colors"
-                                                                ? `1 to ${MAX_COLORS} colors`
+                                                                ? "A color for each timer value, 3 to 30"
                                                                 : `Default value: ${preset.defaultValue} • Type: ${preset.type}`}
                                                         </Typography>
                                                     </Box>

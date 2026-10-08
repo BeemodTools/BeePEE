@@ -1,60 +1,65 @@
 /**
- * An item's colors (its Color variable): color widgets in the item's own
- * config group in the package's info.json, which BEE2 shows in its ItemVar
- * menu for players to pick. Set Color blocks put one into a fixup with
- * BEE2's GetItemConfig ("color3", or "color$timer_delay" for the one
- * matching a fixup's value).
+ * An item's colors (its Color variable): a color for each timer value, 3 to
+ * 30, that players pick in BEE2's ItemVar menu, like BEE2's Cube Coloriser.
+ * It's a timer color widget in the item's own config group in the package's
+ * info.json. (A color widget without UseTimer never shows its swatch in
+ * BEE2's menu, and one with HasInf fails to show at all, as of BEE2 4.46.1.)
+ * Set Color blocks put a color into a fixup with BEE2's GetItemConfig:
+ * "color[$timer_delay]" is the one for the timer's value.
  *
  *   "ConfigGroup"
  *   {
  *       "ID" "<ITEM_ID>"
- *       "Name" "<item name>"
- *       "Widget" { "ID" "color1" "Label" "Color 1" "Type" "color" "Default" "25 25 230" }
- *       ...
+ *       "Name" "<item name> - Color"
+ *       "Widget"
+ *       {
+ *           "ID" "color"
+ *           "Label" "Color"
+ *           "Type" "color"
+ *           "UseTimer" "1"
+ *           "Default" { "3" "25 25 230" ... "30" "32 192 32" }
+ *       }
  *   }
  */
 
-/** How many colors an item can have: one per timer value */
-const MAX_COLORS = 30
+/** The widget the colors are */
+const COLOR_WIDGET = "color"
 
-/** Each color's default until players pick their own: all different */
-const DEFAULT_COLORS = [
-    "25 25 230",
-    "230 25 25",
-    "25 230 25",
-    "230 230 25",
-    "230 25 230",
-    "25 230 230",
-    "230 230 230",
-    "25 25 25",
-    "128 128 128",
-    "25 25 128",
-    "25 128 25",
-    "25 128 128",
-    "25 128 230",
-    "25 230 128",
-    "128 25 25",
-    "128 25 128",
-    "128 25 230",
-    "128 128 25",
-    "128 128 230",
-    "128 230 25",
-    "128 230 128",
-    "128 230 230",
-    "230 25 128",
-    "230 128 25",
-    "230 128 128",
-    "230 128 230",
-    "230 230 128",
-    "32 192 32",
-    "255 160 0",
-    "160 64 255",
-]
+/** The timer values that have a color */
+const FIRST_TIMER = 3
+const LAST_TIMER = 30
 
-/** The widget of color n (from 1) */
-const colorWidgetId = (n) => `color${n}`
-
-const COLOR_WIDGET = /^color(\d+)$/i
+/** Each timer value's color until players pick their own: the Cube Coloriser's */
+const DEFAULT_COLORS = {
+    3: "25 25 230",
+    4: "230 25 25",
+    5: "25 230 25",
+    6: "230 230 25",
+    7: "230 25 230",
+    8: "25 230 230",
+    9: "25 25 25",
+    10: "128 128 128",
+    11: "230 230 230",
+    12: "25 25 128",
+    13: "25 128 25",
+    14: "25 128 128",
+    15: "25 128 230",
+    16: "25 230 128",
+    17: "128 25 25",
+    18: "128 25 128",
+    19: "128 25 230",
+    20: "128 128 25",
+    21: "128 128 230",
+    22: "128 230 25",
+    23: "128 230 128",
+    24: "128 230 230",
+    25: "230 25 128",
+    26: "230 128 25",
+    27: "230 128 128",
+    28: "230 128 230",
+    29: "230 230 128",
+    30: "32 192 32",
+}
 
 /** A JSON value that may be one entry or a list of them, as a list */
 const asList = (value) =>
@@ -71,6 +76,14 @@ const valueOf = (object, key) => {
     return found === undefined ? undefined : object[found]
 }
 
+const widgetId = (widget) => String(valueOf(widget, "ID") ?? "").toLowerCase()
+
+/** BeePEE's colors: the timer widget, or 1.2.0-beta.5 dev builds' color1.. */
+const isColorWidget = (widget) =>
+    widgetId(widget) === COLOR_WIDGET ||
+    (/^color\d+$/.test(widgetId(widget)) &&
+        /^(color|colour|rgb)$/i.test(String(valueOf(widget, "Type") ?? "")))
+
 /** The item's config group in a package's info.json, or undefined */
 function itemGroup(info, itemId) {
     return asList(info?.ConfigGroup).find(
@@ -80,20 +93,11 @@ function itemGroup(info, itemId) {
     )
 }
 
-/**
- * How many colors an item has: its config group's color widgets, color1
- * up without a gap
- */
-function colorCount(info, itemId) {
-    const group = itemGroup(info, itemId)
-    const ids = new Set(
-        asList(valueOf(group, "Widget")).map((widget) =>
-            String(valueOf(widget, "ID") ?? "").toLowerCase(),
-        ),
+/** Whether the item has colors: its config group's timer color widget */
+function hasColors(info, itemId) {
+    return asList(valueOf(itemGroup(info, itemId), "Widget")).some(
+        (widget) => widgetId(widget) === COLOR_WIDGET,
     )
-    let count = 0
-    while (count < MAX_COLORS && ids.has(colorWidgetId(count + 1))) count++
-    return count
 }
 
 /**
@@ -106,59 +110,41 @@ function colorGroupId(info, itemId) {
     return group ? String(valueOf(group, "ID")) : itemId
 }
 
-/** A color's default ("25 25 230") */
-const defaultColor = (n) =>
-    DEFAULT_COLORS[(Math.max(1, n) - 1) % DEFAULT_COLORS.length]
+/** The group's name: the item's, so the ItemVar menu says whose it is */
+const groupName = (itemName) => `${itemName} - Color`
 
 /**
- * A package's info.json with the item's colors set to `count` (0 takes
- * them out). Other widgets in the item's group, and other groups, stay; a
- * color that was there keeps how it was written.
+ * A package's info.json with the item's colors in it, or taken out. Other
+ * widgets in the item's group, and other groups, stay; colors that were
+ * there keep how they were written. The group goes by the item's name
+ * unless it has other widgets too.
  * @returns {Object} The info, changed in place
  */
-function withColors(info, { itemId, itemName, count }) {
-    const total = Math.max(0, Math.min(MAX_COLORS, Math.round(count || 0)))
+function withColors(info, { itemId, itemName, on }) {
     const groups = asList(info.ConfigGroup)
     let group = itemGroup(info, itemId)
     if (!group) {
-        if (total === 0) return info
-        // BEE2 needs a group's name: it heads the group in the menu
-        group = { ID: itemId, Name: itemName || itemId }
+        if (!on) return info
+        group = { ID: itemId, Name: groupName(itemName || itemId) }
         groups.push(group)
     }
-    // Named after the item while it has colors (a group of only other
-    // widgets keeps its name)
-    if (itemName && total > 0) group.Name = itemName
 
     const widgetsKey =
         Object.keys(group).find((k) => k.toLowerCase() === "widget") ?? "Widget"
     const widgets = asList(group[widgetsKey])
-    const kept = widgets.filter(
-        (widget) => !COLOR_WIDGET.test(String(valueOf(widget, "ID") ?? "")),
-    )
-    const existing = new Map(
-        widgets
-            .filter((widget) =>
-                COLOR_WIDGET.test(String(valueOf(widget, "ID") ?? "")),
-            )
-            .map((widget) => [
-                String(valueOf(widget, "ID")).toLowerCase(),
-                widget,
-            ]),
-    )
-    const colors = []
-    for (let n = 1; n <= total; n++) {
-        colors.push(
-            existing.get(colorWidgetId(n)) ?? {
-                ID: colorWidgetId(n),
-                Label: total === 1 ? "Color" : `Color ${n}`,
-                Type: "color",
-                Default: defaultColor(n),
-            },
-        )
-    }
+    const kept = widgets.filter((widget) => !isColorWidget(widget))
+    const color = on
+        ? (widgets.find((widget) => widgetId(widget) === COLOR_WIDGET) ?? {
+              ID: COLOR_WIDGET,
+              Label: "Color",
+              Type: "color",
+              UseTimer: "1",
+              Default: { ...DEFAULT_COLORS },
+          })
+        : null
+    if (on && itemName && kept.length === 0) group.Name = groupName(itemName)
 
-    const all = [...colors, ...kept]
+    const all = color ? [color, ...kept] : kept
     if (all.length > 0) {
         group[widgetsKey] = fromList(all)
     } else {
@@ -171,10 +157,11 @@ function withColors(info, { itemId, itemName, count }) {
 }
 
 module.exports = {
-    MAX_COLORS,
-    colorWidgetId,
-    colorCount,
+    COLOR_WIDGET,
+    FIRST_TIMER,
+    LAST_TIMER,
+    DEFAULT_COLORS,
+    hasColors,
     colorGroupId,
-    defaultColor,
     withColors,
 }

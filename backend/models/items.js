@@ -21,11 +21,12 @@ const {
     rawBlockObject,
 } = require("../utils/vbspConditions")
 const {
-    MAX_COLORS,
-    colorCount,
+    COLOR_WIDGET,
+    FIRST_TIMER,
+    LAST_TIMER,
+    DEFAULT_COLORS,
+    hasColors,
     colorGroupId,
-    colorWidgetId,
-    defaultColor,
     withColors,
 } = require("../utils/itemColors")
 
@@ -1425,18 +1426,17 @@ class Item {
             variables.sort((a, b) => a.index - b.index)
 
             // Its colors: not a property, the item's config group in info.json
-            const colors = this.getColorCount()
-            if (colors > 0) {
+            if (this.hasColors()) {
                 variables.push({
                     id: "var_color",
                     presetKey: "Color",
                     displayName: "Color",
                     fixupName: "",
                     description:
-                        "Colors players pick in BEE2's ItemVar menu, for Set Color blocks",
-                    defaultValue: String(colors),
+                        "A color for each timer value that players pick in BEE2's ItemVar menu, for Set Color blocks",
+                    defaultValue: "1",
                     type: "colors",
-                    customValue: String(colors),
+                    customValue: "1",
                     index: variables.length,
                 })
             }
@@ -1478,7 +1478,7 @@ class Item {
             }
 
             // Add new variables (starting from index 2 since index 1 is ConnectionCount)
-            // Color isn't a property: it's the item's config group (saveColorCount)
+            // Color isn't a property: it's the item's config group (saveColors)
             const colorVariable = variables.find((v) => v.presetKey === "Color")
             variables = variables.filter((v) => v.presetKey !== "Color")
             variables.forEach((variable, index) => {
@@ -1556,9 +1556,7 @@ class Item {
 
             // Write back to file
             this.saveEditorItems(editorItems)
-            this.saveColorCount(
-                colorVariable ? Number(colorVariable.customValue) || 1 : 0,
-            )
+            this.saveColors(Boolean(colorVariable))
 
             // Auto-generate VBSP conditions for ButtonType if needed
             if (hasButtonType) {
@@ -1580,13 +1578,13 @@ class Item {
         return path.join(this.packagePath, "info.json")
     }
 
-    /** How many colors the item has (its Color variable; 0 without one) */
-    getColorCount() {
+    /** Whether the item has colors (its Color variable) */
+    hasColors() {
         try {
             const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
-            return colorCount(info, this.id)
+            return hasColors(info, this.id)
         } catch {
-            return 0
+            return false
         }
     }
 
@@ -1601,13 +1599,13 @@ class Item {
     }
 
     /**
-     * Give the item `count` colors (0 takes them out): color widgets in its
-     * config group in info.json, which BEE2 shows in its ItemVar menu
+     * Give the item its colors, or take them out: a timer color widget in
+     * its config group in info.json, which BEE2 shows in its ItemVar menu
      */
-    saveColorCount(count) {
+    saveColors(on) {
         const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
         const before = JSON.stringify(info)
-        withColors(info, { itemId: this.id, itemName: this.name, count })
+        withColors(info, { itemId: this.id, itemName: this.name, on })
         if (JSON.stringify(info) === before) return
         fs.writeFileSync(this.infoPath, JSON.stringify(info, null, 2))
     }
@@ -2379,32 +2377,41 @@ class Item {
 
                 case "setColor": {
                     if (legacy) return unknownBlock(block)
-                    // One of the item's colors (its config group), into a
-                    // fixup: a set one ("color3"), or the one matching a
-                    // fixup's value ("color$timer_delay": BEE2 fills in the
-                    // fixup, and stops compiling when the instance has no
-                    // such fixup). A value without its own color gets
-                    // Color 1's default.
+                    // One of the item's colors (its timer color widget),
+                    // into a fixup with BEE2's GetItemConfig: the one for a
+                    // fixup's value ("color[$timer_delay]"; BEE2 stops
+                    // compiling when the instance has no such fixup), or the
+                    // one for a set timer value ("color[7]"). The colors are
+                    // for 3 to 30: below 3 (an infinite timer) gets 3's, and
+                    // above 30 the default.
                     const withDollar = (name) =>
                         name.startsWith("$") ? name : `$${name}`
                     const into = String(block.variable ?? "").trim()
-                    const match = String(block.matchVariable ?? "").trim()
-                    const name =
-                        block.color === "match"
-                            ? match && `color${withDollar(match)}`
-                            : colorWidgetId(
-                                  Math.min(
-                                      MAX_COLORS,
-                                      Math.max(1, Number(block.color) || 1),
-                                  ),
-                              )
-                    if (!into || !name) return {}
-                    return {
+                    if (!into) return {}
+                    const colorFor = (timer) => ({
                         GetItemConfig: {
                             ID: this.getColorGroupId(),
-                            Name: name,
+                            Name: `${COLOR_WIDGET}[${timer}]`,
                             ResultVar: withDollar(into),
-                            Default: defaultColor(1),
+                            Default: DEFAULT_COLORS[FIRST_TIMER],
+                        },
+                    })
+                    if ((block.color ?? "match") !== "match") {
+                        const timer = Math.round(Number(block.color))
+                        return colorFor(
+                            Math.min(
+                                LAST_TIMER,
+                                Math.max(FIRST_TIMER, timer || FIRST_TIMER),
+                            ),
+                        )
+                    }
+                    const match = String(block.matchVariable ?? "").trim()
+                    if (!match) return {}
+                    return {
+                        Condition: {
+                            instVar: `${withDollar(match)} < ${FIRST_TIMER}`,
+                            Result: colorFor(FIRST_TIMER),
+                            Else: colorFor(withDollar(match)),
                         },
                     }
                 }
