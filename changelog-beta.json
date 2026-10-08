@@ -8,7 +8,7 @@
             ],
             "changes": {
                 "fixed": [
-                    "If/Else conditions running on every instance in the map, which could make maps leak (items are converted automatically when their package is opened, just export it again)"
+                    "Else conditions applying to all instances except for the item"
                 ]
             }
         },
