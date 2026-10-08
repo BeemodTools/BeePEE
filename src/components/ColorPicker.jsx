@@ -1,14 +1,27 @@
 import { useEffect, useRef, useState } from "react"
-import { Box, Slider, TextField, Tooltip, Typography } from "@mui/material"
+import {
+    Box,
+    Popover,
+    Slider,
+    TextField,
+    Tooltip,
+    Typography,
+} from "@mui/material"
 
 const clamp = (n, min, max) => Math.min(max, Math.max(min, n))
 
-/** "#ff8000" as [255, 128, 0] (black when it isn't one) */
+/**
+ * "#ff8000" as [255, 128, 0] ("#ff8000ff" too: the alpha is left out; black
+ * when it's neither)
+ */
 function hexToRgb(hex) {
-    const match = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(
-        String(hex ?? "").trim(),
-    )
-    return match ? match.slice(1).map((part) => parseInt(part, 16)) : [0, 0, 0]
+    const match =
+        /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})(?:[0-9a-f]{2})?$/i.exec(
+            String(hex ?? "").trim(),
+        )
+    return match
+        ? match.slice(1, 4).map((part) => parseInt(part, 16))
+        : [0, 0, 0]
 }
 
 const rgbToHex = (rgb) =>
@@ -283,7 +296,7 @@ export default function ColorPicker({ value, onChange, presets = [] }) {
                                         backgroundColor: preset,
                                         border: "1px solid",
                                         borderColor:
-                                            preset.toLowerCase() === hex
+                                            rgbToHex(hexToRgb(preset)) === hex
                                                 ? "primary.main"
                                                 : "#555",
                                         "&:hover, &:focus-visible": {
@@ -298,5 +311,90 @@ export default function ColorPicker({ value, onChange, presets = [] }) {
                 </Box>
             )}
         </Box>
+    )
+}
+
+/**
+ * BeePEE's color picker in a popover under anchorEl, while it's set. What's
+ * behind it isn't dimmed (the theme's backdrop), so the color being picked
+ * shows where it's used.
+ */
+export function ColorPickerPopover({
+    anchorEl,
+    onClose,
+    value,
+    onChange,
+    presets,
+}) {
+    return (
+        <Popover
+            open={Boolean(anchorEl)}
+            anchorEl={anchorEl}
+            onClose={onClose}
+            anchorOrigin={{ vertical: "bottom", horizontal: "left" }}
+            transformOrigin={{ vertical: "top", horizontal: "left" }}
+            slotProps={{
+                backdrop: {
+                    sx: {
+                        backgroundColor: "transparent",
+                        backdropFilter: "none",
+                    },
+                },
+                paper: {
+                    sx: {
+                        mt: 1,
+                        p: 2,
+                        width: 268,
+                        bgcolor: "background.paper",
+                        backgroundImage: "none",
+                        border: "1px solid #3a3a3a",
+                    },
+                },
+            }}>
+            <ColorPicker value={value} onChange={onChange} presets={presets} />
+        </Popover>
+    )
+}
+
+/**
+ * A swatch (sx: how it looks) that opens BeePEE's color picker
+ * @param {{title: string, value: string, onChange: (hex: string) => void, presets?: string[], sx?: object, children?: import("react").ReactNode}} props
+ */
+export function ColorPickerButton({
+    title,
+    value,
+    onChange,
+    presets,
+    sx,
+    children,
+}) {
+    const [anchorEl, setAnchorEl] = useState(null)
+    return (
+        <>
+            {/* Not over the picker while it's open */}
+            <Tooltip title={anchorEl ? "" : title}>
+                <Box
+                    role="button"
+                    tabIndex={0}
+                    aria-label={title}
+                    onClick={(e) => setAnchorEl(e.currentTarget)}
+                    onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault()
+                            setAnchorEl(e.currentTarget)
+                        }
+                    }}
+                    sx={{ cursor: "pointer", flexShrink: 0, ...sx }}>
+                    {children}
+                </Box>
+            </Tooltip>
+            <ColorPickerPopover
+                anchorEl={anchorEl}
+                onClose={() => setAnchorEl(null)}
+                value={value}
+                onChange={onChange}
+                presets={presets}
+            />
+        </>
     )
 }

@@ -24,6 +24,7 @@ import {
 import { ExpandLess, ExpandMore, RestartAlt, Save } from "@mui/icons-material"
 import { buildObjModel, disposeModel } from "../../utils/objModel"
 import GroundShadow from "./GroundShadow"
+import { ColorPickerButton } from "../ColorPicker"
 
 /** The palette icons' grayish white background (RGB 229, 233, 233) */
 export const ICON_BACKGROUND = "#E5E9E9"
@@ -1415,19 +1416,27 @@ export default function IconMaker({ item, onClose, onIconMade }) {
                             onChange={(e) => setBackground(e.target.value)}
                             sx={{ flex: 1 }}
                         />
-                        <input
-                            type="color"
+                        <ColorPickerButton
+                            title="Pick the background color"
                             value={
                                 /^#[0-9a-f]{6}$/i.test(background)
                                     ? background
                                     : ICON_BACKGROUND
                             }
-                            onChange={(e) => setBackground(e.target.value)}
-                            style={{
-                                width: 36,
-                                height: 36,
-                                border: "none",
-                                background: "none",
+                            onChange={setBackground}
+                            presets={[ICON_BACKGROUND, "#ffffff", "#000000"]}
+                            sx={{
+                                // As tall as the field beside it
+                                width: 40,
+                                height: 40,
+                                boxSizing: "border-box",
+                                borderRadius: 1,
+                                border: "1px solid #555",
+                                backgroundColor: /^#[0-9a-f]{6}$/i.test(
+                                    background,
+                                )
+                                    ? background
+                                    : ICON_BACKGROUND,
                             }}
                         />
                         {background.toLowerCase() !==

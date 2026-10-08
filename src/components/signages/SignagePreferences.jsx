@@ -12,8 +12,10 @@ import {
     Slider,
     Button,
     Tooltip,
+    InputAdornment,
 } from "@mui/material"
 import { Check, FolderOpen } from "@mui/icons-material"
+import { ColorPickerPopover } from "../ColorPicker"
 
 // All signage preferences with their defaults. The form lives in the main
 // Settings window (Signage tab); the designer's File > Preferences opens
@@ -141,6 +143,9 @@ export function SignagePreferencesForm({ values, onChange }) {
     // lines ≈ 66px) so text fields, selects, and toggles all read as rows.
     const fieldSx = { "& .MuiInputBase-root": { height: 66 } }
 
+    // Where the default shape color's picker opens (its field), while open
+    const [colorAnchor, setColorAnchor] = useState(null)
+
     // The backend resolves (and creates) a default folder under the app's
     // user-data dir when none is set - show that path instead of a blank.
     const [defaultSvgFolder, setDefaultSvgFolder] = useState("")
@@ -170,17 +175,52 @@ export function SignagePreferencesForm({ values, onChange }) {
                 <Box sx={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 1.25 }}>
                     <TextField
                         label="Default shape color"
-                        type="color"
                         size="small"
                         value={v("signageDefaultColor")}
-                        onChange={(e) =>
-                            onChange("signageDefaultColor", e.target.value)
-                        }
+                        onClick={(e) => setColorAnchor(e.currentTarget)}
+                        slotProps={{
+                            input: {
+                                readOnly: true,
+                                startAdornment: (
+                                    <InputAdornment position="start">
+                                        <Box
+                                            sx={{
+                                                width: 28,
+                                                height: 28,
+                                                borderRadius: "5px",
+                                                boxSizing: "border-box",
+                                                border: "1px solid #555",
+                                                backgroundColor: v(
+                                                    "signageDefaultColor",
+                                                ),
+                                            }}
+                                        />
+                                    </InputAdornment>
+                                ),
+                            },
+                        }}
                         sx={{
                             ...fieldSx,
-                            "& input": { cursor: "pointer", p: 0.75 },
+                            "& .MuiInputBase-root, & input": {
+                                cursor: "pointer",
+                            },
+                            "& input": { fontFamily: "monospace" },
                         }}
                         fullWidth
+                    />
+                    <ColorPickerPopover
+                        anchorEl={colorAnchor}
+                        onClose={() => setColorAnchor(null)}
+                        value={v("signageDefaultColor")}
+                        onChange={(hex) => onChange("signageDefaultColor", hex)}
+                        presets={[
+                            "#000000",
+                            "#ffffff",
+                            "#d2b019",
+                            "#4caf50",
+                            "#e05c4a",
+                            "#4a90d9",
+                        ]}
                     />
                     <TextField
                         label="Default shape size (px)"

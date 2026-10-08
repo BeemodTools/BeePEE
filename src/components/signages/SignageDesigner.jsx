@@ -22,6 +22,7 @@ import {
     MenuItem,
 } from "@mui/material"
 import { useTheme } from "@mui/material/styles"
+import { ColorPickerButton } from "../ColorPicker"
 import {
     ChevronLeft,
     ChevronRight,
@@ -2892,47 +2893,32 @@ function SignageDesigner({
                                                             }}
                                                         />
                                                     </Tooltip>
-                                                    <Box
-                                                        component="label"
+                                                    <ColorPickerButton
                                                         title="Custom outline color"
+                                                        value={
+                                                            selLayer.outlineColor &&
+                                                            selLayer.outlineColor[0] === "#" &&
+                                                            selLayer.outlineColor.length === 7
+                                                                ? selLayer.outlineColor
+                                                                : "#000000"
+                                                        }
+                                                        onChange={(v) =>
+                                                            updateSel((l) => ({
+                                                                ...l,
+                                                                outlineColor: v,
+                                                            }))
+                                                        }
+                                                        presets={["#000000", "#ffffff", gold, ...CUSTOM_PRESET]}
                                                         sx={{
-                                                            position: "relative",
                                                             width: 24,
                                                             height: 24,
                                                             borderRadius: "5px",
-                                                            cursor: "pointer",
-                                                            overflow: "hidden",
                                                             boxSizing: "border-box",
                                                             border: "1px solid #555",
                                                             background:
                                                                 "conic-gradient(from 0deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
-                                                        }}>
-                                                        <input
-                                                            type="color"
-                                                            value={
-                                                                selLayer.outlineColor &&
-                                                                selLayer.outlineColor[0] === "#" &&
-                                                                selLayer.outlineColor.length === 7
-                                                                    ? selLayer.outlineColor
-                                                                    : "#000000"
-                                                            }
-                                                            onChange={(e) => {
-                                                                const v = e.target.value
-                                                                updateSel((l) => ({
-                                                                    ...l,
-                                                                    outlineColor: v,
-                                                                }))
-                                                            }}
-                                                            style={{
-                                                                position: "absolute",
-                                                                inset: 0,
-                                                                opacity: 0,
-                                                                cursor: "pointer",
-                                                                border: "none",
-                                                                padding: 0,
-                                                            }}
-                                                        />
-                                                    </Box>
+                                                        }}
+                                                    />
                                                 </Box>
                                             </Box>
                                         )}
@@ -3066,16 +3052,23 @@ function SignageDesigner({
                                             selLayer.color !== "transparent" &&
                                             presets.indexOf(selLayer.color.toLowerCase()) < 0
                                         return (
-                                            <Box
-                                                component="label"
+                                            <ColorPickerButton
                                                 title="Custom color"
+                                                value={
+                                                    selLayer.color &&
+                                                    selLayer.color[0] === "#" &&
+                                                    selLayer.color.length === 7
+                                                        ? selLayer.color
+                                                        : "#d2b019"
+                                                }
+                                                onChange={(v) =>
+                                                    updateSel((l) => ({ ...l, color: v }))
+                                                }
+                                                presets={presets}
                                                 sx={{
-                                                    position: "relative",
                                                     width: 24,
                                                     height: 24,
                                                     borderRadius: "5px",
-                                                    cursor: "pointer",
-                                                    overflow: "hidden",
                                                     boxSizing: "border-box",
                                                     border: isCustom
                                                         ? `2px solid ${gold}`
@@ -3083,30 +3076,8 @@ function SignageDesigner({
                                                     background: isCustom
                                                         ? selLayer.color
                                                         : "conic-gradient(from 0deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
-                                                }}>
-                                                <input
-                                                    type="color"
-                                                    value={
-                                                        selLayer.color &&
-                                                        selLayer.color[0] === "#" &&
-                                                        selLayer.color.length === 7
-                                                            ? selLayer.color
-                                                            : "#d2b019"
-                                                    }
-                                                    onChange={(e) => {
-                                                        const v = e.target.value
-                                                        updateSel((l) => ({ ...l, color: v }))
-                                                    }}
-                                                    style={{
-                                                        position: "absolute",
-                                                        inset: 0,
-                                                        opacity: 0,
-                                                        cursor: "pointer",
-                                                        border: "none",
-                                                        padding: 0,
-                                                    }}
-                                                />
-                                            </Box>
+                                                }}
+                                            />
                                         )
                                     })()}
                                 </Box>
