@@ -1,12 +1,10 @@
 /**
  * Where "Launch BEEMod after export" puts an exported package: a BeePEE
  * folder in the packages folder BEE2 loads (config.cfg's [Directories]
- * package). When BeePM has hooked BEE2 (pointed that setting at BeePM's
- * packages folder), its dev folder there instead, which BeePM leaves alone.
+ * package)
  */
 const fs = require("fs")
 const path = require("path")
-const { beePmHome } = require("./beePmApp")
 
 /** BEE2's settings file */
 const bee2ConfigFile = (env = process.env) =>
@@ -33,18 +31,9 @@ function iniValue(text, section, key) {
     return null
 }
 
-/** Whether two paths are the same folder (Windows ignores case) */
-function samePath(a, b) {
-    const normalize = (p) => {
-        const resolved = path.resolve(String(p).trim())
-        return process.platform === "win32" ? resolved.toLowerCase() : resolved
-    }
-    return Boolean(a) && Boolean(b) && normalize(a) === normalize(b)
-}
-
 /**
  * The packages folder BEE2 loads: its config.cfg's, or its own packages
- * folder. A relative one is under BEE2's folder.
+ * folder. A relative one is under BEE2's folder (BEE2 runs in its folder).
  * @param {string} beemodPath - BEE2's folder
  */
 function bee2PackagesDir(beemodPath, env = process.env) {
@@ -71,18 +60,12 @@ function bee2PackagesDir(beemodPath, env = process.env) {
 }
 
 /**
- * The folder an export for BEE2 goes in
+ * The folder an export for BEE2 goes in: a BeePEE folder in the packages
+ * folder BEE2 loads
  * @param {string} beemodPath - BEE2's folder
- * @returns {{folder: string, beePm: boolean}} beePm: BeePM has hooked BEE2,
- *   so it's BeePM's packages folder's dev folder
  */
 function bee2ExportFolder(beemodPath, env = process.env) {
-    const packagesDir = bee2PackagesDir(beemodPath, env)
-    const beePmPackages = path.join(beePmHome(env), "packages")
-    if (samePath(packagesDir, beePmPackages)) {
-        return { folder: path.join(beePmPackages, "dev"), beePm: true }
-    }
-    return { folder: path.join(packagesDir, "BeePEE"), beePm: false }
+    return path.join(bee2PackagesDir(beemodPath, env), "BeePEE")
 }
 
 module.exports = { iniValue, bee2PackagesDir, bee2ExportFolder }

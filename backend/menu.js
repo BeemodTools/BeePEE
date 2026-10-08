@@ -609,15 +609,11 @@ function createMainMenu(mainWindow) {
                             }
 
                             let filePath
-                            // Into BeePM's packages folder (it hooked BEE2)
-                            let exportedToBeePm = false
 
                             if (exportToBeemod) {
-                                // The packages folder BEE2 loads, in a BeePEE
-                                // folder, or BeePM's dev folder when BeePM has
-                                // hooked BEE2 to its own packages folder
-                                const { folder, beePm } = bee2ExportFolder(beemodPath)
-                                exportedToBeePm = beePm
+                                // A BeePEE folder in the packages folder BEE2
+                                // loads
+                                const folder = bee2ExportFolder(beemodPath)
                                 fs.mkdirSync(folder, { recursive: true })
                                 filePath = path.join(folder, getCurrentPackageName() + ".bee_pack")
 
@@ -670,9 +666,7 @@ function createMainMenu(mainWindow) {
                                     )
                                 }
                                 dialog.showMessageBox(mainWindow, {
-                                    message: exportedToBeePm
-                                        ? "Package exported to BeePM's dev packages folder!"
-                                        : "Package exported to BEEMod packages folder!",
+                                    message: "Package exported to BEEMod packages folder!",
                                     type: "info",
                                 })
                             } else if (openFolder) {
