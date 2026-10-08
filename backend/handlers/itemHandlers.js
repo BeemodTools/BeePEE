@@ -22,6 +22,7 @@ const { Item } = require("../models/items")
 const { descriptionValue } = require("../saveItem")
 const { APP_VERSION } = require("../utils/keyvalues")
 const { vmfStatsCache } = require("../utils/vmfParser")
+const { withColors } = require("../utils/itemColors")
 
 /** "1 instance", "3 instances" */
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
@@ -591,6 +592,8 @@ function register(ipcMain, mainWindow) {
                     delete packageInfo.Item
                 }
             }
+            // And its colors (its config group's color widgets)
+            withColors(packageInfo, { itemId, count: 0 })
 
             fs.writeFileSync(infoPath, JSON.stringify(packageInfo, null, 2))
 

@@ -176,6 +176,9 @@ async function handleItemSave(item, event, mainWindow) {
             if (updatedItemInstance) {
                 // Reload the item's data from disk to get the latest changes
                 updatedItemInstance.reloadItemData()
+                // Its colors' group (BEE2's ItemVar menu) goes by its name
+                const colors = updatedItemInstance.getColorCount()
+                if (colors > 0) updatedItemInstance.saveColorCount(colors)
                 if (infoDescription !== undefined) {
                     updatedItemInstance.infoDescription = infoDescription
                 }

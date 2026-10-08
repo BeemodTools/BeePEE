@@ -26,7 +26,14 @@ import {
     FormControl,
     InputLabel,
 } from "@mui/material"
-import { Add, DragIndicator, Delete, Info, Code } from "@mui/icons-material"
+import {
+    Add,
+    DragIndicator,
+    Delete,
+    Info,
+    Code,
+    Palette,
+} from "@mui/icons-material"
 import {
     DndContext,
     closestCenter,
@@ -109,9 +116,15 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
                     </div>
 
                     {/* Variable Type Icon */}
-                    <Tooltip title="VBSP Variable">
-                        <Code fontSize="small" />
-                    </Tooltip>
+                    {variable.type === "colors" ? (
+                        <Tooltip title="Colors players pick in BEE2's ItemVar menu">
+                            <Palette fontSize="small" />
+                        </Tooltip>
+                    ) : (
+                        <Tooltip title="VBSP Variable">
+                            <Code fontSize="small" />
+                        </Tooltip>
+                    )}
 
                     {/* Variable Name + Default Value - LEFT ALIGNED */}
                     <Box
@@ -146,7 +159,9 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
                                     fontSize: "0.7rem",
                                     whiteSpace: "nowrap",
                                 }}>
-                                Default value:
+                                {variable.type === "colors"
+                                    ? "Color modes:"
+                                    : "Default value:"}
                             </Typography>
                             {variable.type === "boolean" ? (
                                 <Checkbox
@@ -204,7 +219,8 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
                                 <TextField
                                     size="small"
                                     type={
-                                        variable.type === "number"
+                                        variable.type === "number" ||
+                                        variable.type === "colors"
                                             ? "number"
                                             : "text"
                                     }
@@ -218,11 +234,18 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
                                     placeholder="Set default value"
                                     inputProps={{
                                         min:
-                                            variable.type === "number"
-                                                ? 0
+                                            variable.type === "colors"
+                                                ? 1
+                                                : variable.type === "number"
+                                                  ? 0
+                                                  : undefined,
+                                        max:
+                                            variable.type === "colors"
+                                                ? MAX_COLORS
                                                 : undefined,
                                         step:
-                                            variable.type === "number"
+                                            variable.type === "number" ||
+                                            variable.type === "colors"
                                                 ? 1
                                                 : undefined,
                                     }}
@@ -252,15 +275,26 @@ function SortableVariableItem({ variable, onUpdateValue, onDelete }) {
 
                     {/* Fixup Name - RIGHT ALIGNED */}
                     <Box sx={{ minWidth: "120px", textAlign: "right" }}>
-                        <Typography
-                            variant="body2"
-                            color="text.secondary"
-                            sx={{
-                                fontFamily: "monospace",
-                                fontSize: "0.75rem",
-                            }}>
-                            {variable.fixupName}
-                        </Typography>
+                        {variable.type === "colors" ? (
+                            <Tooltip title="Put one in a fixup with a Set Color block in the Conditions tab">
+                                <Typography
+                                    variant="body2"
+                                    color="text.secondary"
+                                    sx={{ fontSize: "0.75rem" }}>
+                                    Set Color
+                                </Typography>
+                            </Tooltip>
+                        ) : (
+                            <Typography
+                                variant="body2"
+                                color="text.secondary"
+                                sx={{
+                                    fontFamily: "monospace",
+                                    fontSize: "0.75rem",
+                                }}>
+                                {variable.fixupName}
+                            </Typography>
+                        )}
                     </Box>
 
                     {/* Action Buttons */}
@@ -288,6 +322,9 @@ const CUBE_TYPES = {
     3: "Sphere",
     4: "Franken",
 }
+
+/** How many colors an item can have (one per timer value) */
+const MAX_COLORS = 30
 
 // Preset variable definitions
 const VARIABLE_PRESETS = {
@@ -369,6 +406,16 @@ const VARIABLE_PRESETS = {
         defaultValue: "0",
         type: "number",
     },
+    // Not an editoritems property: color widgets in the item's config group
+    // (info.txt), for Set Color blocks
+    Color: {
+        displayName: "Color",
+        fixupName: "",
+        description:
+            "Colors players pick in BEE2's ItemVar menu. Put one in a fixup with a Set Color block.",
+        defaultValue: "1",
+        type: "colors",
+    },
 }
 
 function Variables({ item, formData, onUpdateVariables }) {
@@ -437,6 +484,16 @@ function Variables({ item, formData, onUpdateVariables }) {
     const handleUpdateVariableValue = (variableId, newValue) => {
         let processedValue = newValue
         const variable = variables.find((v) => v.id === variableId)
+
+        // 1 to 30 colors
+        if (variable && variable.type === "colors" && newValue !== "") {
+            const count = Math.round(Number(newValue))
+            if (!isNaN(count)) {
+                processedValue = String(
+                    Math.min(MAX_COLORS, Math.max(1, count)),
+                )
+            }
+        }
 
         // Apply timer logic for TimerDelay
         if (variable && variable.presetKey === "TimerDelay") {
@@ -613,9 +670,19 @@ function Variables({ item, formData, onUpdateVariables }) {
                                                             {preset.displayName}
                                                         </Typography>
                                                         <Chip
-                                                            icon={<Code />}
+                                                            icon={
+                                                                preset.type ===
+                                                                "colors" ? (
+                                                                    <Palette />
+                                                                ) : (
+                                                                    <Code />
+                                                                )
+                                                            }
                                                             label={
-                                                                preset.fixupName
+                                                                preset.type ===
+                                                                "colors"
+                                                                    ? "ItemVar menu"
+                                                                    : preset.fixupName
                                                             }
                                                             size="small"
                                                             variant="outlined"
@@ -632,12 +699,10 @@ function Variables({ item, formData, onUpdateVariables }) {
                                                         <Typography
                                                             variant="caption"
                                                             color="text.secondary">
-                                                            Default value:{" "}
-                                                            {
-                                                                preset.defaultValue
-                                                            }{" "}
-                                                            • Type:{" "}
-                                                            {preset.type}
+                                                            {preset.type ===
+                                                            "colors"
+                                                                ? `1 to ${MAX_COLORS} colors`
+                                                                : `Default value: ${preset.defaultValue} • Type: ${preset.type}`}
                                                         </Typography>
                                                     </Box>
                                                 }

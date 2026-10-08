@@ -20,6 +20,13 @@ const {
     withHeader,
     rawBlockObject,
 } = require("../utils/vbspConditions")
+const {
+    MAX_COLORS,
+    colorCount,
+    colorWidgetId,
+    defaultColor,
+    withColors,
+} = require("../utils/itemColors")
 
 /** "1 case", "3 cases" */
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
@@ -66,6 +73,7 @@ const RESULT_BLOCKS = new Set([
     "mapInstVar",
     "setInstVar",
     "randomSelection",
+    "setColor",
 ])
 
 /** Whether a condition (as a JS object) has an Else */
@@ -1387,10 +1395,7 @@ class Item {
 
             const editorItems = this.getEditorItems()
 
-            const properties = editorItems?.Item?.Properties
-            if (!properties) {
-                return []
-            }
+            const properties = editorItems?.Item?.Properties ?? {}
 
             // Convert Properties object to array format expected by frontend
             const variables = []
@@ -1417,6 +1422,23 @@ class Item {
 
             // Sort by index to maintain order
             variables.sort((a, b) => a.index - b.index)
+
+            // Its colors: not a property, the item's config group in info.json
+            const colors = this.getColorCount()
+            if (colors > 0) {
+                variables.push({
+                    id: "var_color",
+                    presetKey: "Color",
+                    displayName: "Color",
+                    fixupName: "",
+                    description:
+                        "Colors players pick in BEE2's ItemVar menu, for Set Color blocks",
+                    defaultValue: String(colors),
+                    type: "colors",
+                    customValue: String(colors),
+                    index: variables.length,
+                })
+            }
             return variables
         } catch (error) {
             console.error(
@@ -1455,6 +1477,9 @@ class Item {
             }
 
             // Add new variables (starting from index 2 since index 1 is ConnectionCount)
+            // Color isn't a property: it's the item's config group (saveColorCount)
+            const colorVariable = variables.find((v) => v.presetKey === "Color")
+            variables = variables.filter((v) => v.presetKey !== "Color")
             variables.forEach((variable, index) => {
                 if (variable.presetKey) {
                     editorItems.Item.Properties[variable.presetKey] = {
@@ -1530,6 +1555,9 @@ class Item {
 
             // Write back to file
             this.saveEditorItems(editorItems)
+            this.saveColorCount(
+                colorVariable ? Number(colorVariable.customValue) || 1 : 0,
+            )
 
             // Auto-generate VBSP conditions for ButtonType if needed
             if (hasButtonType) {
@@ -1544,6 +1572,33 @@ class Item {
             )
             return false
         }
+    }
+
+    /** The package's info.json, where the item's colors are */
+    get infoPath() {
+        return path.join(this.packagePath, "info.json")
+    }
+
+    /** How many colors the item has (its Color variable; 0 without one) */
+    getColorCount() {
+        try {
+            const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
+            return colorCount(info, this.id)
+        } catch {
+            return 0
+        }
+    }
+
+    /**
+     * Give the item `count` colors (0 takes them out): color widgets in its
+     * config group in info.json, which BEE2 shows in its ItemVar menu
+     */
+    saveColorCount(count) {
+        const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
+        const before = JSON.stringify(info)
+        withColors(info, { itemId: this.id, itemName: this.name, count })
+        if (JSON.stringify(info) === before) return
+        fs.writeFileSync(this.infoPath, JSON.stringify(info, null, 2))
     }
 
     // Auto-generate VBSP conditions for ButtonType
@@ -2310,6 +2365,37 @@ class Item {
                     return {
                         offsetInstance: String(block.offset || "0 0 0").trim(),
                     }
+
+                case "setColor": {
+                    if (legacy) return unknownBlock(block)
+                    // One of the item's colors (its config group), into a
+                    // fixup: a set one ("color3"), or the one matching a
+                    // fixup's value ("color$timer_delay": BEE2 fills in the
+                    // fixup). A value without its own color gets Color 1's
+                    // default.
+                    const withDollar = (name) =>
+                        name.startsWith("$") ? name : `$${name}`
+                    const into = String(block.variable ?? "").trim()
+                    const match = String(block.matchVariable ?? "").trim()
+                    const name =
+                        block.color === "match"
+                            ? match && `color${withDollar(match)}`
+                            : colorWidgetId(
+                                  Math.min(
+                                      MAX_COLORS,
+                                      Math.max(1, Number(block.color) || 1),
+                                  ),
+                              )
+                    if (!into || !name) return {}
+                    return {
+                        GetItemConfig: {
+                            ID: this.id,
+                            Name: name,
+                            ResultVar: withDollar(into),
+                            Default: defaultColor(1),
+                        },
+                    }
+                }
 
                 case "setInstVar": {
                     if (legacy) return unknownBlock(block)

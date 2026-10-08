@@ -53,6 +53,7 @@ import {
     Cancel,
     ExpandMore,
     Api,
+    Palette,
 } from "@mui/icons-material"
 import {
     DndContext,
@@ -112,6 +113,8 @@ const validateBlock = (
             return validateDebugBlock(block, availableVariables)
         case "setInstVar":
             return validateSetInstVarBlock(block)
+        case "setColor":
+            return validateSetColorBlock(block, formData)
         default:
             return []
     }
@@ -850,6 +853,55 @@ const validateSetInstVarBlock = (block) => {
             type: "warning",
             message: "Change Fixup has no new value set",
             field: "newValue",
+        })
+    }
+
+    return errors
+}
+
+/** How many colors the item has (its Color variable; 0 without one) */
+const itemColorCount = (formData = {}) => {
+    const variables = Array.isArray(formData.variables)
+        ? formData.variables
+        : Object.values(formData.variables ?? {})
+    const color = variables.find((v) => v?.type === "colors")
+    if (!color) return 0
+    return Math.min(30, Math.max(1, Math.round(Number(color.customValue) || 1)))
+}
+
+const validateSetColorBlock = (block, formData = {}) => {
+    const errors = []
+    const count = itemColorCount(formData)
+
+    if (count === 0) {
+        errors.push({
+            type: "error",
+            message:
+                "Set Color needs the item's colors: add Color in the Variables tab",
+            field: "color",
+        })
+    }
+    if (!block.variable || block.variable.trim() === "") {
+        errors.push({
+            type: "error",
+            message: "Set Color must have a fixup to set",
+            field: "variable",
+        })
+    }
+    if (block.color === "match") {
+        if (!block.matchVariable) {
+            errors.push({
+                type: "error",
+                message:
+                    "Set Color must have a fixup whose value picks the color",
+                field: "matchVariable",
+            })
+        }
+    } else if (count > 0 && Number(block.color || 1) > count) {
+        errors.push({
+            type: "warning",
+            message: `Set Color uses Color ${block.color}, but the item has ${count}`,
+            field: "color",
         })
     }
 
@@ -1969,6 +2021,120 @@ function SetInstVarBlock({ block, onUpdateProperty }) {
     )
 }
 
+function SetColorBlock({
+    block,
+    onUpdateProperty,
+    availableVariables = [],
+    formData,
+}) {
+    const count = itemColorCount(formData)
+    const color = block.color ?? "1"
+    const matching = color === "match"
+    // A color the item doesn't have anymore stays shown (and is warned about)
+    const shown = Math.max(count, matching ? 0 : Number(color) || 1, 1)
+    // So does a fixup it doesn't have anymore
+    const fixups = availableVariables.filter((v) => v.fixupName)
+    if (
+        block.matchVariable &&
+        !fixups.some((v) => v.fixupName === block.matchVariable)
+    ) {
+        fixups.push({
+            displayName: block.matchVariable,
+            fixupName: block.matchVariable,
+        })
+    }
+
+    return (
+        <Box sx={{ p: 2 }}>
+            <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                Set Fixup to Item Color
+            </Typography>
+
+            <Stack spacing={2}>
+                <TextField
+                    fullWidth
+                    size="small"
+                    label="Fixup to Set"
+                    placeholder="$item_color"
+                    value={block.variable || ""}
+                    onChange={(e) =>
+                        onUpdateProperty("variable", e.target.value)
+                    }
+                />
+
+                <FormControl fullWidth size="small">
+                    <InputLabel>Color</InputLabel>
+                    <Select
+                        value={color}
+                        label="Color"
+                        onChange={(e) =>
+                            onUpdateProperty("color", e.target.value)
+                        }>
+                        {Array.from({ length: shown }, (_, i) => (
+                            <MenuItem key={i + 1} value={String(i + 1)}>
+                                Color {i + 1}
+                            </MenuItem>
+                        ))}
+                        <MenuItem value="match">
+                            Matching a Fixup's Value
+                        </MenuItem>
+                    </Select>
+                </FormControl>
+
+                {matching && (
+                    <FormControl fullWidth size="small">
+                        <InputLabel>Fixup</InputLabel>
+                        <Select
+                            value={block.matchVariable || ""}
+                            label="Fixup"
+                            onChange={(e) =>
+                                onUpdateProperty(
+                                    "matchVariable",
+                                    e.target.value,
+                                )
+                            }>
+                            {fixups.map((variable) => (
+                                <MenuItem
+                                    key={variable.fixupName}
+                                    value={variable.fixupName}>
+                                    <Box
+                                        sx={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: 1,
+                                            py: 0.5,
+                                        }}>
+                                        {variable.isSystemVariable ? (
+                                            <Hive
+                                                fontSize="small"
+                                                sx={{ color: "#FFC107" }}
+                                            />
+                                        ) : (
+                                            <Code fontSize="small" />
+                                        )}
+                                        <Typography variant="body2">
+                                            {variable.displayName}
+                                        </Typography>
+                                    </Box>
+                                </MenuItem>
+                            ))}
+                        </Select>
+                    </FormControl>
+                )}
+            </Stack>
+
+            <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ display: "block", mt: 2 }}>
+                {matching
+                    ? "Its value picks the color: 5 is Color 5. A value without its own color gets Color 1's default"
+                    : "Players pick the colors in BEE2's ItemVar menu"}
+            </Typography>
+        </Box>
+    )
+}
+
 /**
  * A raw block's text as it reads best: without the blank lines around it, or
  * the indent all its lines share
@@ -2144,6 +2310,8 @@ function SortableBlock({
                 return <Category fontSize="small" />
             case "setInstVar":
                 return <SwapVert fontSize="small" />
+            case "setColor":
+                return <Palette fontSize="small" />
             default:
                 return <Category fontSize="small" />
         }
@@ -2167,6 +2335,7 @@ function SortableBlock({
             offsetInstance: "#9C27B0", // Purple - Offset action
             debug: "#9C27B0", // Purple - Debug action
             setInstVar: "#9C27B0", // Purple - Change fixup action
+            setColor: "#9C27B0", // Purple - Set color action
         }
 
         // Conditions kept as the VBSP config has them
@@ -2336,6 +2505,16 @@ function SortableBlock({
                     <SetInstVarBlock
                         block={block}
                         onUpdateProperty={handleUpdateProperty}
+                    />
+                )
+
+            case "setColor":
+                return (
+                    <SetColorBlock
+                        block={block}
+                        onUpdateProperty={handleUpdateProperty}
+                        availableVariables={availableVariables}
+                        formData={formData}
                     />
                 )
 
@@ -3570,6 +3749,14 @@ const BLOCK_DEFINITIONS = {
         canContainChildren: false,
         childContainers: [],
     },
+    setColor: {
+        displayName: "Set Color",
+        description:
+            "Set a fixup to one of the item's colors from its Color variable (e.g., set $item_color to Color 2)",
+        category: "Actions",
+        canContainChildren: false,
+        childContainers: [],
+    },
     // Not in the Add Block list: these come from the item's VBSP config
     rawVbsp: {
         displayName: "Raw VBSP",
@@ -3904,26 +4091,31 @@ function Conditions({
         },
     ]
 
-    // Get available variables from formData (user-added variables only)
+    // Get available variables from formData (user-added variables only; the
+    // colors aren't a fixup)
     const userVariables = formData.variables
         ? Array.isArray(formData.variables)
-            ? formData.variables.map((variable) => ({
-                  displayName: variable.displayName || variable.fixupName,
-                  fixupName: variable.fixupName,
-                  type: variable.type,
-                  enumValues: variable.enumValues,
-                  description: variable.description,
-                  isSystemVariable: false,
-              }))
+            ? formData.variables
+                  .filter((variable) => variable.type !== "colors")
+                  .map((variable) => ({
+                      displayName: variable.displayName || variable.fixupName,
+                      fixupName: variable.fixupName,
+                      type: variable.type,
+                      enumValues: variable.enumValues,
+                      description: variable.description,
+                      isSystemVariable: false,
+                  }))
             : // If it's an object, convert to array
-              Object.values(formData.variables).map((variable) => ({
-                  displayName: variable.displayName || variable.fixupName,
-                  fixupName: variable.fixupName,
-                  type: variable.type,
-                  enumValues: variable.enumValues,
-                  description: variable.description,
-                  isSystemVariable: false,
-              }))
+              Object.values(formData.variables)
+                  .filter((variable) => variable.type !== "colors")
+                  .map((variable) => ({
+                      displayName: variable.displayName || variable.fixupName,
+                      fixupName: variable.fixupName,
+                      type: variable.type,
+                      enumValues: variable.enumValues,
+                      description: variable.description,
+                      isSystemVariable: false,
+                  }))
         : []
 
     // Combine user variables with BEE2 system variables (BEE2 variables come last)
@@ -3940,6 +4132,9 @@ function Conditions({
             id: `block_${Date.now()}`,
             type: blockType,
             displayName: blockDef.displayName,
+            ...(blockType === "setColor"
+                ? { variable: "$item_color", color: "1" }
+                : {}),
             // Initialize child containers if the block can contain children
             ...(blockDef.canContainChildren && blockDef.childContainers
                 ? blockDef.childContainers.reduce((acc, container) => {
