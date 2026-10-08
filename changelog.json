@@ -3,9 +3,6 @@
         {
             "version": "1.2",
             "date": "2026-10-9",
-            "notes": [
-                "Autopacking now follows scripts and particles. Try Autopack again on items that use them."
-            ],
             "changes": {
                 "added": [
                     "Model generation without Java or Python (way faster), with skins, tints, overlays, decals and entities",
