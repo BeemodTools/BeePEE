@@ -103,6 +103,19 @@ contextBridge.exposeInMainWorld("package", {
         ipcRenderer.on("icon-made", listener)
         return () => ipcRenderer.removeListener("icon-made", listener)
     },
+    // The package's config groups (Edit > Package Config): an item's
+    // package's, or the open one's
+    getConfigGroups: (itemId) =>
+        ipcRenderer.invoke("get-config-groups", { itemId }),
+    saveConfigGroups: (packageDir, groups) =>
+        ipcRenderer.invoke("save-config-groups", { packageDir, groups }),
+    // When Package Config saves them. Returns a function that stops listening.
+    onConfigGroupsChanged: (callback) => {
+        const listener = () => callback()
+        ipcRenderer.on("config-groups-changed", listener)
+        return () =>
+            ipcRenderer.removeListener("config-groups-changed", listener)
+    },
     saveItem: (itemData) => ipcRenderer.invoke("save-item", itemData),
     onItemUpdated: (callback) => {
         // Remove existing listeners to prevent stacking
@@ -287,20 +300,6 @@ contextBridge.exposeInMainWorld("package", {
     // VARIABLES MANAGEMENT FUNCTIONS
     // ========================================
     getVariables: (itemId) => ipcRenderer.invoke("get-variables", { itemId }),
-    // The Default Colors window of an item's Color variable (Variables tab),
-    // with the colors the editor has (timer value to "R G B")
-    openTimerColors: (itemId, colors) =>
-        ipcRenderer.invoke("open-timer-colors", { itemId, colors }),
-    // Hands the Default Colors window's colors to the item's editor
-    sendTimerColorsToEditor: (itemId, colors) =>
-        ipcRenderer.invoke("timer-colors-send-to-editor", { itemId, colors }),
-    // In the item editor: the colors its Default Colors window saves.
-    // Returns a function that stops listening.
-    onTimerColorsPicked: (callback) => {
-        const listener = (event, colors) => callback(colors)
-        ipcRenderer.on("timer-colors-picked", listener)
-        return () => ipcRenderer.removeListener("timer-colors-picked", listener)
-    },
     saveVariables: (itemId, variables) =>
         ipcRenderer.invoke("save-variables", { itemId, variables }),
 

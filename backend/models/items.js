@@ -25,10 +25,7 @@ const {
     FIRST_TIMER,
     LAST_TIMER,
     EMPTY_COLOR,
-    hasColors,
-    colorDefaults,
     colorGroupId,
-    withColors,
 } = require("../utils/itemColors")
 
 /** "1 case", "3 cases" */
@@ -76,7 +73,7 @@ const RESULT_BLOCKS = new Set([
     "mapInstVar",
     "setInstVar",
     "randomSelection",
-    "setColor",
+    "getConfig",
 ])
 
 /** Whether a condition (as a JS object) has an Else */
@@ -1493,24 +1490,6 @@ class Item {
 
             // Sort by index to maintain order
             variables.sort((a, b) => a.index - b.index)
-
-            // Its colors: not a property, the item's config group in info.json
-            if (this.hasColors()) {
-                variables.push({
-                    id: "var_color",
-                    presetKey: "Color",
-                    displayName: "Color",
-                    fixupName: "",
-                    description:
-                        "A color for each timer value that players pick in BEE2's ItemVar menu, for Set Color blocks",
-                    defaultValue: "1",
-                    type: "colors",
-                    customValue: "1",
-                    // Each timer value's default color
-                    colors: this.getColorDefaults(),
-                    index: variables.length,
-                })
-            }
             return variables
         } catch (error) {
             console.error(
@@ -1549,9 +1528,6 @@ class Item {
             }
 
             // Add new variables (starting from index 2 since index 1 is ConnectionCount)
-            // Color isn't a property: it's the item's config group (saveColors)
-            const colorVariable = variables.find((v) => v.presetKey === "Color")
-            variables = variables.filter((v) => v.presetKey !== "Color")
             variables.forEach((variable, index) => {
                 if (variable.presetKey) {
                     editorItems.Item.Properties[variable.presetKey] = {
@@ -1627,7 +1603,6 @@ class Item {
 
             // Write back to file
             this.saveEditorItems(editorItems)
-            this.saveColors(Boolean(colorVariable), colorVariable?.colors)
 
             // Auto-generate VBSP conditions for ButtonType if needed
             if (hasButtonType) {
@@ -1644,32 +1619,15 @@ class Item {
         }
     }
 
-    /** The package's info.json, where the item's colors are */
+    /** The package's info.json, where its config groups are */
     get infoPath() {
         return path.join(this.packagePath, "info.json")
     }
 
-    /** Whether the item has colors (its Color variable) */
-    hasColors() {
-        try {
-            const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
-            return hasColors(info, this.id)
-        } catch {
-            return false
-        }
-    }
-
-    /** Its default colors: each timer value's, as players get them in BEE2 */
-    getColorDefaults() {
-        try {
-            const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
-            return colorDefaults(info, this.id)
-        } catch {
-            return colorDefaults({}, this.id)
-        }
-    }
-
-    /** The ID of its colors' group as info.json has it (see colorGroupId) */
+    /**
+     * The ID of the config group 1.2.0's Color variable made for the item,
+     * as info.json has it (see colorGroupId): its Set Color blocks read it
+     */
     getColorGroupId() {
         try {
             const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
@@ -1677,19 +1635,6 @@ class Item {
         } catch {
             return this.id
         }
-    }
-
-    /**
-     * Give the item its colors, or take them out: a timer color widget in
-     * its config group in info.json, which BEE2 shows in its ItemVar menu.
-     * `defaults`: each timer value's default color (kept when not given).
-     */
-    saveColors(on, defaults) {
-        const info = JSON.parse(fs.readFileSync(this.infoPath, "utf-8"))
-        const before = JSON.stringify(info)
-        withColors(info, { itemId: this.id, itemName: this.name, on, defaults })
-        if (JSON.stringify(info) === before) return
-        fs.writeFileSync(this.infoPath, JSON.stringify(info, null, 2))
     }
 
     // Auto-generate VBSP conditions for ButtonType
@@ -1878,7 +1823,32 @@ class Item {
 
     // Helper function to normalize blocks (ensure all case blocks have value property)
     normalizeBlocks(blocks) {
+        // 1.2.0's Set Color block: a Get Config block of the color group its
+        // Color variable made, which writes what it did
+        const fromSetColor = ({ color = "match", ...block }) => ({
+            ...block,
+            type: "getConfig",
+            displayName: "Get Config",
+            group: this.getColorGroupId(),
+            widget: COLOR_WIDGET,
+            timer:
+                String(color) === "match"
+                    ? "match"
+                    : String(
+                          Math.min(
+                              LAST_TIMER,
+                              Math.max(
+                                  FIRST_TIMER,
+                                  Math.round(Number(color)) || FIRST_TIMER,
+                              ),
+                          ),
+                      ),
+            default: EMPTY_COLOR,
+        })
+
         const normalizeBlock = (block) => {
+            if (block.type === "setColor") block = fromSetColor(block)
+
             // Ensure case blocks always have a value property
             // Use "0" as default since empty strings are now skipped during VBSP conversion
             if (
@@ -2457,43 +2427,54 @@ class Item {
                         offsetInstance: String(block.offset || "0 0 0").trim(),
                     }
 
-                case "setColor": {
+                case "getConfig": {
                     if (legacy) return unknownBlock(block)
-                    // One of the item's colors (its timer color widget),
-                    // into a fixup with BEE2's GetItemConfig: the one for a
-                    // fixup's value ("color[$timer_delay]"; BEE2 stops
-                    // compiling when the instance has no such fixup), or the
-                    // one for a set timer value ("color[7]"). The colors are
-                    // for 3 to 30: below 3 (an infinite timer) gets 3's, and
-                    // above 30 none (empty).
+                    // A value players set in BEE2's ItemVar menu (a widget of
+                    // the package's config groups, Package Config), into a
+                    // fixup with BEE2's GetItemConfig. A timer widget's: the
+                    // one for a fixup's value ("speed[$timer_delay]"; BEE2
+                    // stops compiling when the instance has no such fixup),
+                    // or for a set timer value ("speed[7]"). Under 3 (an
+                    // infinite timer) is 3's, unless the block takes the
+                    // widget's infinite one ("speed[0]"); over 30, the
+                    // default.
                     const withDollar = (name) =>
                         name.startsWith("$") ? name : `$${name}`
                     const into = String(block.variable ?? "").trim()
-                    if (!into) return {}
-                    const colorFor = (timer) => ({
+                    const group = String(block.group ?? "").trim()
+                    const widget = String(block.widget ?? "").trim()
+                    if (!into || !group || !widget) return {}
+                    const config = (name) => ({
                         GetItemConfig: {
-                            ID: this.getColorGroupId(),
-                            Name: `${COLOR_WIDGET}[${timer}]`,
+                            ID: group,
+                            Name: name,
                             ResultVar: withDollar(into),
-                            Default: EMPTY_COLOR,
+                            Default: String(block.default ?? ""),
                         },
                     })
-                    if ((block.color ?? "match") !== "match") {
-                        const timer = Math.round(Number(block.color))
-                        return colorFor(
-                            Math.min(
-                                LAST_TIMER,
-                                Math.max(FIRST_TIMER, timer || FIRST_TIMER),
+                    const timer = String(block.timer ?? "")
+                    if (!timer) return config(widget)
+                    if (timer === "inf") return config(`${widget}[0]`)
+                    if (timer !== "match") {
+                        const value = Math.min(
+                            LAST_TIMER,
+                            Math.max(
+                                FIRST_TIMER,
+                                Math.round(Number(timer)) || FIRST_TIMER,
                             ),
                         )
+                        return config(`${widget}[${value}]`)
                     }
                     const match = String(block.matchVariable ?? "").trim()
                     if (!match) return {}
+                    if (block.infinite === "inf") {
+                        return config(`${widget}[${withDollar(match)}]`)
+                    }
                     return {
                         Condition: {
                             instVar: `${withDollar(match)} < ${FIRST_TIMER}`,
-                            Result: colorFor(FIRST_TIMER),
-                            Else: colorFor(withDollar(match)),
+                            Result: config(`${widget}[${FIRST_TIMER}]`),
+                            Else: config(`${widget}[${withDollar(match)}]`),
                         },
                     }
                 }

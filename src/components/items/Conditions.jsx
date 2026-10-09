@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import {
     Box,
     Typography,
@@ -53,7 +53,7 @@ import {
     Cancel,
     ExpandMore,
     Api,
-    Palette,
+    Tune,
 } from "@mui/icons-material"
 import {
     DndContext,
@@ -75,7 +75,14 @@ import {
 } from "@dnd-kit/sortable"
 import { useSortable } from "@dnd-kit/sortable"
 import { CSS } from "@dnd-kit/utilities"
-import { COLOR_TIMERS } from "../../utils/timerColors"
+import ConfigValueField from "../ConfigValueField"
+import {
+    INFINITE,
+    TIMER_VALUES,
+    WIDGET_TYPES,
+    defaultOf,
+    labelsItself,
+} from "../../utils/configWidgets"
 
 // Block Validation Functions
 const validateBlock = (
@@ -114,8 +121,8 @@ const validateBlock = (
             return validateDebugBlock(block, availableVariables)
         case "setInstVar":
             return validateSetInstVarBlock(block)
-        case "setColor":
-            return validateSetColorBlock(block, formData)
+        case "getConfig":
+            return validateGetConfigBlock(block, formData)
         default:
             return []
     }
@@ -750,7 +757,7 @@ const validateAddOverlayBlock = (block, formData = {}) => {
 }
 
 /** Blocks that set fixups: BEE2 sets them on the item's own instance only */
-const FIXUP_BLOCKS = new Set(["setInstVar", "setColor", "mapInstVar"])
+const FIXUP_BLOCKS = new Set(["setInstVar", "getConfig", "mapInstVar"])
 
 /** Every block in `blocks`, and the ones in them */
 const everyBlock = (blocks = []) =>
@@ -772,7 +779,7 @@ const validateAddGlobalEntBlock = (block, formData = {}, allBlocks = []) => {
         errors.push({
             type: "warning",
             message:
-                "Fixups the item's blocks set (Change Fixup, Set Color) go to the item's own instance, not to this global one. BEE2 also adds a global instance only once per map.",
+                "Fixups the item's blocks set (Change Fixup, Get Config) go to the item's own instance, not to this global one. BEE2 also adds a global instance only once per map.",
             field: "instanceName",
         })
     }
@@ -891,13 +898,10 @@ const itemVariables = (formData = {}) =>
         ? formData.variables
         : Object.values(formData.variables ?? {})
 
-/** Whether the item has colors (its Color variable) */
-const itemHasColors = (formData = {}) =>
-    itemVariables(formData).some((v) => v?.type === "colors")
-
 /**
  * Whether the item's instance has the fixup: its own variables' are all it
- * has for sure (BEE2 stops compiling on a color matching one it doesn't have)
+ * has for sure (BEE2 stops compiling on a config value for one it doesn't
+ * have)
  */
 const itemHasFixup = (formData, fixup) => {
     const name = String(fixup ?? "")
@@ -905,55 +909,105 @@ const itemHasFixup = (formData, fixup) => {
         .toLowerCase()
     return itemVariables(formData).some(
         (v) =>
-            v?.type !== "colors" &&
             String(v?.fixupName ?? "")
                 .replace(/^\$/, "")
                 .toLowerCase() === name,
     )
 }
 
-const validateSetColorBlock = (block, formData = {}) => {
+/**
+ * The config group and widget a Get Config block reads, when the package
+ * has them (formData.configGroups: Package Config's, null while loading)
+ */
+const configWidgetOf = (block, formData = {}) => {
+    const group = (formData.configGroups ?? []).find(
+        (each) => each.id === block.group,
+    )
+    const widget = group?.widgets.find(
+        (each) =>
+            each.type &&
+            each.id.toLowerCase() === String(block.widget ?? "").toLowerCase(),
+    )
+    return { group, widget }
+}
+
+const validateGetConfigBlock = (block, formData = {}) => {
     const errors = []
-    const color = String(block.color ?? "match")
+    const error = (message, field) =>
+        errors.push({ type: "error", message, field })
+    const warning = (message, field) =>
+        errors.push({ type: "warning", message, field })
+    const timer = String(block.timer ?? "")
 
-    if (!itemHasColors(formData)) {
-        errors.push({
-            type: "error",
-            message:
-                "Set Color needs the item's colors: add Color in the Variables tab",
-            field: "color",
-        })
-    }
     if (!block.variable || block.variable.trim() === "") {
-        errors.push({
-            type: "error",
-            message: "Set Color must have a fixup to set",
-            field: "variable",
-        })
+        error("Get Config must have a fixup to set", "variable")
     }
-    if (color === "match") {
-        if (!block.matchVariable) {
-            errors.push({
-                type: "error",
-                message:
-                    "Set Color must have a fixup whose value picks the color",
-                field: "matchVariable",
-            })
-        } else if (!itemHasFixup(formData, block.matchVariable)) {
-            errors.push({
-                type: "error",
-                message: `Set Color matches ${block.matchVariable}, which this item doesn't have: BEE2 would stop compiling`,
-                field: "matchVariable",
-            })
-        }
-    } else if (!COLOR_TIMERS.includes(color)) {
-        errors.push({
-            type: "warning",
-            message: `Set Color uses timer ${color}'s color, but only timers 3 to 30 have one: it gets the nearest`,
-            field: "color",
-        })
+    if (!block.group) {
+        error(
+            "Get Config must have a config group to read (Edit > Package Config)",
+            "group",
+        )
+        return errors
+    }
+    // Still loading
+    if (!formData.configGroups) return errors
+    const { group, widget } = configWidgetOf(block, formData)
+    if (!group) {
+        error(
+            `The package has no config group ${block.group} anymore: Get Config would always give its default`,
+            "group",
+        )
+        return errors
+    }
+    if (!block.widget) {
+        error("Get Config must have a widget of the group to read", "widget")
+        return errors
+    }
+    if (!widget) {
+        error(
+            `Config group ${group.name || group.id} has no widget ${block.widget} anymore: Get Config would always give its default`,
+            "widget",
+        )
+        return errors
     }
 
+    const name = widget.label || widget.id
+    if (widget.timer && !timer) {
+        error(
+            `${name} has a value for each timer value: pick which one, or Get Config always gives its default`,
+            "timer",
+        )
+    }
+    if (!widget.timer && timer) {
+        warning(
+            `${name} has one value now: the timer value is left out`,
+            "timer",
+        )
+    }
+    if (widget.timer && timer === "match") {
+        if (!block.matchVariable) {
+            error(
+                "Get Config must have a fixup whose value picks the timer value",
+                "matchVariable",
+            )
+        } else if (!itemHasFixup(formData, block.matchVariable)) {
+            error(
+                `Get Config uses ${block.matchVariable}'s value, which this item doesn't have: BEE2 would stop compiling`,
+                "matchVariable",
+            )
+        }
+    }
+    if (
+        widget.timer &&
+        !widget.inf &&
+        (timer === INFINITE ||
+            (timer === "match" && block.infinite === INFINITE))
+    ) {
+        warning(
+            `${name} has no infinite timer's value: an infinite timer gets the default`,
+            "timer",
+        )
+    }
     return errors
 }
 
@@ -2070,19 +2124,22 @@ function SetInstVarBlock({ block, onUpdateProperty }) {
     )
 }
 
-function SetColorBlock({
+/**
+ * A Get Config block: a value players set in BEE2's ItemVar menu (a widget
+ * of the package's config groups, Package Config), into a fixup. A timer
+ * widget's for a fixup's value, or a set timer value.
+ */
+function GetConfigBlock({
     block,
     onUpdateProperty,
+    onUpdateBlock,
     availableVariables = [],
     formData,
 }) {
-    const color = String(block.color ?? "match")
-    const matching = color === "match"
-    // A timer without a color (from before) stays shown, and is warned about
-    const timers =
-        matching || COLOR_TIMERS.includes(color)
-            ? COLOR_TIMERS
-            : [color, ...COLOR_TIMERS]
+    const groups = formData?.configGroups ?? []
+    const { group, widget } = configWidgetOf(block, formData)
+    const timer = String(block.timer ?? "")
+
     // Only the item's own variables' fixups: BEE2 stops compiling on one
     // its instance doesn't have (one it doesn't have anymore stays shown, and
     // is an error)
@@ -2099,44 +2156,143 @@ function SetColorBlock({
         })
     }
 
+    // A widget picked: which of its values, and its default as the block's
+    const pickWidget = (groupId, widgetId) => {
+        const picked = groups
+            .find((g) => g.id === groupId)
+            ?.widgets.find((w) => w.id === widgetId)
+        onUpdateBlock({
+            ...block,
+            group: groupId,
+            widget: widgetId,
+            timer: picked?.timer ? timer || "match" : "",
+            matchVariable: block.matchVariable || "$timer_delay",
+            infinite: picked?.inf ? INFINITE : "3",
+            default: picked ? defaultOf(picked) : (block.default ?? ""),
+        })
+    }
+
+    // Groups and widgets the package doesn't have (anymore) stay shown
+    const groupOptions = [
+        ...groups.map((g) => ({ id: g.id, label: g.name || g.id })),
+        ...(block.group && !group
+            ? [
+                  {
+                      id: block.group,
+                      label: `${block.group} (not in Package Config)`,
+                  },
+              ]
+            : []),
+    ]
+    const widgetOptions = [
+        ...(group?.widgets ?? [])
+            .filter((w) => w.type)
+            .map((w) => ({
+                id: w.id,
+                label: `${w.label || w.id} (${WIDGET_TYPES[w.type]})`,
+            })),
+        ...(block.widget && !widget
+            ? [
+                  {
+                      id: block.widget,
+                      label: `${block.widget} (not in the group)`,
+                  },
+              ]
+            : []),
+    ]
+    const timers =
+        timer &&
+        timer !== "match" &&
+        timer !== INFINITE &&
+        !TIMER_VALUES.includes(timer)
+            ? [timer, ...TIMER_VALUES]
+            : TIMER_VALUES
+
     return (
         <Box sx={{ p: 2 }}>
             <Typography variant="subtitle2" color="text.secondary" gutterBottom>
-                Set Fixup to Item Color
+                Set Fixup to a Config Value
             </Typography>
 
             <Stack spacing={2}>
+                <FormControl fullWidth size="small">
+                    <InputLabel>Config Group</InputLabel>
+                    <Select
+                        value={block.group || ""}
+                        label="Config Group"
+                        onChange={(e) => pickWidget(e.target.value, "")}>
+                        {groupOptions.length === 0 && (
+                            <MenuItem disabled value="__none">
+                                Add one in Edit &gt; Package Config first
+                            </MenuItem>
+                        )}
+                        {groupOptions.map((option) => (
+                            <MenuItem key={option.id} value={option.id}>
+                                {option.label}
+                            </MenuItem>
+                        ))}
+                    </Select>
+                </FormControl>
+
+                <FormControl fullWidth size="small" disabled={!block.group}>
+                    <InputLabel>Widget</InputLabel>
+                    <Select
+                        value={block.widget || ""}
+                        label="Widget"
+                        onChange={(e) =>
+                            pickWidget(block.group, e.target.value)
+                        }>
+                        {widgetOptions.length === 0 && (
+                            <MenuItem disabled value="__none">
+                                The group has no widgets
+                            </MenuItem>
+                        )}
+                        {widgetOptions.map((option) => (
+                            <MenuItem key={option.id} value={option.id}>
+                                {option.label}
+                            </MenuItem>
+                        ))}
+                    </Select>
+                </FormControl>
+
                 <TextField
                     fullWidth
                     size="small"
                     label="Fixup to Set"
-                    placeholder="$item_color"
+                    placeholder="$item_speed"
                     value={block.variable || ""}
                     onChange={(e) =>
                         onUpdateProperty("variable", e.target.value)
                     }
                 />
 
-                <FormControl fullWidth size="small">
-                    <InputLabel>Color</InputLabel>
-                    <Select
-                        value={color}
-                        label="Color"
-                        onChange={(e) =>
-                            onUpdateProperty("color", e.target.value)
-                        }>
-                        <MenuItem value="match">
-                            Matching a Fixup's Value
-                        </MenuItem>
-                        {timers.map((timer) => (
-                            <MenuItem key={timer} value={timer}>
-                                Timer {timer}'s Color
+                {(widget?.timer || timer) && (
+                    <FormControl fullWidth size="small">
+                        <InputLabel>Value</InputLabel>
+                        <Select
+                            value={timer}
+                            label="Value"
+                            onChange={(e) =>
+                                onUpdateProperty("timer", e.target.value)
+                            }>
+                            <MenuItem value="match">
+                                Matching a Fixup's Value
                             </MenuItem>
-                        ))}
-                    </Select>
-                </FormControl>
+                            {(widget?.inf || timer === INFINITE) && (
+                                <MenuItem value={INFINITE}>
+                                    An Infinite Timer's Value
+                                </MenuItem>
+                            )}
+                            {timers.map((value) => (
+                                <MenuItem key={value} value={value}>
+                                    Timer {value}'s Value
+                                </MenuItem>
+                            ))}
+                        </Select>
+                    </FormControl>
+                )}
 
-                {matching && (
+                {timer === "match" && (
                     <FormControl fullWidth size="small">
                         <InputLabel>Fixup</InputLabel>
                         <Select
@@ -2174,15 +2330,50 @@ function SetColorBlock({
                         </Select>
                     </FormControl>
                 )}
+
+                {timer === "match" && widget?.inf && (
+                    <FormControl fullWidth size="small">
+                        <InputLabel>An Infinite Timer Gets</InputLabel>
+                        <Select
+                            value={block.infinite === INFINITE ? INFINITE : "3"}
+                            label="An Infinite Timer Gets"
+                            onChange={(e) =>
+                                onUpdateProperty("infinite", e.target.value)
+                            }>
+                            <MenuItem value={INFINITE}>
+                                Its Infinite Timer's Value
+                            </MenuItem>
+                            <MenuItem value="3">Timer 3's Value</MenuItem>
+                        </Select>
+                    </FormControl>
+                )}
+
+                <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
+                    {!labelsItself(widget?.type ?? "string") && (
+                        <Typography variant="body2" color="text.secondary">
+                            Default
+                        </Typography>
+                    )}
+                    <ConfigValueField
+                        widget={widget ?? { type: "string" }}
+                        label="Default"
+                        value={block.default}
+                        onChange={(value) => onUpdateProperty("default", value)}
+                    />
+                </Box>
             </Stack>
 
             <Typography
                 variant="caption"
                 color="text.secondary"
                 sx={{ display: "block", mt: 2 }}>
-                {matching
-                    ? "The color players picked for its value in BEE2's ItemVar menu. Values under 3, like an infinite timer, get timer 3's"
-                    : `The color players picked for timer ${color} in BEE2's ItemVar menu`}
+                {timer === "match"
+                    ? `The value players set in BEE2's ItemVar menu for the fixup's timer value. ${
+                          block.infinite === INFINITE && widget?.inf
+                              ? "Under 3 or over 30 (an infinite timer) gets its infinite timer's value"
+                              : "Under 3 (an infinite timer) gets timer 3's"
+                      }. The default is for when BEE2 has no value.`
+                    : "The value players set in BEE2's ItemVar menu. The default is for when BEE2 has no value."}
             </Typography>
         </Box>
     )
@@ -2363,8 +2554,8 @@ function SortableBlock({
                 return <Category fontSize="small" />
             case "setInstVar":
                 return <SwapVert fontSize="small" />
-            case "setColor":
-                return <Palette fontSize="small" />
+            case "getConfig":
+                return <Tune fontSize="small" />
             default:
                 return <Category fontSize="small" />
         }
@@ -2388,7 +2579,7 @@ function SortableBlock({
             offsetInstance: "#9C27B0", // Purple - Offset action
             debug: "#9C27B0", // Purple - Debug action
             setInstVar: "#9C27B0", // Purple - Change fixup action
-            setColor: "#9C27B0", // Purple - Set color action
+            getConfig: "#9C27B0", // Purple - Get config action
         }
 
         // Conditions kept as the VBSP config has them
@@ -2561,11 +2752,12 @@ function SortableBlock({
                     />
                 )
 
-            case "setColor":
+            case "getConfig":
                 return (
-                    <SetColorBlock
+                    <GetConfigBlock
                         block={block}
                         onUpdateProperty={handleUpdateProperty}
+                        onUpdateBlock={(next) => onUpdateBlock(block.id, next)}
                         availableVariables={availableVariables}
                         formData={formData}
                     />
@@ -3802,10 +3994,10 @@ const BLOCK_DEFINITIONS = {
         canContainChildren: false,
         childContainers: [],
     },
-    setColor: {
-        displayName: "Set Color",
+    getConfig: {
+        displayName: "Get Config",
         description:
-            "Set a fixup to one of the item's colors from its Color variable (e.g., set $item_color to the timer's color)",
+            "Set a fixup to a value players set in BEE2's ItemVar menu, from the package's config groups (Edit > Package Config)",
         category: "Actions",
         canContainChildren: false,
         childContainers: [],
@@ -3829,6 +4021,32 @@ function Conditions({
 }) {
     const [addDialogOpen, setAddDialogOpen] = useState(false)
     const [blocks, setBlocks] = useState([])
+    // The package's config groups (Package Config), for Get Config blocks:
+    // read again when that window saves them
+    const [configGroups, setConfigGroups] = useState(null)
+    useEffect(() => {
+        if (!item?.id) return undefined
+        const read = async () => {
+            try {
+                const result = await window.package.getConfigGroups(item.id)
+                if (!result?.success) throw new Error(result?.error)
+                setConfigGroups(result.groups)
+            } catch (error) {
+                console.error(
+                    `Failed to read the config groups of item "${item.name}"'s package:`,
+                    error,
+                )
+                setConfigGroups([])
+            }
+        }
+        read()
+        return window.package.onConfigGroupsChanged?.(read)
+    }, [item?.id])
+    // What blocks are checked against: the item's, with the config groups
+    const blockData = useMemo(
+        () => ({ ...formData, configGroups }),
+        [formData, configGroups],
+    )
     const [selectedCategory, setSelectedCategory] = useState("Logic")
     const [activeId, setActiveId] = useState(null)
 
@@ -4144,31 +4362,26 @@ function Conditions({
         },
     ]
 
-    // Get available variables from formData (user-added variables only; the
-    // colors aren't a fixup)
+    // Get available variables from formData (user-added variables only)
     const userVariables = formData.variables
         ? Array.isArray(formData.variables)
-            ? formData.variables
-                  .filter((variable) => variable.type !== "colors")
-                  .map((variable) => ({
-                      displayName: variable.displayName || variable.fixupName,
-                      fixupName: variable.fixupName,
-                      type: variable.type,
-                      enumValues: variable.enumValues,
-                      description: variable.description,
-                      isSystemVariable: false,
-                  }))
+            ? formData.variables.map((variable) => ({
+                  displayName: variable.displayName || variable.fixupName,
+                  fixupName: variable.fixupName,
+                  type: variable.type,
+                  enumValues: variable.enumValues,
+                  description: variable.description,
+                  isSystemVariable: false,
+              }))
             : // If it's an object, convert to array
-              Object.values(formData.variables)
-                  .filter((variable) => variable.type !== "colors")
-                  .map((variable) => ({
-                      displayName: variable.displayName || variable.fixupName,
-                      fixupName: variable.fixupName,
-                      type: variable.type,
-                      enumValues: variable.enumValues,
-                      description: variable.description,
-                      isSystemVariable: false,
-                  }))
+              Object.values(formData.variables).map((variable) => ({
+                  displayName: variable.displayName || variable.fixupName,
+                  fixupName: variable.fixupName,
+                  type: variable.type,
+                  enumValues: variable.enumValues,
+                  description: variable.description,
+                  isSystemVariable: false,
+              }))
         : []
 
     // Combine user variables with BEE2 system variables (BEE2 variables come last)
@@ -4185,11 +4398,14 @@ function Conditions({
             id: `block_${Date.now()}`,
             type: blockType,
             displayName: blockDef.displayName,
-            ...(blockType === "setColor"
+            ...(blockType === "getConfig"
                 ? {
-                      variable: "$item_color",
-                      color: "match",
+                      variable: "",
+                      group: "",
+                      widget: "",
+                      timer: "",
                       matchVariable: "$timer_delay",
+                      default: "",
                   }
                 : {}),
             // Initialize child containers if the block can contain children
@@ -4485,7 +4701,7 @@ function Conditions({
                     blocks,
                     blocks,
                     availableVariables,
-                    formData,
+                    blockData,
                 )
                 if (allErrors.length === 0) return null
 
@@ -4612,7 +4828,7 @@ function Conditions({
                                 onAddChildBlock={handleAddChildBlock}
                                 availableInstances={availableInstances}
                                 availableVariables={availableVariables}
-                                formData={formData}
+                                formData={blockData}
                                 editingNames={editingNames}
                                 blocks={blocks}
                                 depth={0}

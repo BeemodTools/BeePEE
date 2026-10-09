@@ -18,7 +18,7 @@ import SignageEditor from "./components/SignageEditor"
 import SignageDesignerPage from "./pages/SignageDesignerPage"
 import ImportItemsPage from "./pages/ImportItemsPage"
 import IconMakerPage from "./pages/IconMakerPage"
-import TimerColorsPage from "./pages/TimerColorsPage"
+import PackageConfigPage from "./pages/PackageConfigPage"
 import { ItemProvider } from "./contexts/ItemContext"
 import { SignageProvider } from "./contexts/SignageContext"
 import "./global.css"
@@ -38,7 +38,7 @@ function App() {
     const showSignageDesigner = routeParam === "signage-designer"
     const showImportItems = routeParam === "import-items"
     const showIconMaker = routeParam === "icon-maker"
-    const showTimerColors = routeParam === "timer-colors"
+    const showPackageConfig = routeParam === "package-config"
     const showSettings = routeParam === "settings"
     const showSetup = routeParam === "setup"
     const [packageLoaded, setPackageLoaded] = useState(false)
@@ -177,9 +177,9 @@ function App() {
             ) : showIconMaker ? (
                 // Icon maker window (item editor > Info > Make Icon)
                 <IconMakerPage />
-            ) : showTimerColors ? (
-                // Default Colors window (item editor > Variables > Color)
-                <TimerColorsPage />
+            ) : showPackageConfig ? (
+                // Package Config window (Edit > Package Config...)
+                <PackageConfigPage />
             ) : showSettings ? (
                 // Show SettingsPage directly for production windows
                 <SettingsPage />

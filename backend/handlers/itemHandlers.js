@@ -22,7 +22,6 @@ const { Item } = require("../models/items")
 const { descriptionValue } = require("../saveItem")
 const { APP_VERSION } = require("../utils/keyvalues")
 const { vmfStatsCache } = require("../utils/vmfParser")
-const { withColors } = require("../utils/itemColors")
 const { Instance } = require("../items/Instance")
 const { instanceFiles, removeUnusedFiles } = require("../utils/packageFiles")
 
@@ -603,9 +602,6 @@ function register(ipcMain, mainWindow) {
                     delete packageInfo.Item
                 }
             }
-            // And its colors (its config group's color widget)
-            withColors(packageInfo, { itemId, on: false })
-
             fs.writeFileSync(infoPath, JSON.stringify(packageInfo, null, 2))
 
             // Remove from in-memory package

@@ -19,6 +19,7 @@ const signageHandlers = require("./signageHandlers")
 const settingsHandlers = require("./settingsHandlers")
 const importHandlers = require("./importHandlers")
 const iconHandlers = require("./iconHandlers")
+const configHandlers = require("./configHandlers")
 
 // Track if settings handlers were registered early (for setup window)
 let settingsHandlersRegistered = false
@@ -54,6 +55,7 @@ function registerAll(ipcMain, mainWindow) {
     signageHandlers.register(ipcMain, mainWindow)
     importHandlers.register(ipcMain, mainWindow)
     iconHandlers.register(ipcMain, mainWindow)
+    configHandlers.register(ipcMain, mainWindow)
 
     // Only register settings handlers if not already registered
     if (!settingsHandlersRegistered) {

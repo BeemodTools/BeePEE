@@ -2,11 +2,11 @@ const openEditors = new Map()
 const openSignageEditors = new Map() // Track signage editor windows
 const openModelPreviewWindows = new Map() // Track model preview windows
 const openIconMakers = new Map() // Track icon maker windows (one per item)
-const openTimerColors = new Map() // Track Default Colors windows (one per item)
 let createItemWindow = null // Track the create item window
 let createPackageWindow = null // Track the create package window
 let signageDesignerWindow = null // Track the signage designer window
 let packageInformationWindow = null // Track the package information window
+let packageConfigWindow = null // Track the package config window
 let changelogWindow = null // Track the changelog window
 let crashReportWindow = null // Track the crash report window
 let setupWindow = null // Track the setup window
@@ -118,10 +118,8 @@ function createItemEditor(item, mainWindow) {
 
     window.on("closed", () => {
         openEditors.delete(item.id)
-        // Its icon maker hands the icons it makes to this window, and its
-        // Default Colors window the colors
+        // Its icon maker hands the icons it makes to this window
         closeIconMakerWindow(item.id)
-        closeTimerColorsWindow(item.id)
     })
 
     if (isDev) {
@@ -219,87 +217,6 @@ function sendMadeIconToEditor(itemId, icon) {
     const editorWindow = openEditors.get(itemId)
     if (editorWindow && !editorWindow.isDestroyed()) {
         editorWindow.webContents.send("icon-made", icon)
-        editorWindow.focus()
-        return true
-    }
-    return false
-}
-
-/**
- * An item's Default Colors window (item editor > Variables > Color): the
- * color players start with for each timer value in BEE2's ItemVar menu.
- * @param {Object} item
- * @param {Object} colors - Timer value to "R G B", as the item's editor has them
- */
-function createTimerColorsWindow(item, colors) {
-    const existing = openTimerColors.get(item.id)
-    if (existing && !existing.isDestroyed()) {
-        if (existing.isMinimized()) existing.restore()
-        existing.focus()
-        return existing
-    }
-
-    const editorWindow = openEditors.get(item.id)
-    const window = new BrowserWindow({
-        // The 28 swatches, the color picker beside them, and the buttons
-        width: 880,
-        height: 520,
-        useContentSize: true,
-        title: `Default Colors: ${item.name}`,
-        backgroundColor: "#1e1e1e",
-        // Above the item's editor
-        parent:
-            editorWindow && !editorWindow.isDestroyed()
-                ? editorWindow
-                : undefined,
-        webPreferences: {
-            nodeIntegration: false,
-            contextIsolation: true,
-            preload: path.join(__dirname, "..", "preload.js"),
-        },
-        skipTaskbar: false,
-        minimizable: false,
-        maximizable: false,
-        resizable: false,
-        autoHideMenuBar: true,
-    })
-
-    openTimerColors.set(item.id, window)
-
-    window.on("closed", () => {
-        if (openTimerColors.get(item.id) === window) {
-            openTimerColors.delete(item.id)
-        }
-    })
-
-    const query = {
-        route: "timer-colors",
-        itemId: item.id,
-        itemName: item.name,
-        colors: JSON.stringify(colors ?? {}),
-    }
-    if (isDev) {
-        window.loadURL(`http://localhost:5173/?${new URLSearchParams(query)}`)
-    } else {
-        const appPath = app.getAppPath()
-        window.loadFile(path.join(appPath, "dist", "index.html"), { query })
-    }
-
-    window.setMenuBarVisibility(false)
-    return window
-}
-
-function closeTimerColorsWindow(itemId) {
-    const window = openTimerColors.get(itemId)
-    if (window && !window.isDestroyed()) window.close()
-}
-
-// Hands the Default Colors window's colors to the item's editor window,
-// which applies them on Save. Returns false when that editor isn't open.
-function sendTimerColorsToEditor(itemId, colors) {
-    const editorWindow = openEditors.get(itemId)
-    if (editorWindow && !editorWindow.isDestroyed()) {
-        editorWindow.webContents.send("timer-colors-picked", colors)
         editorWindow.focus()
         return true
     }
@@ -588,6 +505,57 @@ function createPackageInformationWindow(mainWindow) {
     }
 
     packageInformationWindow.setMenuBarVisibility(false)
+}
+
+/**
+ * The Package Config window (Edit > Package Config): the package's config
+ * groups, the widgets players set in BEE2's ItemVar menu
+ */
+function createPackageConfigWindow(mainWindow) {
+    if (packageConfigWindow && !packageConfigWindow.isDestroyed()) {
+        if (packageConfigWindow.isMinimized()) packageConfigWindow.restore()
+        packageConfigWindow.focus()
+        return
+    }
+
+    packageConfigWindow = new BrowserWindow({
+        // The groups, and the one being edited beside them
+        useContentSize: true,
+        width: 1040,
+        height: heightOnScreen(760),
+        minWidth: 860,
+        minHeight: 480,
+        title: "BeePEE - Package Config",
+        backgroundColor: "#1e1e1e",
+        webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            preload: path.join(__dirname, "..", "preload.js"),
+        },
+        devTools: isDev,
+        skipTaskbar: false,
+        minimizable: true,
+        maximizable: true,
+        resizable: true,
+        autoHideMenuBar: true,
+    })
+
+    packageConfigWindow.on("closed", () => {
+        packageConfigWindow = null
+    })
+
+    if (isDev) {
+        packageConfigWindow.loadURL(
+            `http://localhost:5173/?route=package-config`,
+        )
+    } else {
+        const appPath = app.getAppPath()
+        packageConfigWindow.loadFile(path.join(appPath, "dist", "index.html"), {
+            query: { route: "package-config" },
+        })
+    }
+
+    packageConfigWindow.setMenuBarVisibility(false)
 }
 
 function createChangelogWindow(mainWindow) {
@@ -1144,8 +1112,6 @@ module.exports = {
     openEditors,
     createIconMakerWindow,
     sendMadeIconToEditor,
-    createTimerColorsWindow,
-    sendTimerColorsToEditor,
     createSignageEditor,
     sendSignageUpdateToEditor,
     sendStagedDesignToEditor,
@@ -1158,6 +1124,8 @@ module.exports = {
     getCreatePackageWindow: () => createPackageWindow,
     createPackageInformationWindow,
     getPackageInformationWindow: () => packageInformationWindow,
+    createPackageConfigWindow,
+    getPackageConfigWindow: () => packageConfigWindow,
     createChangelogWindow,
     getChangelogWindow: () => changelogWindow,
     createCrashReportWindow,

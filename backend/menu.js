@@ -38,6 +38,7 @@ function killBeemod() {
 const {
     createPackageCreationWindow,
     createPackageInformationWindow,
+    createPackageConfigWindow,
     createChangelogWindow,
     createCrashReportWindow,
     createSettingsWindow,
@@ -70,6 +71,7 @@ const PACKAGE_MENU_IDS = [
     "export-package",
     "export-beepm",
     "package-information",
+    "package-config",
     "import-items",
 ]
 
@@ -733,6 +735,15 @@ function createMainMenu(mainWindow) {
                             return
                         }
                         createPackageInformationWindow(mainWindow)
+                    },
+                },
+                {
+                    id: "package-config",
+                    label: "Package Config...",
+                    // The config groups players set in BEE2's ItemVar menu
+                    click: () => {
+                        if (!getCurrentPackageDir()) return
+                        createPackageConfigWindow(mainWindow)
                     },
                 },
                 { type: "separator" },
