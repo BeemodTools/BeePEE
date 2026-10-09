@@ -956,10 +956,31 @@ const validateGetConfigBlock = (block, formData = {}) => {
     if (!formData.configGroups) return errors
     const { group, widget } = configWidgetOf(block, formData)
     if (!group) {
-        error(
-            `The package has no config group ${block.group} anymore: Get Config would always give its default`,
+        // Another package's (BEE2's own, ...): its widgets aren't known
+        warning(
+            `${block.group} isn't one of this package's config groups: players need the package that has it (like BEE2's own), or Get Config gives its default`,
             "group",
         )
+        if (!block.widget) {
+            error(
+                "Get Config must have a widget of the group to read",
+                "widget",
+            )
+        }
+        if (timer === "match" && !block.matchVariable) {
+            error(
+                "Get Config must have a fixup whose value picks the slot",
+                "matchVariable",
+            )
+        } else if (
+            timer === "match" &&
+            !itemHasFixup(formData, block.matchVariable)
+        ) {
+            error(
+                `Get Config uses ${block.matchVariable}'s value, which this item doesn't have: BEE2 would stop compiling`,
+                "matchVariable",
+            )
+        }
         return errors
     }
     if (!block.widget) {
@@ -2281,18 +2302,12 @@ function GetConfigBlock({
         })
     }
 
-    // Groups and widgets the package doesn't have (anymore) stay shown
-    const groupOptions = [
-        ...groups.map((g) => ({ id: g.id, label: g.name || g.id })),
-        ...(block.group && !group
-            ? [
-                  {
-                      id: block.group,
-                      label: `${block.group} (not in Package Config)`,
-                  },
-              ]
-            : []),
-    ]
+    // The package's groups; another package's is typed (BEE2's own, ...)
+    const groupOptions = groups.map((g) => ({
+        id: g.id,
+        label: g.name || g.id,
+    }))
+    const external = Boolean(block.group) && !group
     const widgetOptions = [
         ...(group?.widgets ?? [])
             .filter((w) => w.type)
@@ -2311,13 +2326,15 @@ function GetConfigBlock({
     ]
     // A timer widget's slots, one for each timer value: by name, with what
     // each has by default
-    const name = widget?.label || widget?.id || "Value"
+    const name = widget?.label || widget?.id || block.widget || "Value"
     const slotName = (slot) =>
-        slot === "match"
-            ? `${name} Slot Matching a Fixup`
-            : slot === INFINITE
-              ? `${name} Slot for an Infinite Timer`
-              : `${name} Slot ${slot}`
+        slot === ""
+            ? `${name} (One Value, No Slots)`
+            : slot === "match"
+              ? `${name} Slot Matching a Fixup`
+              : slot === INFINITE
+                ? `${name} Slot for an Infinite Timer`
+                : `${name} Slot ${slot}`
     const slotOption = (slot) => (
         <Box
             sx={{
@@ -2347,45 +2364,96 @@ function GetConfigBlock({
             </Typography>
 
             <Stack spacing={2}>
-                <FormControl fullWidth size="small">
-                    <InputLabel>Config Group</InputLabel>
-                    <Select
-                        value={block.group || ""}
-                        label="Config Group"
-                        onChange={(e) => pickWidget(e.target.value, "")}>
-                        {groupOptions.length === 0 && (
-                            <MenuItem disabled value="__none">
-                                Add one in Edit &gt; Package Config first
-                            </MenuItem>
-                        )}
-                        {groupOptions.map((option) => (
-                            <MenuItem key={option.id} value={option.id}>
-                                {option.label}
-                            </MenuItem>
-                        ))}
-                    </Select>
-                </FormControl>
+                <Autocomplete
+                    freeSolo
+                    openOnFocus
+                    options={groupOptions}
+                    value={block.group || null}
+                    inputValue={block.group || ""}
+                    getOptionLabel={(option) =>
+                        typeof option === "string" ? option : option.id
+                    }
+                    isOptionEqualToValue={(option, picked) =>
+                        option.id ===
+                        (typeof picked === "string" ? picked : picked?.id)
+                    }
+                    // Typed: another package's group (its widget is typed too)
+                    onInputChange={(event, next, reason) => {
+                        if (reason !== "reset") onUpdateProperty("group", next)
+                    }}
+                    onChange={(event, picked) => {
+                        if (picked && typeof picked === "object") {
+                            pickWidget(picked.id, "")
+                        }
+                    }}
+                    renderOption={({ key, ...props }, option) => (
+                        <Box component="li" key={key} {...props}>
+                            <Box sx={{ minWidth: 0 }}>
+                                <Typography variant="body2" noWrap>
+                                    {option.label}
+                                </Typography>
+                                <Typography
+                                    variant="caption"
+                                    color="text.secondary"
+                                    noWrap
+                                    component="div">
+                                    {option.id}
+                                </Typography>
+                            </Box>
+                        </Box>
+                    )}
+                    renderInput={(params) => (
+                        <TextField
+                            {...params}
+                            size="small"
+                            label="Config Group"
+                            placeholder="One of Package Config's, or another package's ID"
+                            helperText={
+                                group
+                                    ? group.name
+                                    : external
+                                      ? "Not in this package: players need the package that has it"
+                                      : groupOptions.length === 0
+                                        ? "Add one in Edit > Package Config, or type another package's"
+                                        : undefined
+                            }
+                        />
+                    )}
+                />
 
-                <FormControl fullWidth size="small" disabled={!block.group}>
-                    <InputLabel>Widget</InputLabel>
-                    <Select
-                        value={block.widget || ""}
+                {external ? (
+                    <TextField
+                        fullWidth
+                        size="small"
                         label="Widget"
+                        placeholder="Its ID in the group"
+                        value={block.widget || ""}
                         onChange={(e) =>
-                            pickWidget(block.group, e.target.value)
-                        }>
-                        {widgetOptions.length === 0 && (
-                            <MenuItem disabled value="__none">
-                                The group has no widgets
-                            </MenuItem>
-                        )}
-                        {widgetOptions.map((option) => (
-                            <MenuItem key={option.id} value={option.id}>
-                                {option.label}
-                            </MenuItem>
-                        ))}
-                    </Select>
-                </FormControl>
+                            onUpdateProperty("widget", e.target.value)
+                        }
+                    />
+                ) : (
+                    <FormControl fullWidth size="small" disabled={!block.group}>
+                        <InputLabel>Widget</InputLabel>
+                        <Select
+                            value={block.widget || ""}
+                            label="Widget"
+                            onChange={(e) =>
+                                pickWidget(block.group, e.target.value)
+                            }>
+                            {widgetOptions.length === 0 && (
+                                <MenuItem disabled value="__none">
+                                    The group has no widgets
+                                </MenuItem>
+                            )}
+                            {widgetOptions.map((option) => (
+                                <MenuItem key={option.id} value={option.id}>
+                                    {option.label}
+                                </MenuItem>
+                            ))}
+                        </Select>
+                    </FormControl>
+                )}
 
                 <FixupField
                     label="Fixup to Set"
@@ -2395,20 +2463,28 @@ function GetConfigBlock({
                     onChange={(value) => onUpdateProperty("variable", value)}
                 />
 
-                {(widget?.timer || timer) && (
+                {(widget?.timer || timer || external) && (
                     <FormControl fullWidth size="small">
-                        <InputLabel>Slot</InputLabel>
+                        <InputLabel shrink>Slot</InputLabel>
                         <Select
                             value={timer}
                             label="Slot"
+                            notched
+                            displayEmpty
                             renderValue={slotOption}
                             onChange={(e) =>
                                 onUpdateProperty("timer", e.target.value)
                             }>
+                            {/* Another package's widget may have one value */}
+                            {(external || (!widget?.timer && !timer)) && (
+                                <MenuItem value="">{slotOption("")}</MenuItem>
+                            )}
                             <MenuItem value="match">
                                 {slotOption("match")}
                             </MenuItem>
-                            {(widget?.inf || timer === INFINITE) && (
+                            {(widget?.inf ||
+                                timer === INFINITE ||
+                                external) && (
                                 <MenuItem value={INFINITE}>
                                     {slotOption(INFINITE)}
                                 </MenuItem>
@@ -2461,7 +2537,7 @@ function GetConfigBlock({
                     </FormControl>
                 )}
 
-                {timer === "match" && widget?.inf && (
+                {timer === "match" && (widget?.inf || external) && (
                     <FormControl fullWidth size="small">
                         <InputLabel>An Infinite Timer Gets</InputLabel>
                         <Select
