@@ -1527,7 +1527,15 @@ class Item {
                 }
             }
 
-            // Add new variables (starting from index 2 since index 1 is ConnectionCount)
+            // Add new variables (starting from index 2 since index 1 is
+            // ConnectionCount). Not ConnectionCount: an item with inputs has
+            // it (addConnectionCount), and the Variables tab doesn't list it,
+            // so one written here was saved at another index and not shown
+            variables = variables.filter(
+                (variable) =>
+                    String(variable.presetKey ?? "").toLowerCase() !==
+                    "connectioncount",
+            )
             variables.forEach((variable, index) => {
                 if (variable.presetKey) {
                     editorItems.Item.Properties[variable.presetKey] = {

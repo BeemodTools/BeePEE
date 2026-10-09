@@ -20,7 +20,8 @@
                     "Items losing instance 0 after adding and removing instances, crashing the chamber on load (opening the package fixes broken items)",
                     "Hammer backup files (.vmx) getting packed",
                     "Blank lines in descriptions getting removed on save, merging paragraphs in BEE2",
-                    "Importing items missing their autopacked files, colors, templates, config groups and other styles' instances"
+                    "Importing items missing their autopacked files, colors, templates, config groups and other styles' instances",
+                    "Connection Count disappearing from the Variables tab after saving (items with inputs get it automatically, so the tab no longer offers it)"
                 ]
             }
         },
