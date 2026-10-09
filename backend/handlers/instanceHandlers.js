@@ -17,6 +17,7 @@ const {
     removeUnusedFiles,
     takeRemovedFiles,
 } = require("../utils/packageFiles")
+const { fixupsOfVmfs } = require("../utils/vmfFixups")
 const { getHammerPath, getHammerAvailability, findPortal2Dir } = require("../data")
 
 /**
@@ -678,6 +679,39 @@ function register(ipcMain, mainWindow) {
             return { success: false, error: error.message }
         }
     })
+
+    // The fixups the item's instances use ($names in their VMFs), for the
+    // Conditions tab's fixup fields: the instances the item editor has
+    // (names), and the ones it adds but hasn't saved yet (files)
+    ipcMain.handle(
+        "get-instance-fixups",
+        async (event, { itemId, names = [], files = [] }) => {
+            try {
+                const item = packages
+                    .flatMap((p) => p.items)
+                    .find((i) => i.id === itemId)
+                if (!item) {
+                    throw new Error("Item not found")
+                }
+                const vmfPaths = [
+                    ...names.map((name) =>
+                        Instance.getCleanPath(
+                            item.packagePath,
+                            fixInstancePath(String(name)),
+                        ),
+                    ),
+                    ...files.map(String),
+                ].filter((file) => /\.vmf$/i.test(file))
+                return { success: true, fixups: fixupsOfVmfs(vmfPaths) }
+            } catch (error) {
+                console.error(
+                    `Failed to read the fixups the instances of ${itemId} use:`,
+                    error,
+                )
+                return { success: false, error: error.message }
+            }
+        },
+    )
 
     // Get valid instances only (for UI filtering)
     ipcMain.handle("get-valid-instances", async (event, { itemId }) => {

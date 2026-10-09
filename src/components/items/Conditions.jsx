@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react"
 import {
+    Autocomplete,
     Box,
     Typography,
     Button,
@@ -2085,7 +2086,72 @@ function DebugBlock({ block, onUpdateProperty, availableVariables }) {
     )
 }
 
-function SetInstVarBlock({ block, onUpdateProperty }) {
+/**
+ * A fixup's name: typed, or picked from the ones the item's instances use
+ * (the $names in their VMFs, formData.instanceFixups)
+ */
+function FixupField({ label, placeholder, value, onChange, fixups = [] }) {
+    return (
+        <Autocomplete
+            freeSolo
+            openOnFocus
+            options={fixups}
+            value={value || null}
+            inputValue={value || ""}
+            onInputChange={(event, next) => onChange(next)}
+            onChange={(event, picked) =>
+                onChange(
+                    typeof picked === "string" ? picked : (picked?.name ?? ""),
+                )
+            }
+            getOptionLabel={(option) =>
+                typeof option === "string" ? option : option.name
+            }
+            isOptionEqualToValue={(option, picked) =>
+                option.name ===
+                (typeof picked === "string" ? picked : picked?.name)
+            }
+            // "speed" finds $item_speed
+            filterOptions={(options, { inputValue }) => {
+                const typed = inputValue.replace(/^\$/, "").toLowerCase()
+                return options.filter((option) =>
+                    option.name.slice(1).toLowerCase().includes(typed),
+                )
+            }}
+            renderOption={({ key, ...props }, option) => (
+                <Box component="li" key={key} {...props}>
+                    <Box sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" noWrap>
+                            {option.name}
+                        </Typography>
+                        <Typography
+                            variant="caption"
+                            color="text.secondary"
+                            noWrap
+                            component="div">
+                            In {option.files.join(", ")}
+                        </Typography>
+                    </Box>
+                </Box>
+            )}
+            renderInput={(params) => (
+                <TextField
+                    {...params}
+                    size="small"
+                    label={label}
+                    placeholder={placeholder}
+                    helperText={
+                        fixups.length === 0
+                            ? "The item's instances use no fixups ($names)"
+                            : undefined
+                    }
+                />
+            )}
+        />
+    )
+}
+
+function SetInstVarBlock({ block, onUpdateProperty, fixups = [] }) {
     return (
         <Box sx={{ p: 2 }}>
             <Typography variant="subtitle2" color="text.secondary" gutterBottom>
@@ -2093,15 +2159,12 @@ function SetInstVarBlock({ block, onUpdateProperty }) {
             </Typography>
 
             <Stack spacing={2}>
-                <TextField
-                    fullWidth
-                    size="small"
+                <FixupField
                     label="Variable"
                     placeholder="$variable_name"
-                    value={block.variable || ""}
-                    onChange={(e) =>
-                        onUpdateProperty("variable", e.target.value)
-                    }
+                    value={block.variable}
+                    fixups={fixups}
+                    onChange={(value) => onUpdateProperty("variable", value)}
                 />
 
                 <TextField
@@ -2324,15 +2387,12 @@ function GetConfigBlock({
                     </Select>
                 </FormControl>
 
-                <TextField
-                    fullWidth
-                    size="small"
+                <FixupField
                     label="Fixup to Set"
                     placeholder="$item_speed"
-                    value={block.variable || ""}
-                    onChange={(e) =>
-                        onUpdateProperty("variable", e.target.value)
-                    }
+                    value={block.variable}
+                    fixups={formData?.instanceFixups}
+                    onChange={(value) => onUpdateProperty("variable", value)}
                 />
 
                 {(widget?.timer || timer) && (
@@ -2822,6 +2882,7 @@ function SortableBlock({
                     <SetInstVarBlock
                         block={block}
                         onUpdateProperty={handleUpdateProperty}
+                        fixups={formData?.instanceFixups}
                     />
                 )
 
@@ -4115,10 +4176,52 @@ function Conditions({
         read()
         return window.package.onConfigGroupsChanged?.(read)
     }, [item?.id])
+    // The fixups the item's instances use ($names in their VMFs), for the
+    // fixup fields: the instances it has in the editor (and ones added but
+    // not saved yet), read again when they change or the window's back in
+    // front (after editing one in Hammer)
+    const [instanceFixups, setInstanceFixups] = useState([])
+    const instanceSources = useMemo(() => {
+        const all = Object.values(formData.instances ?? {}).filter(
+            (instance) => instance && !instance._toRemove,
+        )
+        return JSON.stringify({
+            names: all
+                .filter((instance) => !instance._pending && instance.Name)
+                .map((instance) => instance.Name),
+            files: all
+                .filter((instance) => instance._pending && instance._filePath)
+                .map((instance) => instance._filePath),
+        })
+    }, [formData.instances])
+    useEffect(() => {
+        if (!item?.id) return undefined
+        const { names, files } = JSON.parse(instanceSources)
+        const read = async () => {
+            try {
+                const result = await window.package.getInstanceFixups?.(
+                    item.id,
+                    names,
+                    files,
+                )
+                if (!result?.success) throw new Error(result?.error)
+                setInstanceFixups(result.fixups)
+            } catch (error) {
+                console.error(
+                    `Failed to read the fixups of item "${item.name}"'s instances:`,
+                    error,
+                )
+            }
+        }
+        read()
+        window.addEventListener("focus", read)
+        return () => window.removeEventListener("focus", read)
+    }, [item?.id, instanceSources])
     // What blocks are checked against: the item's, with the config groups
+    // and its instances' fixups
     const blockData = useMemo(
-        () => ({ ...formData, configGroups }),
-        [formData, configGroups],
+        () => ({ ...formData, configGroups, instanceFixups }),
+        [formData, configGroups, instanceFixups],
     )
     const [selectedCategory, setSelectedCategory] = useState("Logic")
     const [activeId, setActiveId] = useState(null)

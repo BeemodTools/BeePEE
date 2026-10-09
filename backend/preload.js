@@ -229,6 +229,10 @@ contextBridge.exposeInMainWorld("package", {
     // Deletes the files removed instances used that nothing else uses
     removeUnusedPackedFiles: (itemId) =>
         ipcRenderer.invoke("remove-unused-packed-files", { itemId }),
+    // The fixups ($names) the item's instances use: those the item editor
+    // has (names), and VMFs it adds but hasn't saved yet (files)
+    getInstanceFixups: (itemId, names, files) =>
+        ipcRenderer.invoke("get-instance-fixups", { itemId, names, files }),
     getInstanceMetadata: (itemId, instanceIndex) =>
         ipcRenderer.invoke("get-instance-metadata", { itemId, instanceIndex }),
     checkVmfExternalAssets: (vmfPath) =>
