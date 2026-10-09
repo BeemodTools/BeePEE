@@ -68,14 +68,26 @@ async function handleVTFConversion(
  * "desc_N" keys (properties.txt's and info.txt's repeated "" keys). A raw
  * string containing newlines would produce invalid VDF on export, which
  * hangs BEEmod on startup.
+ *
+ * BEE2 reads descriptions as Markdown, where a line runs on into the next
+ * one unless it ends with two spaces (a line break), and an empty line
+ * starts a paragraph. A line that another follows gets the two spaces, so
+ * BEE2 shows the lines as they're typed, as the editor's preview does.
  */
 function descriptionValue(description) {
     if (typeof description !== "string" || !/\r?\n/.test(description)) {
         return description
     }
     const lines = {}
-    description.split(/\r?\n/).forEach((line, index) => {
-        lines[`desc_${index}`] = line
+    const all = description.split(/\r?\n/)
+    all.forEach((line, index) => {
+        const next = all[index + 1]
+        const breaks =
+            line.trim() !== "" &&
+            next !== undefined &&
+            next.trim() !== "" &&
+            !/( {2,}|\\)$/.test(line)
+        lines[`desc_${index}`] = breaks ? `${line}  ` : line
     })
     return lines
 }

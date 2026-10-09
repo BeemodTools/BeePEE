@@ -311,7 +311,11 @@ describe("loading a package's items", () => {
             details: { ...item.details },
             infoDescription: "Line one\nLine two",
         })
-        expect(infoDescription).toEqual({ desc_0: "Line one", desc_1: "Line two" })
+        // Each line on its own in BEE2 (a Markdown line break)
+        expect(infoDescription).toEqual({
+            desc_0: "Line one  ",
+            desc_1: "Line two",
+        })
         const info = JSON.parse(
             fs.readFileSync(path.join(dir, "info.json"), "utf8"),
         )
