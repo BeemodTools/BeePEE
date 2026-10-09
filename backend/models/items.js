@@ -1953,14 +1953,14 @@ class Item {
             const vbsp = this.readVbspText()
             if (!vbsp) return { blocks: saved ?? [] }
             if (saved && this.writesConditionsOf(vbsp.text, saved)) {
-                return { blocks: saved }
+                return { blocks: this.withKnownBlocks(saved) }
             }
             if (saved) {
                 console.warn(
                     `The VBSP config of "${this.name}" has other conditions than its saved blocks write (it changed since they were saved), so they're shown as the file has them`,
                 )
             }
-            return { blocks: rawBlocks(vbsp.text) }
+            return { blocks: this.withKnownBlocks(rawBlocks(vbsp.text)) }
         } catch (error) {
             console.error(
                 `Failed to read the VBSP config of "${this.name}":`,
@@ -1970,6 +1970,121 @@ class Item {
                 blocks: [],
                 error: `Its VBSP config can't be read (${error.message}), so BeePEE leaves it as it is`,
             }
+        }
+    }
+
+    /**
+     * Raw blocks BeePEE has a block for, as that block: Get Config blocks
+     * (GetItemConfig into a fixup), from packages BeePEE didn't make or
+     * saved before it had them. Only when the block writes the same
+     * condition; the rest stay raw.
+     */
+    withKnownBlocks(blocks) {
+        return blocks.map(
+            (block) =>
+                (block?.type === RAW_BLOCK && this.blockFromRaw(block)) ||
+                block,
+        )
+    }
+
+    /** A raw block as the Get Config block it is, or null */
+    blockFromRaw(raw) {
+        try {
+            const lower = (text) => String(text ?? "").toLowerCase()
+            const wrapped = `"Conditions"\n{\n${raw.vdf ?? ""}\n}`
+            const entries = conditionEntries(wrapped)
+            if (entries.length !== 1 || !entries[0].children) return null
+            const parts = entries[0].children
+            // The item's instance and a result, and nothing else (Priority,
+            // other tests, ...)
+            if (
+                parts.length !== 2 ||
+                !parts.some((e) => lower(e.key) === "instance") ||
+                !parts.some((e) => lower(e.key) === "result" && e.children)
+            ) {
+                return null
+            }
+            const results = parts.find((e) => lower(e.key) === "result").children
+
+            // One GetItemConfig with an ID, Name, ResultVar and Default
+            const configOf = (list = []) => {
+                if (
+                    list.length !== 1 ||
+                    lower(list[0].key) !== "getitemconfig" ||
+                    !list[0].children ||
+                    list[0].children.length !== 4
+                ) {
+                    return null
+                }
+                const keys = Object.fromEntries(
+                    list[0].children.map((e) => [lower(e.key), e.value]),
+                )
+                return ["id", "name", "resultvar", "default"].every(
+                    (key) => typeof keys[key] === "string",
+                )
+                    ? keys
+                    : null
+            }
+
+            let props = null
+            const single = configOf(results)
+            if (single) {
+                // "speed", "speed[7]", "speed[0]" (the infinite one) or
+                // "speed[$timer_delay]"
+                const slotted = /^(.+)\[(\d+|\$\w+)\]$/.exec(single.name)
+                const slot = slotted?.[2] ?? ""
+                props = {
+                    group: single.id,
+                    widget: slotted ? slotted[1] : single.name,
+                    variable: single.resultvar,
+                    default: single.default,
+                    timer: !slot
+                        ? ""
+                        : slot.startsWith("$")
+                          ? "match"
+                          : slot === "0"
+                            ? "inf"
+                            : slot,
+                    ...(slot.startsWith("$")
+                        ? { matchVariable: slot, infinite: "inf" }
+                        : {}),
+                }
+            } else if (
+                results.length === 1 &&
+                lower(results[0].key) === "condition" &&
+                results[0].children
+            ) {
+                // A fixup's slot, under 3 (an infinite timer) slot 3's
+                const guard = results[0].children
+                const part = (key) => guard.find((e) => lower(e.key) === key)
+                const tested = /^(\$\w+) < 3$/.exec(part("instvar")?.value ?? "")
+                const high = configOf(part("else")?.children)
+                const slotted = /^(.+)\[(\$\w+)\]$/.exec(high?.name ?? "")
+                if (tested && high && slotted && slotted[2] === tested[1]) {
+                    props = {
+                        group: high.id,
+                        widget: slotted[1],
+                        variable: high.resultvar,
+                        default: high.default,
+                        timer: "match",
+                        matchVariable: tested[1],
+                        infinite: "3",
+                    }
+                }
+            }
+            if (!props) return null
+
+            const block = {
+                id: String(raw.id ?? "").replace(/^rawVbsp/, "getConfig"),
+                type: "getConfig",
+                displayName: "Get Config",
+                ...props,
+            }
+            // It writes the condition the raw block has, or it stays raw
+            const written = conditionEntries(this.vbspTextWith("", [block]))
+            return sameEntries(written, entries) ? block : null
+        } catch {
+            return null
         }
     }
 

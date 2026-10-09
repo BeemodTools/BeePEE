@@ -396,8 +396,8 @@ describe("Get Config blocks", () => {
         fs.rmSync(dir, { recursive: true, force: true })
     })
 
-    /** The conditions the item's blocks write, as [key, value or children] */
-    async function written(blocks) {
+    /** The lamp item, with this VBSP config when it's given */
+    async function loadItem(vbspConfig) {
         fs.mkdirSync(itemDir, { recursive: true })
         fs.writeFileSync(
             path.join(itemDir, "editoritems.json"),
@@ -425,10 +425,18 @@ describe("Get Config blocks", () => {
                 },
             }),
         )
+        if (vbspConfig) {
+            fs.writeFileSync(path.join(itemDir, "vbsp_config.cfg"), vbspConfig)
+        }
         const pkg = new Package(path.join(dir, "info.json"))
         pkg.packageDir = dir
         await pkg.load()
-        const item = pkg.items[0]
+        return pkg.items[0]
+    }
+
+    /** The conditions the item's blocks write, as [key, value or children] */
+    async function written(blocks) {
+        const item = await loadItem()
         item.saveConditions({ blocks })
         const conditions = parse(
             fs.readFileSync(path.join(itemDir, "vbsp_config.cfg"), "utf8"),
@@ -556,5 +564,112 @@ describe("Get Config blocks", () => {
                 block({ widget: "lit", timer: "match", matchVariable: "" }),
             ]),
         ).toEqual([[], [], [], []])
+    })
+
+    test("are what an item's GetItemConfig conditions open as, when they write the same", async () => {
+        const condition = (results, extra = "") =>
+            `\t"Condition"\n\t{\n${extra}\t\t"Instance" "<ITEM_LAMP>"\n\t\t"Result"\n\t\t{\n${results}\t\t}\n\t}\n`
+        const config = (name, into, def, more = "") =>
+            `\t\t\t"GetItemConfig"\n\t\t\t{\n\t\t\t\t"ID" "SPEEDS"\n\t\t\t\t"Name" "${name}"\n\t\t\t\t"ResultVar" "${into}"\n\t\t\t\t"Default" "${def}"\n${more}\t\t\t}\n`
+        const vbspConfig = [
+            '"Conditions"\n{\n',
+            // A widget, a slot, the infinite slot, a fixup's slot
+            condition(config("speed", "$speed", "5")),
+            condition(config("lit[7]", "$lit", "0")),
+            condition(config("wait[0]", "$wait", "60")),
+            condition(config("wait[$timer_delay]", "$wait", "60")),
+            // A fixup's slot, under 3 slot 3's
+            condition(
+                `\t\t\t"Condition"\n\t\t\t{\n\t\t\t\t"instVar" "$timer_delay < 3"\n\t\t\t\t"Result"\n\t\t\t\t{\n${config("lit[3]", "$lit", "0")}\t\t\t\t}\n\t\t\t\t"Else"\n\t\t\t\t{\n${config("lit[$timer_delay]", "$lit", "0")}\t\t\t\t}\n\t\t\t}\n`,
+            ),
+            // Not what a Get Config block writes: they stay as they are
+            condition(config("speed", "$speed", "5"), '\t\t"Priority" "10"\n'),
+            condition(
+                config("speed", "$speed", "5", '\t\t\t\t"UseTimer" "1"\n'),
+            ),
+            condition(
+                `\t\t\t"GetItemConfig"\n\t\t\t{\n\t\t\t\t"ID" "SPEEDS"\n\t\t\t\t"Name" "speed"\n\t\t\t\t"Default" "5"\n\t\t\t\t"ResultVar" "$speed"\n\t\t\t}\n`,
+            ),
+            "}\n",
+        ].join("")
+        const item = await loadItem(vbspConfig)
+
+        const { blocks } = item.getConditions()
+        expect(blocks.map((b) => b.type)).toEqual([
+            ...Array(5).fill("getConfig"),
+            ...Array(3).fill("rawVbsp"),
+        ])
+        const props = ({
+            group,
+            widget,
+            variable,
+            timer,
+            default: def,
+            matchVariable,
+            infinite,
+        }) => ({
+            group,
+            widget,
+            variable,
+            timer,
+            default: def,
+            ...(matchVariable ? { matchVariable, infinite } : {}),
+        })
+        expect(blocks.slice(0, 5).map(props)).toEqual([
+            {
+                group: "SPEEDS",
+                widget: "speed",
+                variable: "$speed",
+                timer: "",
+                default: "5",
+            },
+            {
+                group: "SPEEDS",
+                widget: "lit",
+                variable: "$lit",
+                timer: "7",
+                default: "0",
+            },
+            {
+                group: "SPEEDS",
+                widget: "wait",
+                variable: "$wait",
+                timer: "inf",
+                default: "60",
+            },
+            {
+                group: "SPEEDS",
+                widget: "wait",
+                variable: "$wait",
+                timer: "match",
+                default: "60",
+                matchVariable: "$timer_delay",
+                infinite: "inf",
+            },
+            {
+                group: "SPEEDS",
+                widget: "lit",
+                variable: "$lit",
+                timer: "match",
+                default: "0",
+                matchVariable: "$timer_delay",
+                infinite: "3",
+            },
+        ])
+
+        // Saved as they open: the same conditions, and they open the same
+        item.saveConditions({ blocks })
+        const text = fs.readFileSync(
+            path.join(itemDir, "vbsp_config.cfg"),
+            "utf8",
+        )
+        expect(
+            keyvalues(parse(text).find((e) => e.key === "Conditions").children),
+        ).toEqual(
+            keyvalues(
+                parse(vbspConfig).find((e) => e.key === "Conditions").children,
+            ),
+        )
+        expect(item.getConditions().blocks).toEqual(blocks)
     })
 })
