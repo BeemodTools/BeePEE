@@ -3,7 +3,10 @@
  * Config) and BeePEE's color picker
  */
 
-/** Colors to start from in the color picker: BEE2's Cube Coloriser's */
+/**
+ * Colors to start from in the color picker: BEE2's Cube Coloriser's, with
+ * the portals' blue and orange in place of its nearest two
+ */
 export const PRESET_COLORS = [
     "25 25 230",
     "230 25 25",
@@ -17,7 +20,7 @@ export const PRESET_COLORS = [
     "25 25 128",
     "25 128 25",
     "25 128 128",
-    "25 128 230",
+    "2 114 210", // Portal 1: #0272d2, the blue portal
     "25 230 128",
     "128 25 25",
     "128 25 128",
@@ -28,7 +31,7 @@ export const PRESET_COLORS = [
     "128 230 128",
     "128 230 230",
     "230 25 128",
-    "230 128 25",
+    "252 131 0", // Portal 2: #fc8300, the orange portal
     "230 128 128",
     "230 128 230",
     "230 230 128",
