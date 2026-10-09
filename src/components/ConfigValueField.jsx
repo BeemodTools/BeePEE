@@ -27,6 +27,9 @@ export default function ConfigValueField({
     disabled = false,
 }) {
     const text = String(value ?? "")
+    // A compact one (a timer value's cell) has its label for screen readers
+    // only: the cell says which it is
+    const shown = compact ? undefined : label
 
     switch (widget?.type) {
         case "checkbox":
@@ -52,10 +55,11 @@ export default function ConfigValueField({
                         minWidth: compact ? 0 : 160,
                         width: compact ? "100%" : undefined,
                     }}>
-                    {label && <InputLabel>{label}</InputLabel>}
+                    {shown && <InputLabel>{shown}</InputLabel>}
                     <Select
                         value={options.some((o) => o.id === text) ? text : ""}
-                        label={label}
+                        label={shown}
+                        inputProps={{ "aria-label": label }}
                         onChange={(e) => onChange(e.target.value)}
                         sx={compact ? { fontSize: "0.75rem" } : undefined}>
                         {options.map((option) => (
@@ -94,7 +98,7 @@ export default function ConfigValueField({
                 <TextField
                     size="small"
                     type="number"
-                    label={label}
+                    label={shown}
                     value={text}
                     error={error}
                     disabled={disabled}
@@ -103,6 +107,7 @@ export default function ConfigValueField({
                         min: widget.min === "" ? undefined : widget.min,
                         max: widget.max === "" ? undefined : widget.max,
                         step: widget.step === "" ? undefined : widget.step,
+                        "aria-label": label,
                         style: compact
                             ? { fontSize: "0.75rem", padding: 6 }
                             : undefined,
@@ -116,7 +121,7 @@ export default function ConfigValueField({
                 <TextField
                     size="small"
                     type="number"
-                    label={label}
+                    label={shown}
                     value={text}
                     error={error}
                     disabled={disabled}
@@ -124,6 +129,7 @@ export default function ConfigValueField({
                     inputProps={{
                         min: 0,
                         step: 1,
+                        "aria-label": label,
                         style: compact
                             ? { fontSize: "0.75rem", padding: 6 }
                             : undefined,
@@ -147,16 +153,17 @@ export default function ConfigValueField({
             return (
                 <TextField
                     size="small"
-                    label={label}
+                    label={shown}
                     value={text}
                     error={error}
                     disabled={disabled}
                     onChange={(e) => onChange(e.target.value)}
-                    inputProps={
-                        compact
-                            ? { style: { fontSize: "0.75rem", padding: 6 } }
-                            : undefined
-                    }
+                    inputProps={{
+                        "aria-label": label,
+                        style: compact
+                            ? { fontSize: "0.75rem", padding: 6 }
+                            : undefined,
+                    }}
                     sx={{ width: compact ? "100%" : 240 }}
                 />
             )
