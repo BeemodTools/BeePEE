@@ -107,7 +107,7 @@ const validateBlock = (
         case "addOverlay":
             return validateAddOverlayBlock(block, formData)
         case "addGlobalEnt":
-            return validateAddGlobalEntBlock(block, formData)
+            return validateAddGlobalEntBlock(block, formData, allBlocks)
         case "offsetInstance":
             return validateOffsetInstanceBlock(block)
         case "debug":
@@ -749,8 +749,33 @@ const validateAddOverlayBlock = (block, formData = {}) => {
     return errors
 }
 
-const validateAddGlobalEntBlock = (block, formData = {}) => {
+/** Blocks that set fixups: BEE2 sets them on the item's own instance only */
+const FIXUP_BLOCKS = new Set(["setInstVar", "setColor", "mapInstVar"])
+
+/** Every block in `blocks`, and the ones in them */
+const everyBlock = (blocks = []) =>
+    blocks.flatMap((block) => [
+        block,
+        ...everyBlock(
+            (BLOCK_DEFINITIONS[block?.type]?.childContainers ?? []).flatMap(
+                (key) => block[key] ?? [],
+            ),
+        ),
+    ])
+
+const validateAddGlobalEntBlock = (block, formData = {}, allBlocks = []) => {
     const errors = []
+
+    // It looks like the fixups the item's blocks set go to it too, but BEE2
+    // sets them on the item's own instance only
+    if (everyBlock(allBlocks).some((other) => FIXUP_BLOCKS.has(other.type))) {
+        errors.push({
+            type: "warning",
+            message:
+                "Fixups the item's blocks set (Change Fixup, Set Color) go to the item's own instance, not to this global one. BEE2 also adds a global instance only once per map.",
+            field: "instanceName",
+        })
+    }
 
     if (!block.instanceName || block.instanceName.trim() === "") {
         errors.push({

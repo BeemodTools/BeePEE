@@ -83,6 +83,17 @@ const RESULT_BLOCKS = new Set([
 const hasElse = (condition) =>
     Object.keys(condition ?? {}).some((key) => key.toLowerCase() === "else")
 
+/**
+ * The lowest instance index nobody has: BEE2 fills a gap in the indices with
+ * a blank instance, which Portal 2 can't load (instance 0 above all: the one
+ * the Puzzle Maker places)
+ */
+function freeInstanceIndex(instances) {
+    let index = 0
+    while (String(index) in (instances ?? {})) index++
+    return index
+}
+
 /** A block BeePEE can't write, as it writes it */
 function unknownBlock(block) {
     return { unknown: { type: block.type, data: block } }
@@ -474,13 +485,8 @@ class Item {
                     continue
                 }
 
-                // Find next available index (ignore non-numeric keys so a
-                // bad key can't poison Math.max into NaN)
-                const numericKeys = Object.keys(existingInstances)
-                    .map((k) => parseInt(k, 10))
-                    .filter(Number.isInteger)
-                const nextIndex =
-                    numericKeys.length > 0 ? Math.max(...numericKeys) + 1 : 0
+                // The lowest free index (a gap would be a blank instance)
+                const nextIndex = freeInstanceIndex(existingInstances)
 
                 // Get VMF stats for the instance
                 let vmfStats = {
@@ -846,6 +852,11 @@ class Item {
                 `Fixed the editoritems of "${this.name}": ${changes.join(", ")}`,
             )
         }
+        // Saved with a gap in its instances' indices (removing one used to
+        // leave one): BEE2 makes it a blank instance, which crashes Portal 2
+        if (Object.keys(this.renumberInstances()).length) {
+            changes.push("its instances are numbered from 0 with no gaps")
+        }
         return changes
     }
 
@@ -926,28 +937,26 @@ class Item {
     }
 
     addInstance(instanceName) {
-        // Find the next available index. Ignore non-numeric keys - a single
-        // bad key (e.g. "NaN") would otherwise poison Math.max and write
-        // another "NaN" entry into editoritems.json
-        const numericKeys = Object.keys(this.instances)
-            .map((k) => parseInt(k, 10))
-            .filter(Number.isInteger)
-        const nextIndex =
-            numericKeys.length > 0 ? Math.max(...numericKeys) + 1 : 0
-
-        // Add the new instance
-        this.instances[nextIndex.toString()] = {
-            Name: instanceName,
-            source: "editor",
-        }
-
-        // Update editoritems file
         const editoritems = this.getEditorItems()
         if (!editoritems.Item.Exporting) {
             editoritems.Item.Exporting = {}
         }
         if (!editoritems.Item.Exporting.Instances) {
             editoritems.Item.Exporting.Instances = {}
+        }
+
+        // The lowest free index: one a removed instance left (instance 0
+        // first) before a new one at the end. A gap would be a blank
+        // instance to BEE2.
+        const nextIndex = freeInstanceIndex({
+            ...this.instances,
+            ...editoritems.Item.Exporting.Instances,
+        })
+
+        // Add the new instance
+        this.instances[nextIndex.toString()] = {
+            Name: instanceName,
+            source: "editor",
         }
 
         // Get VMF stats for the new instance
@@ -1127,6 +1136,65 @@ class Item {
 
         // Reload instances from file to ensure consistency
         this.reloadInstances()
+    }
+
+    /**
+     * Number the item's instances 0, 1, 2... with no gaps, keeping their
+     * order. BEE2 fills a gap with a blank instance, which Portal 2 can't
+     * load: with no instance 0, a chamber with the item crashes when it
+     * loads. Each instance's name and error go with it; named instances
+     * (BEE2's "bee2_...") stay as they are.
+     * @returns {Object<string, string>} Old index to new, of the ones that moved
+     */
+    renumberInstances() {
+        const editoritems = this.getEditorItems()
+        const exporting = getKey(editoritems?.Item, "Exporting")
+        const instancesKey = Object.keys(exporting ?? {}).find(
+            (key) => key.toLowerCase() === "instances",
+        )
+        const instances = instancesKey ? exporting[instancesKey] : null
+        if (!instances || typeof instances !== "object") return {}
+
+        const numbered = Object.keys(instances)
+            .filter((key) => /^\d+$/.test(key))
+            .sort((a, b) => Number(a) - Number(b))
+        const moved = {}
+        numbered.forEach((key, index) => {
+            if (key !== String(index)) moved[key] = String(index)
+        })
+        if (Object.keys(moved).length === 0) return {}
+
+        const renumbered = {}
+        numbered.forEach((key, index) => {
+            renumbered[index] = instances[key]
+        })
+        for (const [key, value] of Object.entries(instances)) {
+            if (!/^\d+$/.test(key)) renumbered[key] = value
+        }
+        exporting[instancesKey] = renumbered
+        this.saveEditorItems(editoritems)
+
+        // Names and errors are kept by index (ones of gone instances go)
+        const meta = this.getMetadata()
+        for (const mapKey of ["instanceNames", "instanceErrors"]) {
+            if (!meta[mapKey] || typeof meta[mapKey] !== "object") continue
+            meta[mapKey] = Object.fromEntries(
+                Object.entries(meta[mapKey])
+                    .filter(([key]) => numbered.includes(key))
+                    .map(([key, value]) => [moved[key] ?? key, value]),
+            )
+        }
+        this.saveMetadata(meta)
+
+        console.log(
+            `Numbered the instances of "${this.name}" from 0 with no gaps (${Object.entries(
+                moved,
+            )
+                .map(([from, to]) => `${from} is ${to} now`)
+                .join(", ")})`,
+        )
+        this.reloadInstances()
+        return moved
     }
 
     // Check if item has I/O but no ConnectionPoints, and generate defaults if needed

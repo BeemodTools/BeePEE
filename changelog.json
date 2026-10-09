@@ -1,6 +1,20 @@
 {
     "versions": [
         {
+            "version": "1.2.1",
+            "date": "2026-10-9",
+            "changes": {
+                "added": [
+                    "Warning on Add Global Instance blocks when the item's blocks set fixups (they only reach the item's own instance)"
+                ],
+                "fixed": [
+                    "Items losing their instance 0 after adding and removing instances, crashing the chamber when it loads (broken items get fixed when the package opens)",
+                    "Hammer backup files (.vmx) getting packed",
+                    "Blank lines in item descriptions getting removed when the item is saved, running its paragraphs together in BEE2"
+                ]
+            }
+        },
+        {
             "version": "1.2",
             "date": "2026-10-9",
             "changes": {

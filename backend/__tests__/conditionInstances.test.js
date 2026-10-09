@@ -98,7 +98,8 @@ describe("the instances an item's conditions switch to", () => {
     })
 
     test("are registered under the editoritems' indices, not over another instance", () => {
-        // Index 1 was removed: 2 instances, but the next index is 3
+        // Index 1 was removed: the new one fills it (BEE2 would make the gap
+        // a blank instance), and doesn't go over index 2
         const item = makeItem(
             dir,
             {
@@ -110,8 +111,8 @@ describe("the instances an item's conditions switch to", () => {
         expect(item.autoImportVBSPInstances()).toBe(true)
         const expected = {
             0: "instances/BEE2/test/main.vmf",
+            1: "instances/BEE2/test/switched.vmf",
             2: "instances/BEE2/test/other.vmf",
-            3: "instances/BEE2/test/switched.vmf",
         }
         expect(fileInstances(dir)).toEqual(expected)
         expect(names(item)).toEqual(expected)

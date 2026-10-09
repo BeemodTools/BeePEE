@@ -596,6 +596,30 @@ function register(ipcMain, mainWindow) {
         },
     )
 
+    // Number the item's instances 0, 1, 2... with no gaps again: the item
+    // editor, after it removed and added instances (removing one leaves a
+    // gap, which BEE2 makes a blank instance)
+    ipcMain.handle("renumber-instances", async (event, { itemId }) => {
+        try {
+            const item = packages
+                .flatMap((p) => p.items)
+                .find((i) => i.id === itemId)
+            if (!item) {
+                throw new Error("Item not found")
+            }
+            const moved = item.renumberInstances()
+            if (Object.keys(moved).length) {
+                const updatedItem = item.toJSONWithExistence()
+                mainWindow.webContents.send("item-updated", updatedItem)
+                sendItemUpdateToEditor(itemId, updatedItem)
+            }
+            return { success: true, moved }
+        } catch (error) {
+            console.error(`Failed to number the instances of ${itemId}:`, error)
+            return { success: false, error: error.message }
+        }
+    })
+
     // Get valid instances only (for UI filtering)
     ipcMain.handle("get-valid-instances", async (event, { itemId }) => {
         try {
