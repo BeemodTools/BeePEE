@@ -4179,11 +4179,24 @@ function Conditions({
     // The fixups the item's instances use ($names in their VMFs), for the
     // fixup fields: the instances it has in the editor (and ones added but
     // not saved yet), read again when they change or the window's back in
-    // front (after editing one in Hammer)
+    // front (after editing one in Hammer). Not the ones Add Global Instance
+    // blocks add: BEE2 adds those once per map, without the item's fixups.
     const [instanceFixups, setInstanceFixups] = useState([])
     const instanceSources = useMemo(() => {
+        const key = (name) =>
+            String(name ?? "")
+                .replace(/\\/g, "/")
+                .toLowerCase()
+        const globals = new Set(
+            everyBlock(blocks)
+                .filter((block) => block?.type === "addGlobalEnt")
+                .map((block) => key(block.instanceName)),
+        )
         const all = Object.values(formData.instances ?? {}).filter(
-            (instance) => instance && !instance._toRemove,
+            (instance) =>
+                instance &&
+                !instance._toRemove &&
+                !globals.has(key(instance.Name)),
         )
         return JSON.stringify({
             names: all
@@ -4193,10 +4206,12 @@ function Conditions({
                 .filter((instance) => instance._pending && instance._filePath)
                 .map((instance) => instance._filePath),
         })
-    }, [formData.instances])
+    }, [formData.instances, blocks])
     useEffect(() => {
         if (!item?.id) return undefined
         const { names, files } = JSON.parse(instanceSources)
+        // A read for instances the item had before doesn't count
+        let current = true
         const read = async () => {
             try {
                 const result = await window.package.getInstanceFixups?.(
@@ -4205,7 +4220,7 @@ function Conditions({
                     files,
                 )
                 if (!result?.success) throw new Error(result?.error)
-                setInstanceFixups(result.fixups)
+                if (current) setInstanceFixups(result.fixups)
             } catch (error) {
                 console.error(
                     `Failed to read the fixups of item "${item.name}"'s instances:`,
@@ -4215,7 +4230,10 @@ function Conditions({
         }
         read()
         window.addEventListener("focus", read)
-        return () => window.removeEventListener("focus", read)
+        return () => {
+            current = false
+            window.removeEventListener("focus", read)
+        }
     }, [item?.id, instanceSources])
     // What blocks are checked against: the item's, with the config groups
     // and its instances' fixups
