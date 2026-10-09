@@ -1506,6 +1506,12 @@ function savePackageAsBpee(packageDir, outputBpeePath) {
 }
 
 /**
+ * Hammer's backup of a VMF saved in it (instance.vmx next to instance.vmf):
+ * not for the package
+ */
+const HAMMER_BACKUP = /\.vmx$/i
+
+/**
  * Exports a package directory as a .bee_pack file using 7zip.
  * Converts all JSON files back to VDF format before archiving.
  * @param {string} packageDir - The directory to export.
@@ -1531,6 +1537,9 @@ async function exportPackageAsBeePack(packageDir, outputBeePackPath) {
 
             sendProgressUpdate(10, "Copying package files...")
 
+            // Hammer's backups of the VMFs saved in it don't ship
+            let backups = 0
+
             // Recursively copy directory
             const copyDir = (src, dest) => {
                 fs.mkdirSync(dest, { recursive: true })
@@ -1540,6 +1549,10 @@ async function exportPackageAsBeePack(packageDir, outputBeePackPath) {
                     // Skip .bpee directory - it's only used for local staging and temp files
                     if (entry.name === ".bpee") {
                         logger.debug(`Skipped ${path.join(src, entry.name)}`)
+                        continue
+                    }
+                    if (entry.isFile() && HAMMER_BACKUP.test(entry.name)) {
+                        backups++
                         continue
                     }
 
@@ -1555,6 +1568,11 @@ async function exportPackageAsBeePack(packageDir, outputBeePackPath) {
             }
 
             copyDir(packageDir, tempExportDir)
+            if (backups) {
+                console.log(
+                    `Left out ${backups} Hammer backup file${backups === 1 ? "" : "s"} (.vmx)`,
+                )
+            }
 
             sendProgressUpdate(40, "Converting JSON files to VDF format...")
 
