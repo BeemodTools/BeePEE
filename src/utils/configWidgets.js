@@ -198,7 +198,7 @@ export function configProblems(groups) {
                 if (!widget.timer) {
                     addWidget(
                         "warning",
-                        "BEE2 4.46 doesn't show a color's swatch unless it has a value for each timer value",
+                        "BEE2 4.46 doesn't show a color's swatch unless it has a slot for each timer value",
                         "timer",
                     )
                 } else if (widget.inf) {
@@ -217,7 +217,7 @@ export function configProblems(groups) {
                 addWidget(
                     "error",
                     widget.timer
-                        ? "Some timer values' defaults aren't right for it"
+                        ? "Some slots' defaults aren't right for it"
                         : `Its default: ${valueError(widget, values[0])}`,
                     "default",
                 )

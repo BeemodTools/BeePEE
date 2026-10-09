@@ -163,7 +163,7 @@ function TimerDefaults({ widget, onChange }) {
                     mb: 1,
                 }}>
                 <Typography variant="caption" color="text.secondary">
-                    Each timer value's default
+                    Each slot's default (a slot for each timer value)
                 </Typography>
                 <Button
                     size="small"
@@ -175,7 +175,7 @@ function TimerDefaults({ widget, onChange }) {
                             ),
                         })
                     }>
-                    Make all like timer 3's
+                    Make all like slot 3
                 </Button>
             </Box>
             <Box
@@ -204,8 +204,8 @@ function TimerDefaults({ widget, onChange }) {
                             widget={widget}
                             label={
                                 timer === INFINITE
-                                    ? "Infinite timer"
-                                    : `Timer ${timer}`
+                                    ? "Slot for an infinite timer"
+                                    : `Slot ${timer}`
                             }
                             value={widget.defaults?.[timer]}
                             error={Boolean(
@@ -537,7 +537,7 @@ function WidgetCard({
                     }
                     label={
                         <Typography variant="body2">
-                            A value for each timer value
+                            A slot for each timer value
                         </Typography>
                     }
                 />

@@ -82,7 +82,9 @@ import {
     WIDGET_TYPES,
     defaultOf,
     labelsItself,
+    minutesSeconds,
 } from "../../utils/configWidgets"
+import { rgbToHex } from "../../utils/bee2Colors"
 
 // Block Validation Functions
 const validateBlock = (
@@ -974,20 +976,20 @@ const validateGetConfigBlock = (block, formData = {}) => {
     const name = widget.label || widget.id
     if (widget.timer && !timer) {
         error(
-            `${name} has a value for each timer value: pick which one, or Get Config always gives its default`,
+            `${name} has a slot for each timer value: pick which slot, or Get Config always gives its default`,
             "timer",
         )
     }
     if (!widget.timer && timer) {
         warning(
-            `${name} has one value now: the timer value is left out`,
+            `${name} has one value now, not slots: the slot is left out`,
             "timer",
         )
     }
     if (widget.timer && timer === "match") {
         if (!block.matchVariable) {
             error(
-                "Get Config must have a fixup whose value picks the timer value",
+                "Get Config must have a fixup whose value picks the slot",
                 "matchVariable",
             )
         } else if (!itemHasFixup(formData, block.matchVariable)) {
@@ -1004,7 +1006,7 @@ const validateGetConfigBlock = (block, formData = {}) => {
             (timer === "match" && block.infinite === INFINITE))
     ) {
         warning(
-            `${name} has no infinite timer's value: an infinite timer gets the default`,
+            `${name} has no slot for an infinite timer: an infinite timer gets the default`,
             "timer",
         )
     }
@@ -2125,6 +2127,50 @@ function SetInstVarBlock({ block, onUpdateProperty }) {
 }
 
 /**
+ * A slot's default (Package Config), as it looks: a swatch for a color, the
+ * value for the rest
+ */
+function SlotDefault({ widget, slot }) {
+    if (!widget?.timer) return null
+    const value = String(widget.defaults?.[slot] ?? "")
+    if (widget.type === "color") {
+        return (
+            <Box
+                sx={{
+                    width: 18,
+                    height: 18,
+                    flexShrink: 0,
+                    borderRadius: 0.5,
+                    bgcolor: rgbToHex(value),
+                    border: "1px solid",
+                    borderColor: "divider",
+                }}
+            />
+        )
+    }
+    const shown =
+        widget.type === "checkbox"
+            ? value === "1"
+                ? "On"
+                : "Off"
+            : widget.type === "dropdown"
+              ? (widget.options ?? []).find((o) => o.id === value)?.label ||
+                value
+              : widget.type === "timer"
+                ? minutesSeconds(value)
+                : value
+    return (
+        <Typography
+            variant="body2"
+            color="text.secondary"
+            noWrap
+            sx={{ maxWidth: 200 }}>
+            {shown}
+        </Typography>
+    )
+}
+
+/**
  * A Get Config block: a value players set in BEE2's ItemVar menu (a widget
  * of the package's config groups, Package Config), into a fixup. A timer
  * widget's for a fixup's value, or a set timer value.
@@ -2200,6 +2246,29 @@ function GetConfigBlock({
               ]
             : []),
     ]
+    // A timer widget's slots, one for each timer value: by name, with what
+    // each has by default
+    const name = widget?.label || widget?.id || "Value"
+    const slotName = (slot) =>
+        slot === "match"
+            ? `${name} Slot Matching a Fixup`
+            : slot === INFINITE
+              ? `${name} Slot for an Infinite Timer`
+              : `${name} Slot ${slot}`
+    const slotOption = (slot) => (
+        <Box
+            sx={{
+                display: "flex",
+                alignItems: "center",
+                gap: 1.5,
+                width: "100%",
+            }}>
+            <Typography variant="body2" sx={{ flex: 1 }}>
+                {slotName(slot)}
+            </Typography>
+            {slot !== "match" && <SlotDefault widget={widget} slot={slot} />}
+        </Box>
+    )
     const timers =
         timer &&
         timer !== "match" &&
@@ -2268,24 +2337,25 @@ function GetConfigBlock({
 
                 {(widget?.timer || timer) && (
                     <FormControl fullWidth size="small">
-                        <InputLabel>Value</InputLabel>
+                        <InputLabel>Slot</InputLabel>
                         <Select
                             value={timer}
-                            label="Value"
+                            label="Slot"
+                            renderValue={slotOption}
                             onChange={(e) =>
                                 onUpdateProperty("timer", e.target.value)
                             }>
                             <MenuItem value="match">
-                                Matching a Fixup's Value
+                                {slotOption("match")}
                             </MenuItem>
                             {(widget?.inf || timer === INFINITE) && (
                                 <MenuItem value={INFINITE}>
-                                    An Infinite Timer's Value
+                                    {slotOption(INFINITE)}
                                 </MenuItem>
                             )}
                             {timers.map((value) => (
                                 <MenuItem key={value} value={value}>
-                                    Timer {value}'s Value
+                                    {slotOption(value)}
                                 </MenuItem>
                             ))}
                         </Select>
@@ -2337,13 +2407,14 @@ function GetConfigBlock({
                         <Select
                             value={block.infinite === INFINITE ? INFINITE : "3"}
                             label="An Infinite Timer Gets"
+                            renderValue={slotOption}
                             onChange={(e) =>
                                 onUpdateProperty("infinite", e.target.value)
                             }>
                             <MenuItem value={INFINITE}>
-                                Its Infinite Timer's Value
+                                {slotOption(INFINITE)}
                             </MenuItem>
-                            <MenuItem value="3">Timer 3's Value</MenuItem>
+                            <MenuItem value="3">{slotOption("3")}</MenuItem>
                         </Select>
                     </FormControl>
                 )}
@@ -2368,12 +2439,14 @@ function GetConfigBlock({
                 color="text.secondary"
                 sx={{ display: "block", mt: 2 }}>
                 {timer === "match"
-                    ? `The value players set in BEE2's ItemVar menu for the fixup's timer value. ${
+                    ? `Players set each slot in BEE2's ItemVar menu: this is the one whose number is the fixup's value, like the item's timer. ${
                           block.infinite === INFINITE && widget?.inf
-                              ? "Under 3 or over 30 (an infinite timer) gets its infinite timer's value"
-                              : "Under 3 (an infinite timer) gets timer 3's"
+                              ? "Under 3 or over 30 (an infinite timer) gets the slot for an infinite timer"
+                              : "Under 3 (an infinite timer) gets slot 3"
                       }. The default is for when BEE2 has no value.`
-                    : "The value players set in BEE2's ItemVar menu. The default is for when BEE2 has no value."}
+                    : timer
+                      ? "Players set each slot in BEE2's ItemVar menu. The default is for when BEE2 has no value."
+                      : "The value players set in BEE2's ItemVar menu. The default is for when BEE2 has no value."}
             </Typography>
         </Box>
     )
