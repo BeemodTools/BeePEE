@@ -5,14 +5,14 @@
             "date": "2026-10-9",
             "changes": {
                 "added": [
-                    "Warning on Add Global Instance blocks when the item's blocks set fixups (they only reach the item's own instance)",
-                    "Removing an instance deletes the files it was autopacked with, when nothing else in the package uses them (also when replacing an instance or deleting an item)"
+                    "Warning on Add Global Instance blocks used with fixup blocks (fixups only reach the item's own instance)",
+                    "Removing or replacing an instance deletes its autopacked files if nothing else uses them"
                 ],
                 "fixed": [
-                    "Items losing their instance 0 after adding and removing instances, crashing the chamber when it loads (broken items get fixed when the package opens)",
+                    "Items losing instance 0 after adding and removing instances, crashing the chamber on load (opening the package fixes broken items)",
                     "Hammer backup files (.vmx) getting packed",
-                    "Blank lines in item descriptions getting removed when the item is saved, running its paragraphs together in BEE2",
-                    "Importing items from another package leaving out their autopacked files, colors, brush templates and config groups, and the instances of their other styles"
+                    "Blank lines in descriptions getting removed on save, merging paragraphs in BEE2",
+                    "Importing items missing their autopacked files, colors, templates, config groups and other styles' instances"
                 ]
             }
         },
