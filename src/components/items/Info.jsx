@@ -118,18 +118,20 @@ function Info({ item, formData, onUpdate, hideWarnings = false, showId = false }
     }
 
     // Process markdown to handle single line breaks properly
+    // Empty lines stay: like in BEE2, they split paragraphs
     const processMarkdown = (text) => {
         return text
             .split("\n")
             .map((line) => line.trim())
-            .filter((line) => line !== "") // Remove empty lines first
             .join("  \n") // Add two spaces + newline for proper markdown line breaks
     }
 
     const markdownComponents = {
-        // Custom paragraph renderer to handle spacing better
+        // Paragraphs a blank line apart, as BEE2 shows them
         p: ({ children }) => (
-            <Typography component="p" sx={{ mb: 1, "&:last-child": { mb: 0 } }}>
+            <Typography
+                component="p"
+                sx={{ mb: "1lh", "&:last-child": { mb: 0 } }}>
                 {children}
             </Typography>
         ),

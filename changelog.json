@@ -9,7 +9,8 @@
                 ],
                 "fixed": [
                     "Items losing their instance 0 after adding and removing instances, crashing the chamber when it loads (broken items get fixed when the package opens)",
-                    "Hammer backup files (.vmx) getting packed"
+                    "Hammer backup files (.vmx) getting packed",
+                    "Blank lines in item descriptions getting removed when the item is saved, running its paragraphs together in BEE2"
                 ]
             }
         },
