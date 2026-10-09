@@ -400,6 +400,14 @@ function getIndex(searchPaths, folders = ["materials", "models"]) {
 }
 
 /**
+ * Forget the file indexes built so far, after files were added to a package
+ * or deleted from it: the next ones list its files as they are
+ */
+function forgetIndexes() {
+    indexes.clear()
+}
+
+/**
  * The game's file index: its VPKs, then its folders (see gameSearchPaths)
  * and `extraPaths`, with loose sound, script and particle files too
  * @param {string} portal2Root
@@ -697,6 +705,7 @@ async function findDependencies(index, { models = [], materials = [] }) {
 module.exports = {
     findMdlDependencies,
     findDependencies,
+    forgetIndexes,
     gameIndex,
     gameSearchPaths,
     readMdl,

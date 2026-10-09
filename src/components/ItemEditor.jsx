@@ -859,6 +859,18 @@ function ItemEditor() {
                     hasErrors = true
                     throw new Error(`Instances: ${error.message}`)
                 }
+
+                // Delete the files the removed instances used that nothing
+                // else in the package uses: now, as an instance added in
+                // this save can use them. The item's saved either way.
+                const cleanup = await window.package.removeUnusedPackedFiles(
+                    item.id,
+                )
+                if (!cleanup?.success) {
+                    console.warn(
+                        `Kept the files the removed instances of item "${item.name}" used: ${cleanup?.error}`,
+                    )
+                }
             }
 
             // Save Variables data if modified

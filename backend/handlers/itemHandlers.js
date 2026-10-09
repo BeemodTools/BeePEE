@@ -23,6 +23,8 @@ const { descriptionValue } = require("../saveItem")
 const { APP_VERSION } = require("../utils/keyvalues")
 const { vmfStatsCache } = require("../utils/vmfParser")
 const { withColors } = require("../utils/itemColors")
+const { Instance } = require("../items/Instance")
+const { instanceFiles, removeUnusedFiles } = require("../utils/packageFiles")
 
 /** "1 instance", "3 instances" */
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
@@ -536,6 +538,15 @@ function register(ipcMain, mainWindow) {
 
             const packagePath = targetItem.packagePath
 
+            // The files its instances use: deleted below when nothing else
+            // in the package uses them
+            const usedFiles = await instanceFiles(
+                packagePath,
+                Object.values(targetItem.instances ?? {}).map((data) =>
+                    Instance.getCleanPath(packagePath, data.Name),
+                ),
+            )
+
             // Delete item folder
             if (
                 targetItem.fullItemPath &&
@@ -604,6 +615,7 @@ function register(ipcMain, mainWindow) {
                 )
             }
             console.log(`Deleted item "${targetItem.name}" (${itemId})`)
+            await removeUnusedFiles(packagePath, usedFiles)
 
             // Package changed on disk (working dir) but not the .bpee
             global.titleManager?.setUnsavedChanges(true)

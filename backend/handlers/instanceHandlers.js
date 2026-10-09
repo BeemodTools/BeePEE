@@ -11,6 +11,12 @@ const { sendItemUpdateToEditor } = require("../items/itemEditor")
 const { Instance } = require("../items/Instance")
 const { vmfStatsCache } = require("../utils/vmfParser")
 const { instanceBehindSurface } = require("../utils/behindSurface")
+const {
+    instanceFiles,
+    noteRemovedFiles,
+    removeUnusedFiles,
+    takeRemovedFiles,
+} = require("../utils/packageFiles")
 const { getHammerPath, getHammerAvailability, findPortal2Dir } = require("../data")
 
 /**
@@ -403,6 +409,12 @@ function register(ipcMain, mainWindow) {
                     actualInstancePath,
                 )
 
+                // The files the old one uses, deleted below when nothing
+                // uses them anymore
+                const oldFiles = await instanceFiles(item.packagePath, [
+                    currentInstancePath,
+                ])
+
                 fs.copyFileSync(selectedFilePath, currentInstancePath)
 
                 item._loadedInstances.delete(instanceIndex)
@@ -452,6 +464,13 @@ function register(ipcMain, mainWindow) {
                         autopackError,
                     )
                 }
+                const removed = await removeUnusedFiles(
+                    item.packagePath,
+                    oldFiles,
+                )
+                // The package has files its .bpee doesn't, or not anymore
+                if (removed.length > 0)
+                    global.titleManager?.setUnsavedChanges(true)
 
                 const updatedItem = item.toJSONWithExistence()
                 mainWindow.webContents.send("item-updated", updatedItem)
@@ -572,6 +591,19 @@ function register(ipcMain, mainWindow) {
                             (data) => other.instanceFileKey(data.Name) === file,
                         ),
                 )
+                // The files it uses: deleted when the item editor is done
+                // saving, if nothing else uses them (remove-unused-packed-files)
+                if (instanceData) {
+                    noteRemovedFiles(
+                        item.packagePath,
+                        await instanceFiles(item.packagePath, [
+                            Instance.getCleanPath(
+                                item.packagePath,
+                                fixInstancePath(instanceData.Name),
+                            ),
+                        ]),
+                    )
+                }
                 item.removeInstance(instanceIndex, { keepFile })
                 console.log(
                     `Removed instance ${instanceIndex} (${instanceData?.Name}) from "${item.name}"`,
@@ -616,6 +648,33 @@ function register(ipcMain, mainWindow) {
             return { success: true, moved }
         } catch (error) {
             console.error(`Failed to number the instances of ${itemId}:`, error)
+            return { success: false, error: error.message }
+        }
+    })
+
+    // Delete the files the instances the item editor removed used, when
+    // nothing else in the package uses them: once it's done saving, as it
+    // adds instances after removing them, and one it adds can use them
+    ipcMain.handle("remove-unused-packed-files", async (event, { itemId }) => {
+        try {
+            const item = packages
+                .flatMap((p) => p.items)
+                .find((i) => i.id === itemId)
+            if (!item) {
+                throw new Error("Item not found")
+            }
+            const removed = await removeUnusedFiles(
+                item.packagePath,
+                takeRemovedFiles(item.packagePath),
+            )
+            // The package has fewer files than its .bpee
+            if (removed.length > 0) global.titleManager?.setUnsavedChanges(true)
+            return { success: true, removed }
+        } catch (error) {
+            console.error(
+                `Failed to delete the files the removed instances of ${itemId} used:`,
+                error,
+            )
             return { success: false, error: error.message }
         }
     })

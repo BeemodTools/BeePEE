@@ -7,8 +7,11 @@
  * builds a manifest (items + signages with names/icons/collision flags) and
  * only then opens the importer window; the window fetches the manifest via
  * import-items-manifest. import-items-execute copies the selected entries'
- * files into the current package, merges info.json, reloads the package in
- * memory and refreshes the UI. Entries whose ID already exists are skipped.
+ * files into the current package (an item's folders and instances, the
+ * files those and its conditions use, BeePEE's own data for it), adds them
+ * to info.json with the config groups and brush templates they use, reloads
+ * the package in memory and refreshes the UI. Entries whose ID already
+ * exists are skipped.
  */
 
 const fs = require("fs")
@@ -16,9 +19,69 @@ const path = require("path")
 const os = require("os")
 const { dialog } = require("electron")
 const { logger } = require("../utils/logger")
+const { Instance } = require("../items/Instance")
+const { findPortal2Resources } = require("../data")
+const { toObject } = require("../utils/keyvalues")
+const { forgetIndexes } = require("../utils/mdlDependencies")
+const {
+    configTexts,
+    contentFiles,
+    filesUsed,
+    namesIn,
+} = require("../utils/packageFiles")
 
 /** "1 item", "3 items" */
 const plural = (count, noun) => `${count} ${noun}${count === 1 ? "" : "s"}`
+
+/** A key of an object, whatever its case ("ConfigGroup", "configgroup") */
+function keyOf(object, key) {
+    return Object.keys(object ?? {}).find(
+        (k) => k.toLowerCase() === key.toLowerCase(),
+    )
+}
+
+/** A key's value, whatever the key's case */
+const valueOf = (object, key) =>
+    object && typeof object === "object"
+        ? object[keyOf(object, key)]
+        : undefined
+
+/** An object's ID, lowercase */
+const idOf = (object) => String(valueOf(object, "ID") ?? "").toLowerCase()
+
+/**
+ * The IDs of the config groups an item's conditions read with GetItemConfig
+ * (Set Color blocks' colors, ...), lowercase
+ */
+function configGroupsRead(itemDirs) {
+    const ids = new Set()
+    const visit = (node) => {
+        if (Array.isArray(node)) return node.forEach(visit)
+        if (!node || typeof node !== "object") return
+        for (const [key, value] of Object.entries(node)) {
+            if (/itemconfig/i.test(key)) {
+                for (const block of [value].flat()) {
+                    if (idOf(block)) ids.add(idOf(block))
+                }
+            }
+            visit(value)
+        }
+    }
+    for (const dir of itemDirs) {
+        const cfg = path.join(dir, "vbsp_config.cfg")
+        const json = path.join(dir, "vbsp_config.json")
+        try {
+            if (fs.existsSync(cfg))
+                visit(toObject(fs.readFileSync(cfg, "utf8")))
+            else if (fs.existsSync(json)) visit(readJson(json))
+        } catch (error) {
+            console.warn(
+                `Couldn't read the conditions in ${dir}: ${error.message}`,
+            )
+        }
+    }
+    return ids
+}
 
 // One import session at a time
 let staging = null // { dir, info, sourceName, manifest }
@@ -85,6 +148,19 @@ function signageIconAbs(baseDir, icon) {
     if (!icon) return null
     const pathPart = icon.includes(":") ? icon.split(":")[1] : icon
     return path.join(baseDir, "resources", "BEE2", pathPart)
+}
+
+/**
+ * Whether a file is inside a folder: names from the package imported from
+ * ("../../x.vmf") can't lead out of it, or out of the one they go into
+ */
+function isInside(file, dir) {
+    const relative = path.relative(path.resolve(dir), path.resolve(file))
+    return (
+        relative !== "" &&
+        !relative.startsWith("..") &&
+        !path.isAbsolute(relative)
+    )
 }
 
 function ensureDirFor(filePath) {
@@ -296,6 +372,39 @@ function register(ipcMain, mainWindow) {
                         path.join(sourceDir, "resources"),
                     )
 
+                    // The files the items' instances and conditions use
+                    // (autopacked ones): the autopacker's search tells,
+                    // with Portal 2's files to tell what's the game's
+                    const portal2Root = itemIds.length
+                        ? (await findPortal2Resources())?.root
+                        : null
+                    if (itemIds.length && !portal2Root) {
+                        console.warn(
+                            "Portal 2 wasn't found, so the files the items' instances use are only imported when they're named after the item",
+                        )
+                    }
+                    const sourceFiles = contentFiles(sourceDir)
+                    let usedFilesCopied = 0
+
+                    // Config groups (the items' colors, ...)
+                    const groupsKey =
+                        keyOf(targetInfo, "ConfigGroup") ?? "ConfigGroup"
+                    const targetGroups = toArray(targetInfo[groupsKey])
+                    const sourceGroups = toArray(
+                        sourceInfo[keyOf(sourceInfo, "ConfigGroup")],
+                    )
+                    let groupsAdded = 0
+
+                    // Brush templates (TemplateBrush results' ID), in the
+                    // package's templates folder
+                    const templatesKey =
+                        keyOf(targetInfo, "BrushTemplate") ?? "BrushTemplate"
+                    const targetTemplates = toArray(targetInfo[templatesKey])
+                    const sourceTemplates = toArray(
+                        sourceInfo[keyOf(sourceInfo, "BrushTemplate")],
+                    )
+                    let templatesAdded = 0
+
                     // ---- Items ----
                     for (const itemId of itemIds) {
                         const entry = toArray(sourceInfo.Item).find(
@@ -380,40 +489,146 @@ function register(ipcMain, mainWindow) {
                                     ),
                                 )
                             }
-                            // Instance files referenced by editoritems.json
-                            const ed = readJson(
+                        }
+
+                        // Its instances: each style's editoritems'
+                        const sourceFolders = entryFolders(entry).map(
+                            (folder) =>
                                 path.join(
                                     sourceDir,
                                     "items",
-                                    firstFolder.toLowerCase(),
-                                    "editoritems.json",
+                                    folder.toLowerCase(),
                                 ),
+                        )
+                        const vmfPaths = []
+                        for (const folder of sourceFolders) {
+                            const ed = readJson(
+                                path.join(folder, "editoritems.json"),
                             )
-                            const instances =
-                                ed?.Item?.Exporting?.Instances || {}
-                            for (const inst of Object.values(instances)) {
+                            const exporting = valueOf(
+                                valueOf(ed, "Item"),
+                                "Exporting",
+                            )
+                            const instances = valueOf(exporting, "Instances")
+                            for (const inst of Object.values(instances ?? {})) {
                                 const name =
-                                    typeof inst === "string" ? inst : inst?.Name
+                                    typeof inst === "string"
+                                        ? inst
+                                        : valueOf(inst, "Name")
                                 if (!name) continue
-                                const clean = String(name).replace(
-                                    /^instances\/(BEE2|bee2)\//,
-                                    "",
+                                const source = Instance.getCleanPath(
+                                    sourceDir,
+                                    String(name),
                                 )
-                                copyFileSafe(
-                                    path.join(
-                                        sourceDir,
-                                        "resources",
-                                        "instances",
-                                        clean,
-                                    ),
-                                    path.join(
-                                        targetDir,
-                                        "resources",
-                                        "instances",
-                                        clean,
-                                    ),
+                                const dest = Instance.getCleanPath(
+                                    targetDir,
+                                    String(name),
+                                )
+                                if (
+                                    !isInside(source, sourceDir) ||
+                                    !isInside(dest, targetDir)
+                                ) {
+                                    continue
+                                }
+                                copyFileSafe(source, dest)
+                                if (fs.existsSync(source)) vmfPaths.push(source)
+                            }
+                        }
+
+                        // The brush templates its conditions name
+                        const texts = configTexts(sourceFolders)
+                        const names = namesIn(texts)
+                        for (const template of sourceTemplates) {
+                            const id = idOf(template)
+                            if (!id || !names.has(id)) continue
+                            if (
+                                targetTemplates.some(
+                                    (other) => idOf(other) === id,
+                                )
+                            ) {
+                                console.log(
+                                    `Kept the package's own brush template ${valueOf(template, "ID")}, which "${itemId}" uses`,
+                                )
+                                continue
+                            }
+                            const file = String(valueOf(template, "File") ?? "")
+                            const source = path.join(
+                                sourceDir,
+                                "templates",
+                                file,
+                            )
+                            const dest = path.join(targetDir, "templates", file)
+                            if (
+                                file &&
+                                (!isInside(source, sourceDir) ||
+                                    !isInside(dest, targetDir))
+                            ) {
+                                continue
+                            }
+                            targetTemplates.push(
+                                JSON.parse(JSON.stringify(template)),
+                            )
+                            templatesAdded++
+                            if (!file) continue
+                            copyFileSafe(source, dest)
+                            if (fs.existsSync(source)) vmfPaths.push(source)
+                        }
+
+                        // The files its instances, templates and conditions
+                        // use
+                        if (portal2Root) {
+                            let used = new Set()
+                            try {
+                                used = await filesUsed(sourceDir, portal2Root, {
+                                    vmfPaths: [...new Set(vmfPaths)],
+                                    texts,
+                                })
+                            } catch (error) {
+                                console.warn(
+                                    `Couldn't tell which files "${itemId}" uses, so only the ones named after it are imported: ${error.message}`,
                                 )
                             }
+                            for (const file of used) {
+                                const rel = sourceFiles.get(file)
+                                if (
+                                    rel &&
+                                    copyFileSafe(
+                                        path.join(sourceDir, "resources", rel),
+                                        path.join(targetDir, "resources", rel),
+                                    )
+                                ) {
+                                    usedFilesCopied++
+                                }
+                            }
+                        }
+
+                        // What BeePEE keeps for it: its models, the icon
+                        // maker's files, ...
+                        const safeId = itemId
+                            .replace(/[^a-zA-Z0-9_-]/g, "_")
+                            .toLowerCase()
+                        copyDirSafe(
+                            path.join(sourceDir, ".bpee", safeId),
+                            path.join(targetDir, ".bpee", safeId),
+                        )
+
+                        // Its config groups: its own (its colors), and the
+                        // ones its conditions read
+                        const groupIds = configGroupsRead(sourceFolders)
+                        groupIds.add(itemId.toLowerCase())
+                        for (const group of sourceGroups) {
+                            const id = idOf(group)
+                            if (!groupIds.has(id)) continue
+                            if (
+                                targetGroups.some((other) => idOf(other) === id)
+                            ) {
+                                console.log(
+                                    `Kept the package's own config group ${valueOf(group, "ID")}, which "${itemId}" uses`,
+                                )
+                                continue
+                            }
+                            targetGroups.push(JSON.parse(JSON.stringify(group)))
+                            groupsAdded++
                         }
 
                         // Anything else named after the item (custom models,
@@ -525,6 +740,18 @@ function register(ipcMain, mainWindow) {
                     // tidy by not writing empty arrays we created ourselves
                     if (!targetInfo.Item.length) delete targetInfo.Item
                     if (!targetInfo.Signage.length) delete targetInfo.Signage
+                    if (groupsAdded > 0) {
+                        targetInfo[groupsKey] =
+                            targetGroups.length === 1
+                                ? targetGroups[0]
+                                : targetGroups
+                    }
+                    if (templatesAdded > 0) {
+                        targetInfo[templatesKey] =
+                            targetTemplates.length === 1
+                                ? targetTemplates[0]
+                                : targetTemplates
+                    }
                     fs.writeFileSync(
                         infoPath,
                         JSON.stringify(targetInfo, null, 2),
@@ -532,6 +759,13 @@ function register(ipcMain, mainWindow) {
                     console.log(
                         `Imported ${plural(imported.items, "item")} and ${plural(imported.signages, "signage")} (${skipped.items.length + skipped.signages.length} skipped, already in the package)`,
                     )
+                    if (imported.items > 0) {
+                        console.log(
+                            `With them: ${plural(usedFilesCopied, "file")} their instances, templates and conditions use, ${plural(templatesAdded, "brush template")} and ${plural(groupsAdded, "config group")}`,
+                        )
+                    }
+                    // The package has new files: the next search lists them
+                    forgetIndexes()
 
                     // Reload the package so the new items/signages get real
                     // Item instances and resolved icon paths

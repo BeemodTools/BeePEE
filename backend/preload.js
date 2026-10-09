@@ -213,6 +213,9 @@ contextBridge.exposeInMainWorld("package", {
     // Numbers the item's instances 0, 1, 2... with no gaps (after removing)
     renumberInstances: (itemId) =>
         ipcRenderer.invoke("renumber-instances", { itemId }),
+    // Deletes the files removed instances used that nothing else uses
+    removeUnusedPackedFiles: (itemId) =>
+        ipcRenderer.invoke("remove-unused-packed-files", { itemId }),
     getInstanceMetadata: (itemId, instanceIndex) =>
         ipcRenderer.invoke("get-instance-metadata", { itemId, instanceIndex }),
     checkVmfExternalAssets: (vmfPath) =>
