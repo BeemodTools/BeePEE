@@ -5,8 +5,16 @@
             "date": "2026-10-9",
             "changes": {
                 "added": [
+                    "Package Config (Edit menu): settings players change in BEE2's Item Config menu, with checkbox, dropdown, slider, text, color and time widgets",
+                    "Get Config block: puts a config value into a fixup, by the item's timer or a set slot, also from other packages' groups",
+                    "Fixup fields suggest the fixups the item's instances use",
                     "Warning on Add Global Instance blocks used with fixup blocks (fixups only reach the item's own instance)",
-                    "Removing or replacing an instance deletes its autopacked files if nothing else uses them"
+                    "Removing or replacing an instance deletes its autopacked files if nothing else uses them",
+                    "Portal blue and orange in the color presets"
+                ],
+                "changed": [
+                    "Color variable and Set Color block replaced by Package Config and Get Config (existing ones keep working)",
+                    "GetItemConfig conditions open as Get Config blocks when they can"
                 ],
                 "fixed": [
                     "Items losing instance 0 after adding and removing instances, crashing the chamber on load (opening the package fixes broken items)",
