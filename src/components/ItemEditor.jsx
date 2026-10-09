@@ -521,6 +521,18 @@ function ItemEditor() {
             if (!formData.name?.trim()) {
                 throw new Error("Item name cannot be empty")
             }
+            // An item needs an instance: the Puzzle Maker places instance 0,
+            // and a chamber with an item that has none crashes when it loads
+            if (formData.instances && typeof formData.instances === "object") {
+                const kept = Object.values(formData.instances).filter(
+                    (instance) => !instance?._toRemove,
+                )
+                if (kept.length === 0) {
+                    throw new Error(
+                        "The item needs an instance: Portal 2 crashes loading a chamber with an item that has none",
+                    )
+                }
+            }
 
             let hasErrors = false
 
@@ -829,6 +841,23 @@ function ItemEditor() {
                     )
                     hasErrors = true
                     throw new Error(`Instance names: ${error.message}`)
+                }
+            }
+
+            // Number the instances 0, 1, 2... again: removing one left a
+            // gap, which BEE2 makes a blank instance (with no instance 0, a
+            // chamber with the item crashes when it loads). After the names:
+            // they're saved by the indices the instances had in this save.
+            if (formData._modified.instances) {
+                try {
+                    assertSaved(await window.package.renumberInstances(item.id))
+                } catch (error) {
+                    console.error(
+                        `Failed to number the instances of item "${item.name}":`,
+                        error,
+                    )
+                    hasErrors = true
+                    throw new Error(`Instances: ${error.message}`)
                 }
             }
 

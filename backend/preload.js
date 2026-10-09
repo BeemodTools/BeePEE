@@ -210,6 +210,9 @@ contextBridge.exposeInMainWorld("package", {
         }),
     removeInstance: (itemId, instanceIndex) =>
         ipcRenderer.invoke("remove-instance", { itemId, instanceIndex }),
+    // Numbers the item's instances 0, 1, 2... with no gaps (after removing)
+    renumberInstances: (itemId) =>
+        ipcRenderer.invoke("renumber-instances", { itemId }),
     getInstanceMetadata: (itemId, instanceIndex) =>
         ipcRenderer.invoke("get-instance-metadata", { itemId, instanceIndex }),
     checkVmfExternalAssets: (vmfPath) =>
