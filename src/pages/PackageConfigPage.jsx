@@ -3,6 +3,11 @@ import {
     Alert,
     Box,
     Button,
+    Dialog,
+    DialogActions,
+    DialogContent,
+    DialogContentText,
+    DialogTitle,
     FormControl,
     FormControlLabel,
     IconButton,
@@ -51,6 +56,14 @@ const forSaving = (groups) =>
             ({ isNew: newWidget, idEdited: edited, ...widget }) => widget,
         ),
     }))
+
+/** What deleting a group takes with it, for the dialog asking first */
+function deletedWith(group) {
+    const count = group?.widgets.length ?? 0
+    if (count === 0) return ""
+    const widgets = count === 1 ? "Its widget goes" : `Its ${count} widgets go`
+    return `${widgets} with it, and Get Config blocks reading ${count === 1 ? "it" : "them"} give their default instead. `
+}
 
 /** A new widget of a type, its ID from its label (one the group doesn't have) */
 function newWidget(type, group) {
@@ -611,6 +624,8 @@ export default function PackageConfigPage() {
     const [notice, setNotice] = useState(null)
     const [saving, setSaving] = useState(false)
     const [addMenu, setAddMenu] = useState(null)
+    // The group Delete Group asks about (kept while the dialog closes)
+    const [deleting, setDeleting] = useState({ open: false, group: null })
 
     const load = async () => {
         try {
@@ -707,6 +722,7 @@ export default function PackageConfigPage() {
     }
 
     const groupProblems = (index) => problems.filter((p) => p.group === index)
+    const closeDelete = () => setDeleting((d) => ({ ...d, open: false }))
 
     return (
         <Box
@@ -969,14 +985,9 @@ export default function PackageConfigPage() {
                                 <Button
                                     color="error"
                                     startIcon={<Delete />}
-                                    onClick={() => {
-                                        setGroups((all) =>
-                                            all.filter(
-                                                (_, i) => i !== selected,
-                                            ),
-                                        )
-                                        setSelected((i) => Math.max(0, i - 1))
-                                    }}>
+                                    onClick={() =>
+                                        setDeleting({ open: true, group })
+                                    }>
                                     Delete Group
                                 </Button>
                             </Box>
@@ -1022,6 +1033,40 @@ export default function PackageConfigPage() {
                     {saving ? "Saving..." : "Save"}
                 </Button>
             </Box>
+
+            {/* Deleting a group: asked first */}
+            <Dialog
+                open={deleting.open}
+                onClose={closeDelete}
+                aria-labelledby="delete-group-title"
+                aria-describedby="delete-group-description">
+                <DialogTitle id="delete-group-title">
+                    Delete Group "{deleting.group?.name || deleting.group?.id}"?
+                </DialogTitle>
+                <DialogContent>
+                    <DialogContentText id="delete-group-description">
+                        {deletedWith(deleting.group)}
+                        It's gone once you save (Revert brings it back until
+                        then).
+                    </DialogContentText>
+                </DialogContent>
+                <DialogActions>
+                    <Button onClick={closeDelete}>Cancel</Button>
+                    <Button
+                        color="error"
+                        variant="contained"
+                        startIcon={<Delete />}
+                        onClick={() => {
+                            setGroups((all) =>
+                                all.filter((g) => g !== deleting.group),
+                            )
+                            setSelected((i) => Math.max(0, i - 1))
+                            closeDelete()
+                        }}>
+                        Delete
+                    </Button>
+                </DialogActions>
+            </Dialog>
         </Box>
     )
 }
