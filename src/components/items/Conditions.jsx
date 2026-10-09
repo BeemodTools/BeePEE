@@ -934,6 +934,22 @@ const configWidgetOf = (block, formData = {}) => {
     return { group, widget }
 }
 
+/**
+ * What a Get Config block reading the package's own widget falls back to
+ * (GetItemConfig's Default, when BEE2 has no value): the slot's default in
+ * Package Config, a fixup's slot slot 3's. Null for another package's group,
+ * or while they load.
+ */
+const fallbackOf = (block, formData = {}) => {
+    const { widget } = configWidgetOf(block, formData)
+    if (!widget) return null
+    if (!widget.timer) return String(widget.default ?? "")
+    const timer = String(block.timer ?? "")
+    const slot =
+        timer === INFINITE || TIMER_VALUES.includes(timer) ? timer : "3"
+    return String(widget.defaults?.[slot] ?? widget.defaults?.["3"] ?? "")
+}
+
 const validateGetConfigBlock = (block, formData = {}) => {
     const errors = []
     const error = (message, field) =>
@@ -2216,7 +2232,12 @@ function SetInstVarBlock({ block, onUpdateProperty, fixups = [] }) {
  */
 function SlotDefault({ widget, slot }) {
     if (!widget?.timer) return null
-    const value = String(widget.defaults?.[slot] ?? "")
+    return <ValuePreview widget={widget} value={widget.defaults?.[slot]} />
+}
+
+/** A widget's value as it looks: a swatch for a color, the value for the rest */
+function ValuePreview({ widget, value: given }) {
+    const value = String(given ?? "")
     if (widget.type === "color") {
         return (
             <Box
@@ -2269,6 +2290,7 @@ function GetConfigBlock({
     const groups = formData?.configGroups ?? []
     const { group, widget } = configWidgetOf(block, formData)
     const timer = String(block.timer ?? "")
+    const fallback = fallbackOf(block, formData)
 
     // Only the item's own variables' fixups: BEE2 stops compiling on one
     // its instance doesn't have (one it doesn't have anymore stays shown, and
@@ -2307,7 +2329,8 @@ function GetConfigBlock({
         id: g.id,
         label: g.name || g.id,
     }))
-    const external = Boolean(block.group) && !group
+    const external =
+        Array.isArray(formData?.configGroups) && Boolean(block.group) && !group
     const widgetOptions = [
         ...(group?.widgets ?? [])
             .filter((w) => w.type)
@@ -2555,19 +2578,46 @@ function GetConfigBlock({
                     </FormControl>
                 )}
 
-                <Box sx={{ display: "flex", alignItems: "center", gap: 1.5 }}>
-                    {!labelsItself(widget?.type ?? "string") && (
+                {fallback !== null ? (
+                    // The package's own widget: its slot's default
+                    <Box
+                        sx={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 1.5,
+                        }}>
                         <Typography variant="body2" color="text.secondary">
                             Default
                         </Typography>
-                    )}
-                    <ConfigValueField
-                        widget={widget ?? { type: "string" }}
-                        label="Default"
-                        value={block.default}
-                        onChange={(value) => onUpdateProperty("default", value)}
-                    />
-                </Box>
+                        <ValuePreview widget={widget} value={fallback} />
+                        <Typography variant="caption" color="text.secondary">
+                            {widget.timer
+                                ? `Slot ${timer === INFINITE ? "for an infinite timer" : TIMER_VALUES.includes(timer) ? timer : 3}'s default in Package Config`
+                                : "Its default in Package Config"}
+                        </Typography>
+                    </Box>
+                ) : (
+                    <Box
+                        sx={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 1.5,
+                        }}>
+                        {!labelsItself(widget?.type ?? "string") && (
+                            <Typography variant="body2" color="text.secondary">
+                                Default
+                            </Typography>
+                        )}
+                        <ConfigValueField
+                            widget={widget ?? { type: "string" }}
+                            label="Default"
+                            value={block.default}
+                            onChange={(value) =>
+                                onUpdateProperty("default", value)
+                            }
+                        />
+                    </Box>
+                )}
             </Stack>
 
             <Typography
@@ -4317,6 +4367,40 @@ function Conditions({
         () => ({ ...formData, configGroups, instanceFixups }),
         [formData, configGroups, instanceFixups],
     )
+    // Get Config blocks reading the package's own widgets fall back to their
+    // slots' defaults (fallbackOf): kept the same when Package Config's
+    // change, or the block's slot does. All the blocks at once, as an update
+    // of each would undo the others'.
+    useEffect(() => {
+        if (!Array.isArray(configGroups)) return
+        let changed = false
+        const withFallbacks = (list = []) =>
+            list.map((block) => {
+                if (!block || typeof block !== "object") return block
+                let next = block
+                if (block.type === "getConfig") {
+                    const fallback = fallbackOf(block, { configGroups })
+                    if (
+                        fallback !== null &&
+                        String(block.default ?? "") !== fallback
+                    ) {
+                        next = { ...block, default: fallback }
+                        changed = true
+                    }
+                }
+                for (const key of BLOCK_DEFINITIONS[block.type]
+                    ?.childContainers ?? []) {
+                    if (Array.isArray(block[key])) {
+                        next = { ...next, [key]: withFallbacks(block[key]) }
+                    }
+                }
+                return next
+            })
+        const updated = withFallbacks(blocks)
+        if (!changed) return
+        setBlocks(updated)
+        onUpdateConditions(updated)
+    }, [blocks, configGroups])
     const [selectedCategory, setSelectedCategory] = useState("Logic")
     const [activeId, setActiveId] = useState(null)
 
